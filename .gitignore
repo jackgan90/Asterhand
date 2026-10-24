@@ -1,0 +1,27 @@
+# Local build and validation outputs
+/bin/
+/dist/
+/out/
+/work/
+/coverage/
+/test-results/
+/playwright-report/
+/node_modules/
+/web/node_modules/
+/web/dist/
+
+# Local settings, node data and credentials
+.env
+.env.*
+!.env.example
+/local/
+/data/
+/artifacts/
+/secrets/
+*.log
+
+# Editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

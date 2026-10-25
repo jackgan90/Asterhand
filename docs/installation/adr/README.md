@@ -6,5 +6,6 @@
 - [002-release-and-install-boundary — 版本化发布与安装配置分离](002-release-and-install-boundary.md)
 - [003-stable-installer-entry — 固定安装入口与版本解析](003-stable-installer-entry.md)
 - [004-desktop-launcher-and-tray — 固定桌面入口与节点内置托盘](004-desktop-launcher-and-tray.md)
+- [005-explicit-install-lifecycle — 显式停止与安装后启动](005-explicit-install-lifecycle.md)
 
 新增决策使用 [ADR 模板](../../development/templates/adr.md)。历史决定通过新 ADR 替代，不改写历史理由。

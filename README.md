@@ -17,13 +17,13 @@ Asterhand 让自己的设备通过自然语言协作。A 提交任务，B 用自
 
 ## 安装与使用
 
-从仓库[固定安装入口](https://raw.githubusercontent.com/jackgan90/Asterhand/main/install.ps1) 下载 `install.ps1`，在 PowerShell 中运行，默认安装最新稳定 Release：
+复制以下一行到 PowerShell，自动从仓库[固定安装入口](https://raw.githubusercontent.com/jackgan90/Asterhand/main/install.ps1) 下载并执行安装器，默认安装最新稳定 Release：
 
 ~~~powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+irm https://raw.githubusercontent.com/jackgan90/Asterhand/main/install.ps1 -ErrorAction Stop | iex
 ~~~
 
-指定版本可追加 `-Version 0.1.0-alpha.1`，也接受 `v` 前缀；自定义发布标签用 `-ReleaseTag <tag>`。版本和标签必须已在目标仓库公开发布。没有稳定版时默认安装会明确报错，可显式选择已发布的预发布版。
+`irm` 下载脚本，`iex` 在内存中执行，无需手动保存文件。指定版本或标签的一行命令见 [安装指南](docs/installation/quickstart.md)。版本必须已公开发布；没有稳定版时，可显式选择已发布的预发布版。
 
 脚本解析目标后下载同一标签的完整包，包含 Node.js、OpenClaw 和模型插件，并补齐 Microsoft VC++ x64 运行库与 Tailscale。安装可选择创建桌面图标，也可显式传入 `-DesktopShortcut Create` 或 `Skip`；完成后退出，不启动节点、不要求模型凭据或网络登录。用户随后双击桌面图标，或运行安装目录的 `AsterhandLauncher.exe` / `start.ps1`。让 A、B 加入同一 Tailscale 网络，在各自设置页配置凭据、授权目录并验证，再用 B 生成的配对码在 A 配对。桌面选择、旧包兼容和本地包模式见安装指南。
 
@@ -34,6 +34,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 工具链版本以 [依赖清单](packaging/dependencies.json) 为准。运行 `go test ./...` 和 `go vet ./...`；完整构建、依赖升级和验证入口见 [脚本指南](scripts/README.md)、[依赖维护](packaging/upgrade.md) 和 [测试指南](tests/README.md)。
 
 统一发布入口为 `scripts/release.ps1`，自动准备依赖、构建验证并上传 GitHub 草稿。公开测试版或正式版使用显式发布模式；命令、恢复方式与平台扩展契约见 [发布指南](docs/installation/releases.md)。
+
+本机验收改动时，双击根目录 [install-local.cmd](install-local.cmd)：源码未变且已有完整、校验通过的构建包时直接复用，否则准备锁定依赖并构建，随后通过正式安装器安装。首次安装询问桌面图标；覆盖安装保留实际图标状态和原数据目录。包检查成功后自动正常退出在线节点，安装成功后启动并打开 Web。需要 PowerShell 7；首次准备需要联网，详见 [本地安装](scripts/README.md#本地一键安装)。
 
 [开发规范](AGENTS.md) · [文档导航](docs/README.md) · [需求](docs/overview/requirements.md) · [架构](docs/overview/design.md) · [路线图](docs/development/roadmap.md)
 

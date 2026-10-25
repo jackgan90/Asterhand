@@ -15,6 +15,7 @@
 | 统一发布、单脚本下载安装与平台扩展接口 | [可复现发布与独立安装](features/release-pipeline/plan.md) |
 | 仓库固定安装入口、默认 Latest 与显式版本选择 | [固定安装入口](features/stable-installer-entry/plan.md) |
 | 原生双击启动、可选桌面入口、节点托盘和统一退出 | [Windows 桌面启动与托盘生命周期](features/windows-desktop-lifecycle/plan.md) |
+| 当前源码双击安装、显式停止与安装后启动、PowerShell 下载引导 | [本地一键安装与在线引导](features/local-install-entry/plan.md) |
 
 ## 后续验证与功能
 

@@ -4,7 +4,9 @@
 
 ## 发布与安装边界
 
-仓库根目录 install.ps1 是独立固定引导入口，默认解析 GitHub Latest 稳定 Release；Version 指定应用版本，ReleaseTag 指定精确标签。解析只执行一次，随后从固定标签下载 release-manifest.json 和完整平台包，检查摘要、大小、版本及 bundle-check，补齐 Microsoft VC++ x64 运行库并加载声明的原生模块，再安装缺失的 Tailscale。成功后激活固定 AsterhandLauncher.exe、start.ps1 和 installation.json，并按用户选择处理快捷方式；不启动节点、不登录 Tailscale、不读取模型凭据。setup/start 属于安装后的节点配置入口。doctor/repair 继续由 Go 实现。
+仓库根目录 install.ps1 是独立固定引导入口，默认解析 GitHub Latest 稳定 Release；Version 指定应用版本，ReleaseTag 指定精确标签。解析只执行一次，随后从固定标签下载 release-manifest.json 和完整平台包，检查摘要、大小、版本及 bundle-check，补齐 Microsoft VC++ x64 运行库并加载声明的原生模块，再安装缺失的 Tailscale。成功后激活固定 AsterhandLauncher.exe、start.ps1 和 installation.json，并按用户选择处理快捷方式；默认不启动节点，不登录 Tailscale、不读取模型凭据。setup/start 属于安装后的节点配置入口。doctor/repair 继续由 Go 实现。
+
+README 提供 `irm <官方固定入口> -ErrorAction Stop | iex` 一行命令，下载失败立即停止，成功后在内存执行同一 install.ps1，不创建临时脚本文件或改变执行策略。指定版本等参数时用 ScriptBlock.Create 编译同一下载内容，再通过调用运算符传参，保留交互提示与安装契约。本地 install-local.cmd 通过 PowerShell 7 比对标准 build.ps1 登记的源码指纹、清单和包摘要/大小；一致则复用已构建包，否则准备并缓存清单锁定的工具与依赖并构建。指纹包含源码、脚本、依赖描述/锁、图标及入包指南与许可证；构建中变更时拒绝登记。构建记录原子写入忽略的 out/latest-build.json。安装调用同一 install.ps1 的本地包模式，启用 StopRunning 和 StartAfterInstall；没有独立解压、拷贝或激活流程。开发入口和正式入口均使用 DesktopShortcut Auto；首次询问，升级保留实际图标状态。见 [本地安装计划](../development/features/local-install-entry/plan.md)。
 
 默认入口不含应用版本常量，未来 Linux/macOS 固定脚本遵循相同版本选择契约。没有稳定版时明确失败并提示指定版本，不自动使用预发布版。Version 支持带或不带 v 前缀；自定义 ReleaseTag 从清单推导应用版本，同时指定 Version 时检查二者一致。本地包或本地清单优先按其内容推导版本，不查询 Latest；只提供清单时从清单标签或 v<version> 获取包。清单包含仓库/标签元数据时必须与所选坐标一致。决策见 [固定安装入口](adr/003-stable-installer-entry.md)。
 
@@ -23,9 +25,11 @@ scripts/release.ps1 是维护者发布入口，要求 Windows PowerShell 7、Git
 
 安装参数 -DesktopShortcut 接受 Auto、Create、Skip、Keep。Auto 首次交互安装询问并默认创建，非交互首次安装跳过；升级 Auto 与 Keep 按本安装实际存在的桌面快捷方式保留，用户手动删除后不会复活。Create 显式创建，Skip 只移除属于本安装的快捷方式。同名外部快捷方式保留；需要创建却遇到冲突时明确报错。快捷方式位于当前用户桌面 Known Folder，兼容重定向和 Unicode，目标为稳定启动器。
 
--LoginAtStartup 独立启用当前用户 Startup 快捷方式，升级保留已启用的入口；启动参数 --no-browser 避免登录时弹浏览器。桌面选择不改变登录后启动。移除对应 Startup 快捷方式即可关闭。所选旧包没有原生启动器时继续使用兼容 start.ps1，拒绝 DesktopShortcut Create，不生成不存在的启动器目标。安装完成不启动节点、不修改 Tailscale 登录或防火墙。
+-LoginAtStartup 独立启用当前用户 Startup 快捷方式，升级保留已启用的入口；启动参数 --no-browser 避免登录时弹浏览器。桌面选择不改变登录后启动。移除对应 Startup 快捷方式即可关闭。所选旧包没有原生启动器时继续使用兼容 start.ps1，拒绝 DesktopShortcut Create，不生成不存在的启动器目标。安装默认不启动节点，不修改 Tailscale 登录或防火墙。
 
 应用采用星核托举标识，托盘使用简化轮廓。透明 PNG 为图形源，构建工具生成多尺寸 ICO 并将应用图标嵌入节点和启动器。Windows API 使用现有 x/sys/windows，资源加工使用 Windows 自带 API，无额外运行时或 CGO。取舍见 [桌面入口 ADR](adr/004-desktop-launcher-and-tray.md)，验证见 [功能验证](../development/features/windows-desktop-lifecycle/validation.md)。
+
+start.ps1 只等待短生命周期启动器进程完成，最多 45 秒；不用 Start-Process -Wait 等待包含后台节点的整个进程树。启动器成功返回后，节点继续运行，安装或启动脚本正常结束；超时保留节点现场并提示日志。
 
 ## 能力与依赖
 
@@ -42,7 +46,7 @@ scripts/release.ps1 是维护者发布入口，要求 Windows PowerShell 7、Git
 
 ## 用户流程
 
-1. 从仓库固定入口下载 install.ps1；默认安装最新稳定 Release，或通过参数选择已发布版本。仅发布源码而没有稳定 Release 时，默认安装明确报错。
+1. 粘贴 PowerShell 引导命令下载并执行固定 install.ps1；默认安装最新稳定 Release，或通过参数选择已发布版本。仅发布源码而没有稳定 Release 时，默认安装明确报错。
 2. B 执行脚本，查看待安装版本和范围，自动补齐依赖。
 3. 打开本地设置页，配置节点名、DeepSeek key、已验证模型、授权目录。
 4. 运行小型模型和无副作用工具检查，确认助手就绪。
@@ -79,7 +83,9 @@ Windows x64 包为完整自包含目录，PowerShell 5.1+ 校验 manifest schema
 
 发现只更新自动管理的运行时选项；显式 --runtime-options 对象在启动、repair 和升级后保持。旧无来源标记的完整历史包布局迁移到新包，其余非空旧选项保留为显式，规则由 adapter 决定。有效执行配置或候选身份变化使旧 probe 失效；安装升级必须验证“自动旧包路径迁移”与“显式路径保留”两个方向，凭据仍留在原数据目录。旧满容量任务可以启动进入待核对，不会因日志预算阻断 Web 启动。
 
-重复安装保留数据与身份；版本目录按包摘要区分。数据迁移目前仅 schema 1，遇到较新数据库拒绝打开。程序与数据目录不得互相包含，目录别名按实际路径判断，非应用已有程序目录拒绝写入。激活阶段持有安装锁，以及原数据目录和目标数据目录的启动互斥量与服务锁；运行中、仍在启动或进程身份不明时拒绝激活，提示先正常退出节点。稳定入口和 installation.json 通过临时文件替换更新；记录 desktop_shortcut 状态，但升级是否保留图标以实际快捷方式为准。
+重复安装保留数据与身份；未显式指定 DataDir 时沿用已有安装记录，首次使用标准目录；版本目录按包摘要区分。数据迁移目前仅 schema 1，遇到较新数据库拒绝打开。程序与数据目录不得互相包含，目录别名按实际路径判断，非应用已有程序目录拒绝写入。激活阶段持有安装锁，以及原数据目录和目标数据目录的启动互斥量与服务锁；默认在线节点拒绝激活。显式 StopRunning 在取得启动互斥量后验证进程程序位于本安装 versions 下、PID/创建时间/路径未变、loopback health 身份匹配，再读取本机登录 token 并通过现有认证及 CSRF 停止 API 请求正常退出，最多等待进程退出 30 秒，随后取得服务锁。HTTP 禁止代理与重定向；未知状态和超时失败，不强杀。稳定入口和 installation.json 通过临时文件替换更新；记录 desktop_shortcut 状态，但升级是否保留图标以实际快捷方式为准。
+
+StartAfterInstall 在整个激活和清理成功、所有锁释放后调用 start.ps1，沿用原生启动器的健康检查与 Web 打开行为；与兼容 NoStart 参数互斥。停止本机在途任务及重启后的人工对账沿用任务域契约。取舍见 [显式安装生命周期](adr/005-explicit-install-lifecycle.md)。
 
 Tailscale 缺失时引导官方 1.104.2 MSI，检查固定摘要及有效供应商签名，再请求管理员安装。安装流程到组件安装完成即结束。之后由用户打开 Tailscale 完成登录。防火墙脚本仅 TCP 17433、当前程序、Tailnet 地址范围；默认不会自行新增规则。-SkipTailscale 用于已有 LAN / 隔离安装试验；安装默认不启动，-NoStart 保留为兼容参数。
 
@@ -97,6 +103,6 @@ packaging/dependencies.json 是 Node、OpenClaw、模型插件、Go 构建器、
 
 `verify-dependencies.ps1` 输出机器可读报告：清单/锁一致性、错误清单拒绝、完整 Go tests/vet、插件契约、可选真实模型、可选 Windows 安装/升级。缺 LiveHome/LiveAddress、PackageDirectory 或 PreviousPackageDirectory 时相应检查为 skipped，upgrade_ready 为 false。传入真实节点会消耗模型额度并在授权目录创建唯一测试文件；节点凭据只由其进程读取。
 
-构建将源码摘要写入程序和 release manifest。真实验证核对该摘要；安装测试在独立中文含空格目录运行 Windows PowerShell 5.1，覆盖首次/重复安装、重复启动、运行时 doctor、旧 flat 配置迁移以及身份/凭据字节保留。包激活与数据库回滚是不同问题，不承诺自动回滚，不升级或重启用户运行中的节点。
+构建将源码摘要写入程序和 release manifest。真实验证核对该摘要；安装测试在独立中文含空格目录运行 Windows PowerShell 5.1，覆盖首次/重复安装、重复启动、运行时 doctor、旧 flat 配置迁移以及身份/凭据字节保留。包激活与数据库回滚分别处理，不承诺自动回滚；停止与安装后启动必须显式选择。
 
 完整命令及更新步骤见 [升级流程](../../packaging/upgrade.md)。验证报告、人工两机验收、提交、推送和发布分别记录。

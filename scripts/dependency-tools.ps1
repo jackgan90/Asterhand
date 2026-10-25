@@ -8,6 +8,7 @@ function Get-SourceFingerprint([string]$Repository) {
             Where-Object { $_.Extension -in @('.go','.js','.mjs','.html','.css','.json','.ps1','.sh','.png','.ico') }
     }
     $files += Get-Item (Join-Path $Repository 'go.mod'),(Join-Path $Repository 'go.sum'),(Join-Path $Repository 'install.ps1'),(Join-Path $Repository 'install.sh')
+    $files += Get-Item (Join-Path $Repository 'LICENSE'),(Join-Path $Repository 'docs\installation\quickstart.md')
     $lines = foreach ($file in ($files | Sort-Object FullName)) {
         [IO.Path]::GetRelativePath($Repository,$file.FullName).Replace('\','/') + ':' + (Get-FileHash -LiteralPath $file.FullName).Hash.ToLowerInvariant()
     }

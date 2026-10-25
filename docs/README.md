@@ -35,6 +35,7 @@
 - [可复现发布与独立安装](development/features/release-pipeline/plan.md)、[Release 发布指南](installation/releases.md)。
 - [固定安装入口与版本选择](development/features/stable-installer-entry/plan.md)。
 - [Windows 桌面启动与托盘生命周期](development/features/windows-desktop-lifecycle/plan.md)、[桌面启动验证](development/features/windows-desktop-lifecycle/validation.md)。
+- [本地一键安装与在线引导](development/features/local-install-entry/plan.md)。
 
 ## 组织规则
 

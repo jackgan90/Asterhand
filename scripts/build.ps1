@@ -116,3 +116,13 @@ Get-ChildItem -LiteralPath $OutputDir -File | Where-Object Name -ne 'SHA256SUMS'
 } | Set-Content -LiteralPath (Join-Path $OutputDir 'SHA256SUMS') -Encoding ascii
 Write-Host "Packages built in $OutputDir"
 Write-Host "Staging retained for inspection: $stageRoot"
+if ((Get-SourceFingerprint $repo) -ne $sourceDigest) { throw 'Source changed during the build; rebuild before installing.' }
+$buildRecord = Join-Path $repo 'out\latest-build.json'
+$temporaryRecord = Join-Path $repo ('out\.latest-build-' + [guid]::NewGuid().ToString('N') + '.json')
+try {
+    @{schema=1;source_sha256=$sourceDigest;manifest=(Join-Path $OutputDir 'release-manifest.json')} |
+        ConvertTo-Json | Set-Content -LiteralPath $temporaryRecord -Encoding utf8NoBOM
+    [IO.File]::Move($temporaryRecord, $buildRecord, $true)
+} finally {
+    if (Test-Path -LiteralPath $temporaryRecord) { Remove-Item -LiteralPath $temporaryRecord -Force }
+}

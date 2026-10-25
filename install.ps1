@@ -13,6 +13,8 @@ param(
     [string]$DataDir = (Join-Path $env:APPDATA 'Asterhand'),
     [switch]$SkipTailscale,
     [switch]$NoStart,
+    [switch]$StopRunning,
+    [switch]$StartAfterInstall,
     [switch]$LoginAtStartup,
     [ValidateSet('Auto','Create','Skip','Keep')]
     [string]$DesktopShortcut = 'Auto'
@@ -21,6 +23,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
+if ($NoStart -and $StartAfterInstall) { throw 'NoStart and StartAfterInstall cannot be combined.' }
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
     throw 'This release supports Windows x64. Windows ARM64 is not yet validated.'
@@ -399,7 +402,80 @@ function Assert-NoPendingLaunch([string]$Data) {
     } catch { throw "Cannot safely activate this installation. Stop the node and inspect $path before retrying. $($_.Exception.Message)" }
 }
 
-function Enter-InstallActivation([string[]]$DataDirectories) {
+function Invoke-InstallNodeAPI([string]$Address, [string]$Path, [string]$Method, $Cookies, $Body, [string]$CSRF) {
+    $request = [Net.HttpWebRequest]::Create($Address + $Path)
+    $request.Proxy = $null
+    $request.AllowAutoRedirect = $false
+    $request.Timeout = 10000
+    $request.ReadWriteTimeout = 10000
+    $request.Method = $Method
+    $request.CookieContainer = $Cookies
+    $request.Headers['Origin'] = $Address
+    if ($CSRF) { $request.Headers['X-Asterhand-CSRF'] = $CSRF }
+    if ($null -ne $Body) {
+        $bytes = [Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Compress))
+        $request.ContentType = 'application/json'
+        $request.ContentLength = $bytes.Length
+        $stream = $request.GetRequestStream()
+        try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+    }
+    $response = $request.GetResponse()
+    try {
+        if ([int]$response.StatusCode -lt 200 -or [int]$response.StatusCode -ge 300) { throw "Node API rejected $Path." }
+        $reader = New-Object IO.StreamReader($response.GetResponseStream())
+        try { return $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
+    } finally { $response.Dispose() }
+}
+
+function Stop-InstallNode([string]$Data, [string]$Program) {
+    $runtimePath = Join-Path $Data 'runtime.json'
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    # A launch may not have published runtime.json yet. Preserve uncertain state.
+    while (-not (Test-Path -LiteralPath $runtimePath)) {
+        try { Assert-NoPendingLaunch $Data; return }
+        catch {
+            if ([DateTime]::UtcNow -ge $deadline) { throw }
+            Start-Sleep -Milliseconds 200
+        }
+    }
+    $runtime = Get-Content -LiteralPath $runtimePath -Raw | ConvertFrom-Json
+    if ($runtime.pid -le 0) { throw 'Invalid node process ID; inspect runtime.json.' }
+    $process = Get-Process -Id $runtime.pid -ErrorAction SilentlyContinue
+    if ($null -eq $process) { return }
+    try {
+        $executable = $process.MainModule.FileName
+        $created = $process.StartTime.ToFileTimeUtc()
+        Initialize-InstallNative
+        $versions = [Asterhand.InstallNative]::CanonicalDirectory((Join-Path $Program 'versions'))
+        $parent = [Asterhand.InstallNative]::CanonicalDirectory((Split-Path -Parent $executable))
+        $null = Assert-ChildPath $parent $versions
+        if ((Split-Path -Leaf $executable) -ne 'asterhand.exe') { throw 'The running process is not owned by this installation.' }
+        if (-not [Asterhand.InstallNative]::LaunchStillRunning($runtime.pid, $created, $executable)) { throw 'Node process identity changed.' }
+        $address = [uri]('http://' + $runtime.address)
+        $ip = $null
+        if ($address.UserInfo -or $address.AbsolutePath -ne '/' -or $address.Query -or $address.Fragment -or
+            -not [Net.IPAddress]::TryParse($address.DnsSafeHost, [ref]$ip) -or -not [Net.IPAddress]::IsLoopback($ip)) {
+            throw 'The node address must be a loopback IP and port.'
+        }
+        $origin = $address.GetLeftPart([UriPartial]::Authority)
+        $cookies = New-Object Net.CookieContainer
+        $health = Invoke-InstallNodeAPI $origin '/health' 'GET' $cookies $null ''
+        $config = Get-Content -LiteralPath (Join-Path $Data 'config.json') -Raw | ConvertFrom-Json
+        $healthPID = $health.PSObject.Properties['pid']
+        if (-not $config.node_id -or $health.node_id -ne $config.node_id -or ($healthPID -and $healthPID.Value -ne $runtime.pid)) {
+            throw 'The node health identity does not match the installation.'
+        }
+        if (-not [Asterhand.InstallNative]::LaunchStillRunning($runtime.pid, $created, $executable)) { throw 'Node process identity changed.' }
+        $token = [IO.File]::ReadAllText((Join-Path $Data 'web-login.token'))
+        $login = Invoke-InstallNodeAPI $origin '/api/login' 'POST' $cookies @{token=$token} ''
+        $token = $null
+        Write-Host 'Stopping this installation node; local in-flight work will require reconciliation after restart.'
+        $null = Invoke-InstallNodeAPI $origin '/api/stop' 'POST' $cookies @{} $login.csrf
+        if (-not $process.WaitForExit(30000)) { throw 'The node did not stop within 30 seconds. Inspect its logs and retry.' }
+    } finally { $process.Dispose() }
+}
+
+function Enter-InstallActivation([string[]]$DataDirectories, [string]$Program, [switch]$StopRunning) {
     $held = [pscustomobject]@{mutexes=(New-Object Collections.ArrayList);files=(New-Object Collections.ArrayList)}
     try {
         $targets = @{}
@@ -416,6 +492,7 @@ function Enter-InstallActivation([string[]]$DataDirectories) {
                 $held.mutexes.Add($mutex) | Out-Null
             } finally { if (-not $acquired) { $mutex.Dispose() } }
             $data = $targets[$name]
+            if ($StopRunning) { Stop-InstallNode $data $Program }
             Assert-NoPendingLaunch $data
             $lockPath = Join-Path $data 'service.lock'
             $options = if (Test-Path -LiteralPath $lockPath) { [IO.FileOptions]::None } else { [IO.FileOptions]::DeleteOnClose }
@@ -454,6 +531,14 @@ function Write-InstallRecord($Record, [string]$Destination) {
 if ($PackagePath) { $PackagePath = Resolve-FileSystemPath $PackagePath }
 if ($ManifestPath) { $ManifestPath = Resolve-FileSystemPath $ManifestPath }
 $InstallDir = Resolve-AppDirectory $InstallDir
+if (-not $PSBoundParameters.ContainsKey('DataDir')) {
+    $previousPath = Join-Path $InstallDir 'installation.json'
+    if (Test-Path -LiteralPath $previousPath) {
+        $previousRecord = Get-Content -LiteralPath $previousPath -Raw | ConvertFrom-Json
+        if ($previousRecord.schema -ne 1 -or -not [IO.Path]::IsPathRooted([string]$previousRecord.data)) { throw 'Invalid existing installation record.' }
+        $DataDir = [string]$previousRecord.data
+    }
+}
 $DataDir = Resolve-AppDirectory $DataDir
 Assert-SeparateDirectories $InstallDir $DataDir
 if (Test-Path -LiteralPath $InstallDir) {
@@ -515,7 +600,7 @@ try {
     $previous = if (Test-Path -LiteralPath $recordPath) { Get-Content -LiteralPath $recordPath -Raw | ConvertFrom-Json } else { $null }
     $directories = @($DataDir)
     if ($null -ne $previous) { $directories += Resolve-AppDirectory ([string]$previous.data) }
-    $activation = Enter-InstallActivation $directories
+    $activation = Enter-InstallActivation $directories $InstallDir -StopRunning:$StopRunning
     Assert-SeparateDirectories ([Asterhand.InstallNative]::CanonicalDirectory($InstallDir)) ([Asterhand.InstallNative]::CanonicalDirectory($DataDir))
     $hasLauncher = Test-Path -LiteralPath (Join-Path $versionDir 'AsterhandLauncher.exe') -PathType Leaf
     $desktopPath = Join-Path (Get-InstallFolder 'Desktop') 'Asterhand.lnk'
@@ -542,4 +627,7 @@ try {
         if ((Split-Path -Leaf $safeStaging) -notlike '.staging-*') { throw 'Refusing unexpected cleanup target.' }
         Remove-Item -LiteralPath $safeStaging -Recurse -Force
     }
+}
+if ($StartAfterInstall) {
+    & (Join-Path $InstallDir 'start.ps1')
 }

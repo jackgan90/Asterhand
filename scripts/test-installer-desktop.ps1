@@ -156,9 +156,13 @@ try {
 
     $launcherInvocation = [pscustomobject]@{ExitCode=0;Arguments=@()}
     function Start-Process($FilePath, $ArgumentList, $WindowStyle, [switch]$Wait, [switch]$PassThru) {
-        Assert ($FilePath -eq $launcher -and $Wait -and $PassThru -and $WindowStyle -eq 'Hidden') 'Script must wait for hidden native launcher.'
+        Assert ($FilePath -eq $launcher -and -not $Wait -and $PassThru -and $WindowStyle -eq 'Hidden') 'Script must launch without waiting for the node process tree.'
         $launcherInvocation.Arguments = @($ArgumentList)
-        return [pscustomobject]@{ExitCode=$launcherInvocation.ExitCode}
+        $result = [pscustomobject]@{ExitCode=$launcherInvocation.ExitCode}
+        $result | Add-Member ScriptMethod WaitForExit { param($Timeout) return $Timeout -eq 45000 }
+        $result | Add-Member ScriptMethod Refresh {}
+        $result | Add-Member ScriptMethod Dispose {}
+        return $result
     }
     $start = Join-Path $program 'start.ps1'
     Copy-Item -LiteralPath (Join-Path $repo 'packaging\start.ps1') -Destination $start

@@ -21,3 +21,7 @@ Windows PowerShell 5.1 运行 `test-installer-desktop.ps1` 验证 11 组隔离�
 发布测试见 [发布与安装验证](../docs/development/features/release-pipeline/validation.md)：`test-release.ps1` 覆盖草稿失败恢复和附件不可覆盖；`test-release-download.ps1` 通过公开安装脚本验证匿名下载、无开发工具安装、配置分离及重复安装。Tailscale 首次安装在独立 Windows 环境执行，不修改开发者现有网络配置。
 
 固定入口的默认 Latest、显式版本/标签、本地清单推导和错误响应由 `test-installer-release-selection.ps1` 在 Windows PowerShell 5.1 验证。GitHub API 边界使用可控响应，真实下载回归另行运行；复现方法见 [固定安装入口计划](../docs/development/features/stable-installer-entry/plan.md)。
+
+本地一键安装与在线覆盖使用 [test-install-lifecycle.ps1](../scripts/test-install-lifecycle.ps1)（PowerShell 5.1）验证完整安装器、隔离目录和真实基础节点，使用 [test-local-install-entry.ps1](../scripts/test-local-install-entry.ps1)（PowerShell 7）验证开发入口与 README 下载引导的边界及失败保护。前置条件、首次启动替代边界、浏览器抑制和复现命令见 [脚本指南](../scripts/README.md#本地一键安装)；完整助手与干净双机安装仍按人工验收执行。
+
+[test-installer-bootstrap.ps1](../scripts/test-installer-bootstrap.ps1) 可独立在 Windows PowerShell 5.1 和 PowerShell 7 运行，验证一行在线安装入口及版本/标签参数，网络和安装内容使用受控替代，不执行真实安装。

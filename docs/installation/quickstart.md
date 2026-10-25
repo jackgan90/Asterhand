@@ -4,25 +4,27 @@ Windows x64 是完整助手目标。支持边界见 [平台矩阵](../testing/pl
 
 ## 1. 在 B 安装
 
-从仓库[固定安装入口](https://raw.githubusercontent.com/jackgan90/Asterhand/main/install.ps1) 下载 `install.ps1`，在下载目录打开 Windows PowerShell 5.1 或更高版本，运行：
+在 Windows PowerShell 5.1 或更高版本中粘贴以下一行，自动从仓库[固定安装入口](https://raw.githubusercontent.com/jackgan90/Asterhand/main/install.ps1) 下载并执行安装器：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+irm https://raw.githubusercontent.com/jackgan90/Asterhand/main/install.ps1 -ErrorAction Stop | iex
 ```
 
-默认查询 GitHub Latest 稳定版，解析后从同一标签下载清单和 Windows 完整包，按摘要与大小校验。Latest 不包含草稿或预发布版。若仓库尚无稳定版，脚本会明确提示；指定已公开的版本或标签可安装预发布版：
+`irm` 是 Invoke-RestMethod 的别名，`iex` 是 Invoke-Expression 的别名；脚本在内存中执行，下载失败立即停止。默认查询 GitHub Latest 稳定版，解析后从同一标签下载清单和 Windows 完整包，按摘要与大小校验。Latest 不包含草稿或预发布版。若仓库尚无稳定版，脚本会明确提示；指定版本或标签时，使用支持参数的一行入口：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.1.0-alpha.1
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/jackgan90/Asterhand/main/install.ps1 -ErrorAction Stop))) -Version 0.1.0-alpha.1
 # 自定义标签与应用版本不同，用精确 Release 标签选择。
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Repository <owner>/<repository> -ReleaseTag <published-tag>
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/jackgan90/Asterhand/main/install.ps1 -ErrorAction Stop))) -Repository <owner>/<repository> -ReleaseTag <published-tag>
 ```
 
 Version 也接受 v 前缀；同时提供 Version 与 ReleaseTag 时，清单必须匹配指定应用版本。普通用户不需要 Go、Git、npm、PowerShell 7 或预装 Node。私有仓库和未公开草稿不支持匿名安装。
 
 脚本还检查 Microsoft VC++ x64 运行库：符合清单要求时复用，缺失或较旧时自动下载固定版本的 Microsoft 官方安装器，核对摘要和签名后请求 Windows 管理员许可。随后实际加载包内原生模块，确认系统依赖完整。VC++ 与 Tailscale 的安装都不会自动重启 Windows；如提示需要重启，完成重启后再配置节点。
 
-需要使用本地包时，使用固定入口脚本，并从同一版本发布物取得 `release-manifest.json` 和对应 ZIP，例如 `asterhand-0.1.0-alpha.1-windows-amd64.zip`。
+开发者验收当前源码时，双击仓库根目录 [install-local.cmd](../../install-local.cmd)，自动复用指纹匹配且校验通过的正式构建包；没有可复用包时准备锁定依赖并构建，通过正式安装器安装。包与系统依赖检查成功后自动正常停止本安装节点，安装完成自动启动并打开 Web。首次安装询问桌面图标，覆盖安装保留实际图标状态；未传 DataDir 时沿用已有安装记录，首次使用标准数据目录。需要 PowerShell 7，参数及缓存见 [脚本指南](../../scripts/README.md#本地一键安装)。正常退出会取消本机在途任务，重启后按既有规则人工对账。
+
+需要手动使用已有本地包时，先下载固定入口脚本，并从同一构建取得 `release-manifest.json` 和对应 ZIP，例如 `asterhand-0.1.0-alpha.1-windows-amd64.zip`。
 
 在该目录打开 PowerShell，执行本地包安装：
 
@@ -32,11 +34,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -PackagePa
 
 相对路径按当前 PowerShell FileSystem 目录解析；也可向 PackagePath 和 ManifestPath 传绝对路径。默认清单从包所在目录读取，本地包不查询 Latest，版本由清单推导。ZIP 与 manifest 必须来自同一构建；入口脚本可以使用当前兼容版本。来自其他发布仓库的包同时传入对应 Repository；显式版本或标签与清单冲突时拒绝安装。
 
-上述命令只为本次 PowerShell 进程设置脚本执行策略，不修改用户或整机策略，适用于默认限制脚本执行的全新 Windows。运行前确认脚本来自官方仓库固定入口；Release 附带的脚本副本可核对该 Release 的 SHA256SUMS。组织组策略优先于进程参数；受管理设备仍按组织要求执行。策略说明见 [Microsoft 文档](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_execution_policies)。
+在线入口直接执行从官方 HTTPS 地址取得的脚本，不修改用户或整机执行策略。本地文件命令只为本次 PowerShell 进程设置 Bypass。运行前确认地址来自官方仓库；也可手动下载审阅后执行，Release 附带的脚本副本可核对该 Release 的 SHA256SUMS。受管理设备仍按组织要求执行。策略说明见 [Microsoft 文档](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_execution_policies)。
 
 首次交互安装会询问是否创建桌面图标，直接回车选择创建。也可显式传入 `-DesktopShortcut Create` 或 `-DesktopShortcut Skip`；非交互首次安装默认跳过。安装完成后脚本退出，输出固定 `AsterhandLauncher.exe` 与 `start.ps1` 入口。此时组件已安装，节点尚未启动，身份、模型凭据、工作目录与配对尚未配置。
 
-默认程序目录 `%LOCALAPPDATA%\Programs\Asterhand`，数据目录 `%APPDATA%\Asterhand`。重复安装保留节点身份、配对、key 和数据库。可用 `-InstallDir`、`-DataDir` 指定独立目录，二者不得互相包含。桌面快捷方式创建在当前用户桌面，支持中文、空格和重定向桌面。
+默认程序目录 `%LOCALAPPDATA%\Programs\Asterhand`，首次数据目录 `%APPDATA%\Asterhand`。覆盖安装未显式传 DataDir 时沿用 installation.json 的数据目录，保留节点身份、配对、key 和数据库。可用 `-InstallDir`、`-DataDir` 指定独立目录，二者不得互相包含。桌面快捷方式创建在当前用户桌面，支持中文、空格和重定向桌面。
+
+正式安装器也支持 `-StopRunning` 和 `-StartAfterInstall`：前者在包及依赖检查通过后验证节点归属并请求正常退出，后者在激活成功、锁释放后复用标准启动器启动。未知进程、身份不符或停止超时会中止覆盖；默认仍要求先手动退出在线节点。`-NoStart` 为兼容选项，与 `-StartAfterInstall` 互斥。
 
 `-DesktopShortcut Auto` 是默认值；升级时按实际存在的本安装图标保留，手动删除后不会重新创建。`Keep` 也保留实际状态；`Create` 可恢复图标，`Skip` 移除本安装的桌面图标。同名其他安装的快捷方式保留并在需要创建时提示冲突。旧包未包含启动器时继续使用 `start.ps1`，显式 `Create` 会提示改选新包。
 
@@ -61,7 +65,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -PackagePa
 
 ## 已有节点升级
 
-在任务完成后，打开本机设置，记下页面显示的数据目录，并点击“停止本机节点”，或从托盘菜单退出。等待托盘消失后运行固定入口 install.ps1 安装最新稳定版，或用 Version / ReleaseTag 指定目标；也可使用当前脚本及同一构建的清单与 ZIP 本地安装。节点仍在运行或启动时，安装器会拒绝激活并提示先退出，不替用户停止任务。建议从固定入口更新脚本，以取得最新安装兼容性修复。默认安装沿用原数据；曾指定自定义 DataDir 的节点必须继续传入同一目录。
+在任务完成后，打开本机设置，记下页面显示的数据目录，并点击“停止本机节点”，或从托盘菜单退出。等待托盘消失后运行固定入口 install.ps1 安装最新稳定版，或用 Version / ReleaseTag 指定目标；也可使用当前脚本及同一构建的清单与 ZIP 本地安装。默认安装会拒绝激活在线节点；显式 StopRunning 可正常停止节点，本地双击入口已启用该选项。建议从固定入口更新脚本，以取得最新安装兼容性修复。覆盖安装默认沿用安装记录中的原数据目录，包括自定义 DataDir；仅更换数据目录时才显式传入新值。
 
 升级后双击原桌面图标或运行安装目录 start.ps1 打开原节点，确认原名称、授权目录、配对和历史任务仍在。快捷方式指向固定启动器，升级无需手工修改目标。点击“使用 Tailscale 地址”并保存；出现重启提示时再停止并启动一次。运行安装目录 configure-firewall.ps1 更新规则。新程序首次启动需要重新验证一次模型与工具。
 

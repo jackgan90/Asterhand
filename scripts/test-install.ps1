@@ -17,7 +17,10 @@ $report = [ordered]@{status='running';created_utc=[DateTime]::UtcNow.ToString('o
 function Install-Candidate([string]$PackageRoot,[string]$Program,[string]$Data) {
     $manifest = Get-Content (Join-Path $PackageRoot 'release-manifest.json') -Raw | ConvertFrom-Json
     $package = $manifest.packages | Where-Object { $_.os -eq 'windows' -and $_.arch -eq 'amd64' }
-    & $ps5 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PackageRoot 'install.ps1') -Version $manifest.version -PackagePath (Join-Path $PackageRoot $package.file) -InstallDir $Program -DataDir $Data -SkipTailscale -NoStart | Out-Host
+    $installerPath = Join-Path $PackageRoot 'install.ps1'
+    $selection = @()
+    if ((Get-Command $installerPath).Parameters.ContainsKey('DesktopShortcut')) { $selection = @('-DesktopShortcut', 'Skip') }
+    & $ps5 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $installerPath -Version $manifest.version -PackagePath (Join-Path $PackageRoot $package.file) -InstallDir $Program -DataDir $Data -SkipTailscale -NoStart @selection | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell installation failed.' }
     return Get-Content (Join-Path $Program 'installation.json') -Raw | ConvertFrom-Json
 }

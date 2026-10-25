@@ -6,15 +6,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 	"time"
 
-	"github.com/jackgan90/Asterhand/internal/app"
 	"github.com/jackgan90/Asterhand/internal/config"
 	"github.com/jackgan90/Asterhand/internal/environment"
 	"github.com/jackgan90/Asterhand/internal/executor"
+	"github.com/jackgan90/Asterhand/internal/launch"
 )
 
 func main() {
@@ -56,12 +54,8 @@ func run() error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	c, err := config.Open(*home)
-	if err != nil {
-		return err
-	}
 	if command == "open" || command == "status" {
-		address, err := existingURL(c)
+		address, err := launch.ExistingURL(*home)
 		if err != nil {
 			return err
 		}
@@ -72,9 +66,16 @@ func run() error {
 		return nil
 	}
 	if command == "doctor" {
+		c, err := config.Open(*home)
+		if err != nil {
+			return err
+		}
 		return doctor(c)
 	}
-	unlock, err := config.Lock(c.Home)
+	if command != "start" && command != "setup" && command != "repair" {
+		return fmt.Errorf("可用命令: setup, start, open, status, doctor, repair, version")
+	}
+	c, unlock, err := config.OpenLocked(*home)
 	if err != nil {
 		return err
 	}
@@ -122,39 +123,10 @@ func run() error {
 	if err = c.Save(cfg); err != nil {
 		return err
 	}
-	if command == "doctor" || command == "repair" {
+	if command == "repair" {
 		return doctor(c)
 	}
-	if command != "start" && command != "setup" {
-		return fmt.Errorf("可用命令: setup, start, open, status, doctor, repair, version")
-	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-	a, err := app.New(c, nil)
-	if err != nil {
-		return err
-	}
-	address, err := a.Start(ctx)
-	if err != nil {
-		return err
-	}
-	record, _ := json.Marshal(map[string]any{"address": a.Address(), "pid": os.Getpid()})
-	if err = config.AtomicFile(filepath.Join(c.Home, "runtime.json"), record, 0600); err != nil {
-		cancel()
-		a.Close()
-		return err
-	}
-	fmt.Printf("Asterhand %s\n本机登录链接（仅自己使用）：\n%s\n节点数据：%s\nCtrl+C 停止节点。\n", config.Version, address, c.Home)
-	if *open {
-		if err = openBrowser(address); err != nil {
-			fmt.Fprintln(os.Stderr, "自动打开浏览器失败，请手动打开登录链接")
-		}
-	}
-	select {
-	case <-ctx.Done():
-	case <-a.Done():
-	}
-	return a.Close()
+	return runNode(c, *open)
 }
 func doctor(c *config.Manager) error {
 	checks, checkErr := environment.Check(c)

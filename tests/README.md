@@ -10,6 +10,12 @@
 
 双节点交互测试覆盖 peer 元数据身份验证、改名保留信任、单向地址修复、监听配置及就绪保持回归。`node --test tests/plugin-contract.test.mjs tests/web-state.test.mjs` 覆盖路由转执行的统一排序、去重和发送按钮状态，并由完整验证入口执行。
 
+桌面生命周期测试覆盖启动记录和目录验证、loopback 身份检查、并发启动只创建一个节点、早期子进程超时保留、无控制台子进程与日志追加；应用测试覆盖忙时退出确认、停止后的接收屏障、模型验证取消、持久化和在途任务待核对。测试入口在 [启动器测试](../internal/launch/run_windows_test.go)、[托盘测试](../internal/desktop/tray_windows_test.go) 和 [应用生命周期测试](../internal/app/lifecycle_test.go)。
+
+默认 Go 测试跳过需要交互桌面的可见托盘用例；在 Windows 当前用户桌面设置 `ASTERHAND_DESKTOP_TEST=1` 后运行 `go test ./internal/desktop -count=1`，验证真实 Shell 图标注册和合成 TaskbarCreated、DPI、会话结束消息。合成消息不代表已经实测 Explorer 重启、不同显示缩放或注销。
+
+Windows PowerShell 5.1 运行 `test-installer-desktop.ps1` 验证 11 组隔离快捷方式/激活边界，`test-desktop-launch.ps1` 验证真实基础节点进程的启动、复用和退出；`test-icon-resources.ps1` 同时支持 PowerShell 5.1/7。命令和输出约定见 [脚本指南](../scripts/README.md)，完整范围和人工桌面步骤见 [桌面验证说明](../docs/development/features/windows-desktop-lifecycle/validation.md)。
+
 单机多实例包含 FakeExecutor，不能代替真实双 Windows。方法见 [双节点交互验证](../docs/development/features/two-node-usability/validation.md) 与 [任务可靠性验证](../docs/development/features/task-reliability/validation.md)，用户步骤见 [操作指南](../docs/installation/quickstart.md)。
 
 发布测试见 [发布与安装验证](../docs/development/features/release-pipeline/validation.md)：`test-release.ps1` 覆盖草稿失败恢复和附件不可覆盖；`test-release-download.ps1` 通过公开安装脚本验证匿名下载、无开发工具安装、配置分离及重复安装。Tailscale 首次安装在独立 Windows 环境执行，不修改开发者现有网络配置。

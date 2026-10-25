@@ -99,7 +99,7 @@ func validateHome(path string) error {
 	}
 	for _, entry := range entries {
 		switch entry.Name() {
-		case "startup.txt", "error.txt", "process.pid", "startup.log", "error.log":
+		case "startup.txt", "error.txt", "process.pid", "startup.log", "error.log", "launcher.log", "service.lock", "launch-state.json":
 		default:
 			return errors.New("此目录已有其他内容，请选择空目录或已有 Asterhand 数据目录")
 		}

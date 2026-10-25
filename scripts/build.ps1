@@ -28,7 +28,7 @@ $stageRoot = Join-Path $repo ('out\packages-' + [guid]::NewGuid().ToString('N'))
 $windows = Join-Path $stageRoot 'windows'
 New-Item -ItemType Directory -Path $windows -Force | Out-Null
 
-function Build-Binary([string]$Platform, [string]$Destination) {
+function Build-Binary([string]$Platform, [string]$Destination, [string]$Command = 'asterhand', [switch]$GUI) {
     $savedGOOS = $env:GOOS
     $savedGOARCH = $env:GOARCH
     $savedCGO = $env:CGO_ENABLED
@@ -36,7 +36,9 @@ function Build-Binary([string]$Platform, [string]$Destination) {
         $env:GOOS = $Platform
         $env:GOARCH = 'amd64'
         $env:CGO_ENABLED = '0'
-        & $Go -C $repo build -trimpath -ldflags "-s -w -X github.com/jackgan90/Asterhand/internal/config.SourceDigest=$sourceDigest" -o $Destination ./cmd/asterhand
+        $linkFlags = "-s -w -X github.com/jackgan90/Asterhand/internal/config.SourceDigest=$sourceDigest"
+        if ($GUI) { $linkFlags += ' -H=windowsgui' }
+        & $Go -C $repo build -trimpath -ldflags $linkFlags -o $Destination ("./cmd/" + $Command)
         if ($LASTEXITCODE -ne 0) { throw "$Platform build failed" }
     } finally {
         $env:GOOS = $savedGOOS
@@ -67,6 +69,10 @@ function Copy-GoLicenses([string]$Stage) {
 $catalog = Assert-PreparedDependencies $repo $NodeDistribution $RuntimeRoot $Go
 $sourceDigest = Get-SourceFingerprint $repo
 Build-Binary 'windows' (Join-Path $windows 'asterhand.exe')
+Build-Binary 'windows' (Join-Path $windows 'AsterhandLauncher.exe') 'asterhand-launcher' -GUI
+foreach ($binary in @('asterhand.exe', 'AsterhandLauncher.exe')) {
+    & (Join-Path $PSScriptRoot 'set-executable-icon.ps1') -Executable (Join-Path $windows $binary) -Icon (Join-Path $repo 'internal\desktop\assets\application.ico')
+}
 New-Item -ItemType Directory -Path (Join-Path $windows 'runtime') -Force | Out-Null
 Copy-Item -LiteralPath $NodeDistribution -Destination (Join-Path $windows 'runtime\node') -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $RuntimeRoot 'node_modules') -Destination (Join-Path $windows 'runtime\node_modules') -Recurse -Force

@@ -43,7 +43,8 @@ try {
     else { Invoke-WebRequest "https://github.com/$Repository/releases/download/$Tag/install.ps1" -OutFile $installer -UseBasicParsing }
     $report.installer_sha256 = (Get-FileHash -LiteralPath $installer).Hash.ToLowerInvariant()
     $ps5 = Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe'
-    $arguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$installer,'-Repository',$Repository,'-ReleaseTag',$Tag,'-InstallDir',$program,'-DataDir',$data)
+    $arguments = @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$installer,'-Repository',$Repository,'-ReleaseTag',$Tag,'-InstallDir',$program,'-DataDir',$data)
+    if ((Get-Command $installer).Parameters.ContainsKey('DesktopShortcut')) { $arguments += @('-DesktopShortcut', 'Skip') }
     if ($SkipTailscale) { $arguments += '-SkipTailscale' }
     & $ps5 @arguments | Tee-Object -FilePath (Join-Path $OutputDirectory 'first-install.log') | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'Downloaded installer failed.' }

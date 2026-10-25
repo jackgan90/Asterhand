@@ -41,7 +41,7 @@ func (a *App) api(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		send(w, 202, map[string]bool{"stopping": true})
-		time.AfterFunc(100*time.Millisecond, a.cancel)
+		time.AfterFunc(100*time.Millisecond, func() { a.RequestStop(true) })
 	case "/api/network":
 		_, port, _ := net.SplitHostPort(a.Config.Get().PeerListen)
 		send(w, 200, network.Inspect(r.Context(), port))
@@ -189,6 +189,10 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 		fail(w, 409, errors.New("请等待当前模型检查完成"))
 		return
 	}
+	if a.stopping {
+		fail(w, 503, errors.New("节点正在退出"))
+		return
+	}
 	if err = os.MkdirAll(root, 0700); err != nil {
 		fail(w, 400, err)
 		return
@@ -252,6 +256,11 @@ func (a *App) probe(w http.ResponseWriter, r *http.Request) {
 	if a.probeRunning {
 		a.mu.Unlock()
 		fail(w, 409, errors.New("模型检查正在执行"))
+		return
+	}
+	if a.stopping {
+		a.mu.Unlock()
+		fail(w, 503, errors.New("节点正在退出"))
 		return
 	}
 	a.probeRunning = true

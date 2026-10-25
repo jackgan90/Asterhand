@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -48,7 +49,7 @@ func (a *App) local(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/health" && r.Method == "GET" {
-		send(w, 200, map[string]string{"node_id": a.Config.Get().NodeID})
+		send(w, 200, map[string]any{"node_id": a.Config.Get().NodeID, "pid": os.Getpid()})
 		return
 	}
 	if r.URL.Path == "/internal/tool" {

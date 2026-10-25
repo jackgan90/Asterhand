@@ -9,7 +9,7 @@ $prepared = Get-Content .\out\prepared-upgrade\prepared.json -Raw | ConvertFrom-
 
 RuntimeRoot 包含 package.json、与 packaging/runtime-lock.json 完全匹配的 package-lock.json 和按锁安装的 node_modules；安装 OpenClaw 和 @openclaw/deepseek-provider 2026.10.7。NodeDistribution 使用依赖清单中已验证摘要的官方 Windows 发行目录。
 
-构建脚本验证版本与锁文件，产生 Windows 完整 ZIP、面向目标仓库的安装入口副本、包含仓库和标签的 release-manifest.json、SHA256SUMS 和操作指南。脚本默认 Latest，复现安装时显式传 ReleaseTag。当前正式构建不输出 Linux/macOS 安装包。out 下 staging 供人工检查，按需清理自己生成的目录。
+构建脚本验证版本与锁文件，产生 Windows 完整 ZIP、面向目标仓库的安装入口副本、包含仓库和标签的 release-manifest.json、SHA256SUMS 和操作指南。包内包含节点程序、无控制台 AsterhandLauncher.exe 和 start.ps1；节点与启动器均嵌入应用图标，节点另含托盘图标。脚本默认 Latest，复现安装时显式传 ReleaseTag。当前正式构建不输出 Linux/macOS 安装包。out 下 staging 供人工检查，按需清理自己生成的目录。
 
 prepare-dependencies.ps1（隔离准备）、verify-dependencies.ps1（统一报告）、verify-live.ps1（真实 probe/文件/问答/取消）、test-install.ps1（PowerShell 5.1 安装/升级回归）、dependency-tools.ps1 / test-dependency-tools.ps1（共用清单检查与拒绝测试）。完整命令见 [升级流程](../packaging/upgrade.md)。
 
@@ -24,6 +24,25 @@ powershell.exe -NoProfile -File .\scripts\test-install-paths.ps1 -Installer .\in
 ```
 
 这些示例目录是由构建和测试命令生成的输出，由执行者选择；不依赖仓库作者的本机文件。可用 BaselineInstaller 参数提供旧安装器比较路径行为。测试不联网、不启动服务、不调用模型；test-install.ps1 在完整安装检查前自动执行路径回归。
+
+## Windows 桌面与图标验证
+
+`build-icons.ps1` 从 [透明 PNG 源](../internal/desktop/assets/README.md) 生成多尺寸应用/托盘 ICO；修改 PNG 后须先显式运行该脚本并保存更新后的 ICO。`build.ps1` 编译时嵌入现有托盘 ICO，随后调用 `set-executable-icon.ps1`，用 Windows 资源 API 给节点和启动器嵌入现有应用 ICO；不要求额外资源编译器或运行时。`test-icon-resources.ps1` 验证透明度、ICO 帧与可执行文件资源往返，生成用于人工检查的尺寸预览，支持 Windows PowerShell 5.1 和 PowerShell 7：
+
+```powershell
+powershell.exe -NoProfile -File .\scripts\test-icon-resources.ps1 -Go go -OutputDirectory .\out\desktop-icons
+powershell.exe -NoProfile -File .\scripts\test-installer-desktop.ps1 -OutputDirectory .\out\desktop-installer
+```
+
+`test-installer-desktop.ps1` 用隔离目录替代当前用户桌面和 Startup，实际创建并读取 Windows 快捷方式，覆盖 11 组选择、归属、升级、Unicode 路径、旧包和激活互斥边界；不修改真实桌面或系统启动项。
+
+`test-desktop-launch.ps1` 需要已构建的节点与启动器，创建中文含空格的隔离安装，启动真实基础节点但不配置模型、不打开浏览器：
+
+```powershell
+powershell.exe -NoProfile -File .\scripts\test-desktop-launch.ps1 -NodeExecutable <candidate-asterhand.exe> -LauncherExecutable <candidate-AsterhandLauncher.exe> -OutputDirectory .\out\desktop-launch
+```
+
+该回归检查并发启动、CLI status、脚本复用、日志追加与登录 token 不泄漏、Web 停止后的进程/锁/端口释放、重启数据保留和端口占用失败。输出目录必须新建；完整安装包仍需 test-install.ps1 和 test-install-paths.ps1。托盘可见性、真实 Explorer 重启、DPI、注销及两台 Windows 验收见 [桌面验证说明](../docs/development/features/windows-desktop-lifecycle/validation.md)。
 
 ## 统一发布
 

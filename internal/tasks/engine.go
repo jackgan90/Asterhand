@@ -36,6 +36,7 @@ type Engine struct {
 	mu           sync.Mutex
 	active       map[string]*active
 	wake         chan struct{}
+	stopping     bool
 }
 
 func New(s *store.Store, c *config.Manager, x executor.Executor) *Engine {
@@ -65,6 +66,11 @@ func (e *Engine) Accept(origin string, r model.Request) (model.Job, error) {
 		if _, err = e.project(r.ProjectID); err != nil {
 			return model.Job{}, err
 		}
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.stopping {
+		return model.Job{}, errors.New("节点正在退出，暂不接收新任务")
 	}
 	j, err := e.Store.Accept(e.Config.Get().NodeID, origin, r)
 	if err == nil {
@@ -151,6 +157,10 @@ func (e *Engine) execute(parent context.Context, j model.Job) error {
 	var err error
 	// Cancel commits first, then takes this lock. It cannot miss a newly running attempt.
 	e.mu.Lock()
+	if e.stopping || parent.Err() != nil {
+		e.mu.Unlock()
+		return nil
+	}
 	j, err = e.Store.Change(j.ID, "attempt_created", func(j *model.Job) (any, error) {
 		if j.State != "queued" {
 			return nil, store.ErrUnchanged

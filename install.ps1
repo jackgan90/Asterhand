@@ -13,7 +13,9 @@ param(
     [string]$DataDir = (Join-Path $env:APPDATA 'Asterhand'),
     [switch]$SkipTailscale,
     [switch]$NoStart,
-    [switch]$LoginAtStartup
+    [switch]$LoginAtStartup,
+    [ValidateSet('Auto','Create','Skip','Keep')]
+    [string]$DesktopShortcut = 'Auto'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -99,6 +101,16 @@ function Assert-ChildPath([string]$Path, [string]$Parent) {
         throw "Path is outside the intended application directory: $resolved"
     }
     return $resolved
+}
+
+function Assert-SeparateDirectories([string]$Program, [string]$Data) {
+    $programPath = [IO.Path]::GetFullPath($Program).TrimEnd('\')
+    $dataPath = [IO.Path]::GetFullPath($Data).TrimEnd('\')
+    if ($programPath -eq $dataPath -or
+        $programPath.StartsWith($dataPath + '\', [StringComparison]::OrdinalIgnoreCase) -or
+        $dataPath.StartsWith($programPath + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Program and data directories must be separate and must not contain one another.'
+    }
 }
 
 function Get-VerifiedFile([string]$Url, [string]$Destination, [string]$SHA256) {
@@ -213,11 +225,237 @@ function Test-WindowsNativeModules([string]$Directory, $Dependencies) {
     if ($LASTEXITCODE -ne 0) { throw 'Native runtime module loading failed. Check the Microsoft VC++ runtime installation.' }
 }
 
+function Initialize-InstallNative {
+    if ('Asterhand.InstallNative' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
+namespace Asterhand {
+    public static class InstallNative {
+        [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+        static extern SafeFileHandle CreateFile(string path, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+        [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+        static extern uint GetFinalPathNameByHandle(SafeFileHandle handle, StringBuilder path, uint size, uint flags);
+        [DllImport("kernel32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
+        static extern int LCMapStringEx(string locale, uint flags, string source, int length, StringBuilder destination, int capacity, IntPtr version, IntPtr reserved, IntPtr sort);
+        [DllImport("kernel32.dll", SetLastError=true)]
+        static extern SafeFileHandle OpenProcess(uint access, bool inherit, int pid);
+        [DllImport("kernel32.dll", SetLastError=true)]
+        static extern bool GetProcessTimes(SafeFileHandle handle, out long created, out long exited, out long kernel, out long user);
+        [DllImport("kernel32.dll", SetLastError=true)]
+        static extern bool GetExitCodeProcess(SafeFileHandle handle, out uint code);
+        [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+        static extern bool QueryFullProcessImageName(SafeFileHandle handle, uint flags, StringBuilder path, ref uint size);
+        public static string CanonicalDirectory(string path) {
+            using (var handle = CreateFile(path, 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero)) {
+                if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+                var value = new StringBuilder(32768);
+                uint count = GetFinalPathNameByHandle(handle, value, (uint)value.Capacity, 0);
+                if (count == 0 || count >= value.Capacity) throw new Win32Exception(Marshal.GetLastWin32Error());
+                string result = value.ToString();
+                if (result.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) result = @"\\" + result.Substring(8);
+                else if (result.StartsWith(@"\\?\")) result = result.Substring(4);
+                return result.TrimEnd('\\');
+            }
+        }
+        public static string LaunchLockKey(string path) {
+            // Match internal/launch's Windows filesystem casing, not .NET's
+            // Unicode casing tables. Hash the resulting string as UTF-8.
+            string source = CanonicalDirectory(path);
+            const uint lowercase = 0x00000100;
+            // Include the terminator for StringBuilder marshalling on .NET Framework.
+            int count = LCMapStringEx("", lowercase, source, -1, null, 0, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+            if (count == 0) throw new Win32Exception(Marshal.GetLastWin32Error());
+            var result = new StringBuilder(count);
+            if (LCMapStringEx("", lowercase, source, -1, result, result.Capacity, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero) == 0)
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            return result.ToString();
+        }
+        public static bool LaunchStillRunning(int pid, long created, string executable) {
+            using (var handle = OpenProcess(0x1000, false, pid)) {
+                if (handle.IsInvalid) {
+                    int error = Marshal.GetLastWin32Error();
+                    if (error == 87) return false;
+                    throw new Win32Exception(error);
+                }
+                uint code;
+                long actual, exited, kernel, user;
+                if (!GetExitCodeProcess(handle, out code) || !GetProcessTimes(handle, out actual, out exited, out kernel, out user))
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                if (code != 259 || actual != created) return false;
+                var image = new StringBuilder(32768);
+                uint size = (uint)image.Capacity;
+                if (!QueryFullProcessImageName(handle, 0, image, ref size)) throw new Win32Exception(Marshal.GetLastWin32Error());
+                return String.Equals(image.ToString(), executable, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+    }
+}
+'@
+}
+
+function Get-InstallFolder([string]$Kind) {
+    $folder = if ($Kind -eq 'Desktop') { 'DesktopDirectory' } else { 'Startup' }
+    $path = [Environment]::GetFolderPath($folder)
+    if (-not $path) { throw "The current user's $Kind folder is unavailable." }
+    return $path
+}
+
+function Get-InstallShortcut([string]$Path) {
+    return (New-Object -ComObject WScript.Shell).CreateShortcut($Path)
+}
+
+function Test-OwnedShortcut([string]$Path, [string]$Program) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    $link = Get-InstallShortcut $Path
+    if ($link.TargetPath -eq (Join-Path $Program 'AsterhandLauncher.exe')) { return $true }
+    $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $legacy = '-NoProfile -WindowStyle Hidden -File "' + (Join-Path $Program 'start.ps1') + '" -NoBrowser'
+    return $link.TargetPath -eq $powershell -and $link.Arguments -eq $legacy
+}
+
+function Test-InstallerInteractive {
+    if ($Host.Name -ne 'ConsoleHost' -or -not [Environment]::UserInteractive) { return $false }
+    if ([Environment]::GetCommandLineArgs() -match '^-NonInteractive$') { return $false }
+    try { return -not ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) }
+    catch { return $false }
+}
+
+function Select-DesktopShortcut([string]$Mode, [bool]$HasLauncher, [bool]$Upgrade, [bool]$Owned) {
+    if (-not $HasLauncher) {
+        if ($Mode -eq 'Create') { throw 'This older package has no desktop launcher. Select a newer package or use -DesktopShortcut Skip.' }
+        Write-Host 'This package uses the legacy start.ps1 entry; no desktop icon will be created.'
+        return $false
+    }
+    if ($Mode -eq 'Create') { return $true }
+    if ($Mode -eq 'Skip') { return $false }
+    if ($Mode -eq 'Keep' -or $Upgrade) { return $Owned }
+    if (-not (Test-InstallerInteractive)) {
+        Write-Host 'Non-interactive installation: desktop icon skipped. Use -DesktopShortcut Create to request one.'
+        return $false
+    }
+    $answer = Read-Host 'Create an Asterhand desktop icon? [Y/n]'
+    if ($answer -notmatch '^(?i:y|yes|n|no)?$') { throw 'Choose Y or N, or specify -DesktopShortcut Create/Skip.' }
+    return $answer -notmatch '^(?i:n|no)$'
+}
+
+function Set-InstallShortcut([string]$Path, [string]$Program, [bool]$Startup, [bool]$HasLauncher) {
+    if ((Test-Path -LiteralPath $Path) -and -not (Test-OwnedShortcut $Path $Program)) {
+        throw "A shortcut belonging to another application or installation already exists: $Path"
+    }
+    New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force | Out-Null
+    $shortcut = Get-InstallShortcut $Path
+    if ($HasLauncher) {
+        $shortcut.TargetPath = Join-Path $Program 'AsterhandLauncher.exe'
+        $shortcut.Arguments = if ($Startup) { '--no-browser' } else { '' }
+        $shortcut.IconLocation = $shortcut.TargetPath + ',0'
+    } else {
+        $shortcut.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $shortcut.Arguments = '-NoProfile -WindowStyle Hidden -File "' + (Join-Path $Program 'start.ps1') + '" -NoBrowser'
+    }
+    $shortcut.WorkingDirectory = $Program
+    $shortcut.Description = 'Asterhand - personal assistant across your devices'
+    $shortcut.WindowStyle = 7
+    $shortcut.Save()
+}
+
+function Update-InstallShortcuts([string]$Program, [bool]$DesktopEnabled, [bool]$HasLauncher, [bool]$EnableStartup) {
+    $desktopPath = Join-Path (Get-InstallFolder 'Desktop') 'Asterhand.lnk'
+    $startupPath = Join-Path (Get-InstallFolder 'Startup') 'Asterhand.lnk'
+    $ownedStartup = Test-OwnedShortcut $startupPath $Program
+    foreach ($entry in @(@{path=$desktopPath;enabled=$DesktopEnabled}, @{path=$startupPath;enabled=($EnableStartup -or $ownedStartup)})) {
+        if ($entry.enabled -and (Test-Path -LiteralPath $entry.path) -and -not (Test-OwnedShortcut $entry.path $Program)) {
+            throw "Asterhand will not overwrite a shortcut from another installation: $($entry.path)"
+        }
+    }
+    if ($DesktopEnabled) { Set-InstallShortcut $desktopPath $Program $false $HasLauncher }
+    elseif (Test-OwnedShortcut $desktopPath $Program) { Remove-Item -LiteralPath $desktopPath -Force }
+    if ($EnableStartup -or $ownedStartup) { Set-InstallShortcut $startupPath $Program $true $HasLauncher }
+    Write-Host ('Desktop icon: ' + $(if ($DesktopEnabled) { 'created/preserved' } else { 'skipped' }))
+    if ($EnableStartup -or $ownedStartup) { Write-Host 'Startup after this Windows user logs in is enabled; the browser will remain closed.' }
+}
+
+function Get-LaunchMutexName([string]$Data) {
+    Initialize-InstallNative
+    $canonical = [Asterhand.InstallNative]::LaunchLockKey($Data)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $digest = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($canonical)) }
+    finally { $sha.Dispose() }
+    return 'Local\AsterhandLaunch-' + ([BitConverter]::ToString($digest).Replace('-', '').ToLowerInvariant())
+}
+
+function Assert-NoPendingLaunch([string]$Data) {
+    $path = Join-Path $Data 'launch-state.json'
+    if (-not (Test-Path -LiteralPath $path)) { return }
+    try {
+        $record = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        if ($record.pid -le 0 -or $record.created -le 0 -or -not [IO.Path]::IsPathRooted($record.executable)) { throw 'Invalid launch record.' }
+        if ([Asterhand.InstallNative]::LaunchStillRunning($record.pid, $record.created, $record.executable)) {
+            throw 'Asterhand is still running or starting.'
+        }
+    } catch { throw "Cannot safely activate this installation. Stop the node and inspect $path before retrying. $($_.Exception.Message)" }
+}
+
+function Enter-InstallActivation([string[]]$DataDirectories) {
+    $held = [pscustomobject]@{mutexes=(New-Object Collections.ArrayList);files=(New-Object Collections.ArrayList)}
+    try {
+        $targets = @{}
+        foreach ($data in $DataDirectories) {
+            New-Item -ItemType Directory -Path $data -Force | Out-Null
+            $targets[(Get-LaunchMutexName $data)] = $data
+        }
+        foreach ($name in @($targets.Keys | Sort-Object)) {
+            $mutex = New-Object Threading.Mutex($false, $name)
+            $acquired = $false
+            try {
+                try { $acquired = $mutex.WaitOne(20000) } catch [Threading.AbandonedMutexException] { $acquired = $true }
+                if (-not $acquired) { throw 'Asterhand is starting or another installation is active. Wait for it to finish, then retry.' }
+                $held.mutexes.Add($mutex) | Out-Null
+            } finally { if (-not $acquired) { $mutex.Dispose() } }
+            $data = $targets[$name]
+            Assert-NoPendingLaunch $data
+            $lockPath = Join-Path $data 'service.lock'
+            $options = if (Test-Path -LiteralPath $lockPath) { [IO.FileOptions]::None } else { [IO.FileOptions]::DeleteOnClose }
+            try { $lock = New-Object IO.FileStream($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None, 1, $options) }
+            catch { throw "Asterhand is running, or its data directory is not writable. Stop the node before installing: $data" }
+            $held.files.Add($lock) | Out-Null
+        }
+        return $held
+    } catch { Exit-InstallActivation $held; throw }
+}
+
+function Exit-InstallActivation($Held) {
+    if ($null -eq $Held) { return }
+    foreach ($file in $Held.files) { $file.Dispose() }
+    foreach ($mutex in $Held.mutexes) { $mutex.ReleaseMutex(); $mutex.Dispose() }
+}
+
+function Publish-InstallFile([string]$Source, [string]$Destination) {
+    $temporary = $Destination + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+    try {
+        Copy-Item -LiteralPath $Source -Destination $temporary
+        if (Test-Path -LiteralPath $Destination) { [IO.File]::Replace($temporary, $Destination, [NullString]::Value) }
+        else { [IO.File]::Move($temporary, $Destination) }
+    } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
+}
+
+function Write-InstallRecord($Record, [string]$Destination) {
+    $temporary = $Destination + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+    try {
+        $Record | ConvertTo-Json | Set-Content -LiteralPath $temporary -Encoding UTF8
+        if (Test-Path -LiteralPath $Destination) { [IO.File]::Replace($temporary, $Destination, [NullString]::Value) }
+        else { [IO.File]::Move($temporary, $Destination) }
+    } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
+}
+
 if ($PackagePath) { $PackagePath = Resolve-FileSystemPath $PackagePath }
 if ($ManifestPath) { $ManifestPath = Resolve-FileSystemPath $ManifestPath }
 $InstallDir = Resolve-AppDirectory $InstallDir
 $DataDir = Resolve-AppDirectory $DataDir
-if ($InstallDir -eq $DataDir) { throw 'Program and data directories must be separate.' }
+Assert-SeparateDirectories $InstallDir $DataDir
 if (Test-Path -LiteralPath $InstallDir) {
     $existing = @(Get-ChildItem -LiteralPath $InstallDir -Force)
     if ($existing.Count -gt 0 -and -not (Test-Path -LiteralPath (Join-Path $InstallDir '.asterhand-install'))) {
@@ -250,6 +488,8 @@ $versions = Join-Path $InstallDir 'versions'
 New-Item -ItemType Directory -Path $versions -Force | Out-Null
 $versionDir = Assert-ChildPath (Join-Path $versions $versionName) $versions
 $staging = Assert-ChildPath (Join-Path $InstallDir ('.staging-' + [guid]::NewGuid().ToString('N'))) $InstallDir
+$activation = $null
+$installationGuard = $null
 try {
     if (-not (Test-Path -LiteralPath $versionDir)) {
         Write-Host 'Extracting the verified runtime bundle. This may take several minutes.'
@@ -268,30 +508,35 @@ try {
     Initialize-VCRuntime $cache $dependencies.vc_runtime
     Test-WindowsNativeModules $versionDir $dependencies
     if (-not $SkipTailscale) { Initialize-Tailscale $cache $dependencies.tailscale }
-    New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
-    $launch = @{ schema = 1; version = $Version; executable = (Join-Path $versionDir 'asterhand.exe'); data = $DataDir; package_sha256 = $package.sha256 }
-    $launch | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $InstallDir 'installation.json') -Encoding UTF8
-    Copy-Item -LiteralPath (Join-Path $versionDir 'packaging\start.ps1') -Destination (Join-Path $InstallDir 'start.ps1') -Force
-    Copy-Item -LiteralPath (Join-Path $versionDir 'packaging\configure-firewall.ps1') -Destination (Join-Path $InstallDir 'configure-firewall.ps1') -Force
-    if ($LoginAtStartup) {
-        $startup = [Environment]::GetFolderPath('Startup')
-        $shell = New-Object -ComObject WScript.Shell
-        $shortcut = $shell.CreateShortcut((Join-Path $startup 'Asterhand.lnk'))
-        $shortcut.TargetPath = (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')
-        $shortcut.Arguments = '-NoProfile -WindowStyle Hidden -File "' + (Join-Path $InstallDir 'start.ps1') + '" -NoBrowser'
-        $shortcut.WindowStyle = 7
-        $shortcut.Save()
-        Write-Host 'Enabled startup after this Windows user logs in.'
-    }
+    $guardPath = Join-Path $InstallDir '.activation.lock'
+    try { $installationGuard = New-Object IO.FileStream($guardPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None, 1, [IO.FileOptions]::DeleteOnClose) }
+    catch { throw 'Another installation is activating this directory. Wait for it to finish, then retry.' }
+    $recordPath = Join-Path $InstallDir 'installation.json'
+    $previous = if (Test-Path -LiteralPath $recordPath) { Get-Content -LiteralPath $recordPath -Raw | ConvertFrom-Json } else { $null }
+    $directories = @($DataDir)
+    if ($null -ne $previous) { $directories += Resolve-AppDirectory ([string]$previous.data) }
+    $activation = Enter-InstallActivation $directories
+    Assert-SeparateDirectories ([Asterhand.InstallNative]::CanonicalDirectory($InstallDir)) ([Asterhand.InstallNative]::CanonicalDirectory($DataDir))
+    $hasLauncher = Test-Path -LiteralPath (Join-Path $versionDir 'AsterhandLauncher.exe') -PathType Leaf
+    $desktopPath = Join-Path (Get-InstallFolder 'Desktop') 'Asterhand.lnk'
+    $desktopEnabled = Select-DesktopShortcut $DesktopShortcut $hasLauncher ($null -ne $previous) (Test-OwnedShortcut $desktopPath $InstallDir)
+    if ($hasLauncher) { Publish-InstallFile (Join-Path $versionDir 'AsterhandLauncher.exe') (Join-Path $InstallDir 'AsterhandLauncher.exe') }
+    Publish-InstallFile (Join-Path $versionDir 'packaging\start.ps1') (Join-Path $InstallDir 'start.ps1')
+    Publish-InstallFile (Join-Path $versionDir 'packaging\configure-firewall.ps1') (Join-Path $InstallDir 'configure-firewall.ps1')
+    Update-InstallShortcuts $InstallDir $desktopEnabled $hasLauncher ([bool]$LoginAtStartup)
+    $launch = @{ schema = 1; version = $Version; executable = (Join-Path $versionDir 'asterhand.exe'); data = $DataDir; package_sha256 = $package.sha256; desktop_shortcut = $desktopEnabled }
+    Write-InstallRecord $launch $recordPath
     Write-Host "Installed Asterhand $Version. Data and credentials are preserved in $DataDir."
     Write-Host "Startup entry: $InstallDir\start.ps1"
     if (-not $SkipTailscale) {
         Write-Host 'If peer connectivity is blocked, configure the narrow Tailscale-only firewall rule:'
         Write-Host "  & '$InstallDir\configure-firewall.ps1'"
     }
-    Write-Host 'Installation complete. Run start.ps1 when you are ready to configure this node.'
+    Write-Host 'Installation complete. Use the desktop icon or start.ps1 when you are ready to configure this node.'
     Write-Host 'Tailscale sign-in, model credentials, workspace authorization and pairing are separate setup steps.'
 } finally {
+    Exit-InstallActivation $activation
+    if ($null -ne $installationGuard) { $installationGuard.Dispose() }
     if (Test-Path -LiteralPath $staging) {
         $safeStaging = Assert-ChildPath $staging $InstallDir
         if ((Split-Path -Leaf $safeStaging) -notlike '.staging-*') { throw 'Refusing unexpected cleanup target.' }

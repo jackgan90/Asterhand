@@ -44,6 +44,10 @@ type App struct {
 	done         <-chan struct{}
 	ctx          context.Context
 	peerSync     chan struct{}
+	requests     requestGate
+	stopping     bool
+	closeOnce    sync.Once
+	closeErr     error
 }
 
 func New(c *config.Manager, x executor.Executor) (*App, error) {
@@ -113,23 +117,37 @@ func (a *App) Start(ctx context.Context) (string, error) {
 		remote.Close()
 		return "", err
 	}
-	localServer := &http.Server{Handler: http.HandlerFunc(a.local), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 * 1024}
-	peerServer := &http.Server{Handler: http.HandlerFunc(a.remote), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 * 1024}
+	localServer := &http.Server{Handler: a.requests.wrap(a.local), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 * 1024}
+	peerServer := &http.Server{Handler: a.requests.wrap(a.remote), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 * 1024}
 	tlsListener := tls.NewListener(remote, &tls.Config{Certificates: []tls.Certificate{a.Peers.TLS}, MinVersion: tls.VersionTLS13})
 	for _, run := range []func(){func() { localServer.Serve(web) }, func() { peerServer.Serve(tlsListener) }, func() {
 		if err := a.Engine.Run(ctx); err != nil {
 			log.Printf("任务状态持久化失败，停止节点并保留现场: %v", err)
-			a.cancel()
+			a.RequestStop(true)
 		}
 	}, func() { a.outboxLoop(ctx) }, func() { a.peerSyncLoop(ctx) }} {
 		a.wg.Add(1)
 		go func(fn func()) { defer a.wg.Done(); fn() }(run)
 	}
 	a.wg.Add(1)
-	go func() { defer a.wg.Done(); <-ctx.Done(); localServer.Close(); peerServer.Close() }()
+	go func() {
+		defer a.wg.Done()
+		<-ctx.Done()
+		a.RequestStop(true)
+		localServer.Close()
+		peerServer.Close()
+	}()
 	return fmt.Sprintf("http://%s/#login=%s", a.webAddress, a.loginToken), nil
 }
-func (a *App) Close() error          { a.wg.Wait(); return a.Store.Close() }
+func (a *App) Close() error {
+	a.closeOnce.Do(func() {
+		a.RequestStop(true)
+		a.requests.wg.Wait()
+		a.wg.Wait()
+		a.closeErr = a.Store.Close()
+	})
+	return a.closeErr
+}
 func (a *App) Address() string       { return a.webAddress }
 func (a *App) PeerAddress() string   { return a.peerAddress }
 func (a *App) Done() <-chan struct{} { return a.done }

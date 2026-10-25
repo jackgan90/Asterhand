@@ -27,6 +27,8 @@ A 的助手理解意图并提交结构化目标；B 的助手在 B 上完成已�
 | 组件 | 职责 |
 |---|---|
 | Asterhand 核心服务（asterhand.exe / asterhand） | 身份、配对、任务、持久事件、交互、取消、恢复、产物引用 |
+| Windows 启动器（AsterhandLauncher.exe） | 读取当前安装记录，串行启动或复用节点，确认健康后打开 Web 并退出 |
+| 节点内置托盘 | 当前用户桌面的状态、Web 与日志入口，和节点同生命周期的停止操作 |
 | OpenClaw | LLM 工具循环、会话、自然语言、运行时 skills/memory |
 | OpenClaw 执行适配器 | job/attempt 与会话映射、事件和交互转换、生命周期核对 |
 | 受限本机工具 | 参数与路径校验、文件操作和真实结果，不接受任意 shell 字符串 |
@@ -36,6 +38,8 @@ A 的助手理解意图并提交结构化目标；B 的助手在 B 上完成已�
 | 环境准备 | 安装器下载校验组件后退出；用户随后启动、配置与诊断 |
 
 Go 是核心服务语言，运行节点使用预编译程序，无需安装 Go。SQLite 使用纯 Go 驱动 modernc.org/sqlite 1.61.0，Go 1.27.3，Web 为原生 ES module；Windows 10+ x64 为安装器门槛，实际测试 OS 见平台矩阵。进程和路径行为使用窄 OS adapter。
+
+Windows 桌面图标、原 start.ps1 和可选登录后启动共享固定启动器。托盘直接属于节点进程，桌面图标的创建选择不影响它。正常退出先关闭任务接收，再取消本机执行并等待持久化与进程清理；远端已持久接收的任务继续。实现和支持边界见 [安装设计](../installation/design.md) 与 [桌面入口决策](../installation/adr/004-desktop-launcher-and-tray.md)。
 
 ## 状态权威
 

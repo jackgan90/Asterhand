@@ -8,4 +8,6 @@ dependencies.json 锁定直接组件、来源和摘要；runtime-lock.json 是 n
 
 Windows 完整包保留 Node LICENSE、npm 模块原有 LICENSE/NOTICE；Go 依赖许可随包归档。Tailscale 不再分发，安装时从官方地址校验后安装。项目 MIT License 原文保持不变。
 
-start.ps1 是隐藏启动和 health 检查入口；configure-firewall.ps1 是独立明确确认的 Tailnet TCP 17433 规则操作。源码打包使用 scripts/build.ps1，用户操作见 docs/installation/quickstart.md。
+start.ps1 是固定 GUI 启动器的脚本入口，传递 NoBrowser 并检查启动器退出码；AsterhandLauncher.exe 负责 health 确认和重复启动复用。桌面与登录后启动快捷方式指向固定启动器，后者使用 --no-browser；托盘嵌入节点进程。旧包没有启动器时安装器沿用该包自带脚本，不为它生成桌面入口。
+
+图标源与多尺寸 ICO 在 [图标资源](../internal/desktop/assets/README.md) 中维护；构建将图标写入节点与启动器 PE 资源，随后计算包摘要。configure-firewall.ps1 仍为独立明确确认的 Tailnet TCP 17433 规则操作。源码打包使用 [构建指南](../scripts/README.md)，用户操作见 [安装指南](../docs/installation/quickstart.md)。

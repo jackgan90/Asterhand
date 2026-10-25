@@ -29,6 +29,8 @@ $relativeData = '.\' + $unicode + ' data'
 $program = Join-Path $packageLocation ($unicode + ' program')
 $data = Join-Path $packageLocation ($unicode + ' data')
 $sentinel = Join-Path $data 'preserved.txt'
+$desktopSelection = @{}
+if ((Get-Command $Installer).Parameters.ContainsKey('DesktopShortcut')) { $desktopSelection.DesktopShortcut = 'Skip' }
 
 function Assert-Installation([string]$Case) {
     $installed = Get-Content -LiteralPath (Join-Path $program 'installation.json') -Raw | ConvertFrom-Json
@@ -50,13 +52,13 @@ try {
         if (-not $failure -or -not $failure.Contains((Join-Path $processLocation 'release-manifest.json'))) { throw 'The original manifest-path defect did not reproduce.' }
         $report.baseline = @{status='failed_as_expected';error=$failure}
     }
-    & $Installer -Repository $repository -PackagePath ('.\' + $package.file) -InstallDir $relativeProgram -DataDir $relativeData -SkipTailscale -NoStart
+    & $Installer -Repository $repository -PackagePath ('.\' + $package.file) -InstallDir $relativeProgram -DataDir $relativeData -SkipTailscale -NoStart @desktopSelection
     Assert-Installation 'relative-package-auto-manifest'
     [IO.File]::WriteAllText($sentinel, 'preserve-user-data')
-    & $Installer -Repository $repository -PackagePath ('.\' + $package.file) -ManifestPath '.\release-manifest.json' -InstallDir $relativeProgram -DataDir $relativeData -SkipTailscale -NoStart
+    & $Installer -Repository $repository -PackagePath ('.\' + $package.file) -ManifestPath '.\release-manifest.json' -InstallDir $relativeProgram -DataDir $relativeData -SkipTailscale -NoStart @desktopSelection
     Assert-Installation 'relative-explicit-manifest-repeat'
     Set-Location -LiteralPath $OutputDirectory
-    & $Installer -Repository $repository -PackagePath (Join-Path $packageLocation $package.file) -InstallDir $program -DataDir $data -SkipTailscale -NoStart
+    & $Installer -Repository $repository -PackagePath (Join-Path $packageLocation $package.file) -InstallDir $program -DataDir $data -SkipTailscale -NoStart @desktopSelection
     Assert-Installation 'absolute-package-from-other-location'
     if ([IO.File]::ReadAllText($sentinel) -ne 'preserve-user-data') { throw 'Repeated installation changed existing data.' }
     $report.checks += @{name='existing-data-preserved';status='passed'}

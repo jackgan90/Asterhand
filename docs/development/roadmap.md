@@ -14,9 +14,11 @@
 | 任务排序、节点名称/地址同步、就绪保持 | [双节点交互与连接同步](features/two-node-usability/plan.md) |
 | 统一发布、单脚本下载安装与平台扩展接口 | [可复现发布与独立安装](features/release-pipeline/plan.md) |
 | 仓库固定安装入口、默认 Latest 与显式版本选择 | [固定安装入口](features/stable-installer-entry/plan.md) |
+| 原生双击启动、可选桌面入口、节点托盘和统一退出 | [Windows 桌面启动与托盘生命周期](features/windows-desktop-lifecycle/plan.md) |
 
 ## 后续验证与功能
 
+- Windows 桌面专项验收：Explorer 重启、注销、深浅主题与 DPI，以及两台 Windows + OpenClaw + DeepSeek 下的退出与恢复；工程测试和合成系统消息的边界见 [桌面启动验证](features/windows-desktop-lifecycle/validation.md)。
 - Linux/macOS 平台准备器、构建器、安装入口与原生系统验证；平台注册表在验证前保持禁用。
 - 手机远程访问的认证、部署方式和物理设备测试。
 - 物理断线与重启、复杂 NAT 环境、长历史规模的系统化可复现测试。

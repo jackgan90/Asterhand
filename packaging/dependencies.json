@@ -1,0 +1,54 @@
+{
+  "schema": 2,
+  "go": {
+    "version": "1.27.3",
+    "license": "BSD-3-Clause",
+    "source": "https://go.dev/dl/",
+    "build_only": true
+  },
+  "node": {
+    "version": "24.22.1",
+    "license": "MIT and bundled third-party notices",
+    "windows_amd64_url": "https://nodejs.org/dist/v24.22.1/node-v24.22.1-win-x64.zip",
+    "windows_amd64_sha256": "d2046d28c2c3dcd211ac5145c0bf30e2047ef9dfb306693c8c6e2eccd8b95fa5"
+  },
+  "components": [
+    {
+      "version": "2026.10.7",
+      "license": "MIT",
+      "source": "https://registry.npmjs.org/openclaw/-/openclaw-2026.10.7.tgz",
+      "integrity": "sha512-iiZO+kFFBgQvxm17wn3Sc/MSC/GQu01PubAFVNA2Nn736HOHUbR0ra7a9NeW9wpjq3kDkSJ1RB7dTP+qVJFXig==",
+      "id": "openclaw",
+      "manager": "npm",
+      "package": "openclaw"
+    },
+    {
+      "version": "2026.10.7",
+      "package": "@openclaw/deepseek-provider",
+      "license": "MIT",
+      "source": "https://registry.npmjs.org/@openclaw/deepseek-provider/-/deepseek-provider-2026.10.7.tgz",
+      "integrity": "sha512-KoCG5YsiravzREKDTHX+JiBykkF7fSgXS7d4oL3OcXQ1rlFk8U2psHGStuDLGLeakusjHpHKbTewqWh7g56Xxg==",
+      "id": "deepseek-provider",
+      "manager": "npm"
+    }
+  ],
+  "bundle": {
+    "default_target": "assistant",
+    "targets": [
+      {
+        "model": "deepseek/deepseek-flash",
+        "provider": "deepseek",
+        "runtime": "openclaw",
+        "id": "assistant",
+        "credential_ref": "deepseek"
+      }
+    ]
+  },
+  "tailscale": {
+    "version": "1.104.2",
+    "license": "BSD-3-Clause core; vendor Windows distribution terms",
+    "windows_amd64_url": "https://pkgs.tailscale.com/stable/tailscale-setup-1.104.2-amd64.msi",
+    "windows_amd64_sha256": "7eff4abdcbcf592ac9bce28f2b9f0fd51f8fc09194c955fbe8253b67b531e7f5",
+    "redistributed": false
+  }
+}

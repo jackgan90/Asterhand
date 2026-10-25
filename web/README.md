@@ -1,5 +1,1 @@
-# Web 前端
-
-仅职责占位。计划提供统一聊天、目标节点选择、任务卡片、详情、交互及配置向导；静态资源随产品发布，不要求用户构建。
-
-前端工具链待 M0 选择。当前没有 package.json 或可运行页面。参见 [需求](../docs/web/requirements.md) 与 [设计](../docs/web/design.md)。
+统一中文页面位于 index.html、style.css、app.js，由 embed.go 内嵌。无 npm 构建步骤。页面通过同源 API 登录、配置、配对、提交任务和回答；服务仅监听 loopback。

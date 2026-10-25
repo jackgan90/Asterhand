@@ -1,44 +1,35 @@
 # 执行器与工具设计
 
-状态：接口语义提案，当前没有接口代码或具体 harness 实现。
+范围：OpenClaw adapter、公共配置和目录保护；未接入具体 coding harness。验证方法见 [公共流程契约](../development/features/provider-neutral-flows/validation.md)。
 
-## 最小契约
+## 当前契约
 
-| 操作 | 语义 |
-|---|---|
-| capabilities | 明确实际支持的事件、交互、取消、查询与恢复能力 |
-| start | 接受带 attempt_id 的执行说明，启动或返回明确失败 |
-| query | 查询现有执行，不隐式启动或恢复 |
-| observe_events | 提供可转换成 Asterhand 事件的进度 |
-| answer_input | 回答仍有效的指定请求 |
-| resolve_approval | 将对应人类决定应用到特定操作，不扩大权限 |
-| cancel | 请求停止，返回真实确认程度 |
-| reconcile / resume | 先核对；只有明确支持并授权时才继续现有工作 |
+`Executor.Execute(ctx, Run) (Result,error)` 是实际最小接口。Run 绑定 attempt ID、mode、callback、一次性 token 和 goal；Result 提供 ok/status/final/error。启动、查询、事件、回答和恢复由任务服务实现，不为未支持的 native resume 提供空接口。
 
-具体类型、方法名及不支持错误在 M0 固定。capabilities 描述事实，不用空实现伪造能力。不支持恢复时返回明确结果，由任务服务进入待核对。
+`Runtime` 接口嵌入 Executor，提供 Describe、Validate、Discover、Check 和 ProtectedPaths。静态工厂只登记实际实现的 adapter，当前为 OpenClaw；Selected 在每次 attempt 按当前配置解析 adapter。环境管理使用同一工厂发现和诊断，应用入口不直接实例化具体 agent。
 
-## 首版 OpenClaw adapter
+将运行时专用选项放在 Config.runtime_options[runtime ID] JSON 中，由该适配器解析和校验；公共配置与 CLI 不声明厂商专用字段。CLI 用 --agent-runtime 和 --runtime-options（JSON 文件）选择及配置；旧 --node/--openclaw/--plugin/--provider 参数由此替代。历史 flat JSON 字段仅由兼容迁移模块读取，保存时移除，身份和凭据文件不改写。
 
-由 B 的任务服务持有 attempt 与运行时会话映射，使用独立执行上下文；A 的连接不持有 B 的执行生命周期。OpenClaw 管内部模型/工具循环，adapter 负责生命周期事件与交互转换。
+适配器 ProtectedPaths 返回已知运行时、宿主、工具插件和模型插件保护目录。公共授权目录校验统一拒绝与这些目录及节点数据目录重叠，解析现有目录/祖先的符号链接与 junction 后再比较；目录声明或解析失败显式拒绝。更换运行时选项时对既有授权目录重新校验。
 
-runtime 的自动重试必须限制在不会额外启动 job 的边界内。工具副作用重复执行需使用稳定 operation_id 或明确对账，不能只保证 HTTP submit 去重。
+用 Config.runtime_options_explicit[runtime ID] 标记显式选项。CLI 的 --runtime-options 将整个选项对象标为显式，普通启动/repair 保留它；自动选项随包目录发现和升级。旧无标记配置仅当宿主、入口、工具插件和当前模型插件均匹配同一历史包布局时视为自动，其余非空配置保留为显式。新 CLI 即使指定另一个完整包也保持显式；旧格式无法区分人为填写的完整包布局与旧自动值，按此兼容规则处理。
+
+能力声明区分 route/execute/probe、工具回调、普通问答、进程取消与原生事件/resume/审批。后三项当前明确 false；任务事件、持久问题及重启对账由 Asterhand 提供。`/api/settings` 返回能力描述与支持的模型 provider，服务端拒绝不支持的组合。
+
+OpenClaw adapter 在启动前校验 attempt ID、模式、本机回调和凭据引用。stdout 采用已验证 CLI envelope：status 为 ok/error/timeout，且 ok 标志必须一致；未知或矛盾状态返回适配失败。输入通过 stdin 异步写入，取消能同时中断阻塞写入和进程树。失败日志、最终文本与错误字段对已知凭据脱敏。
+
+契约 fixture 以真实子进程模拟协议边界，覆盖成功/错误/无效输出、取消和阻塞输入；真实 OpenClaw 检查另行执行。新增 agent 要实现同一工具桥接和能力契约，并运行相同类别的契约及真实模型验证，不假设 Hermes 与 OpenClaw 的 API 相同。
+
+Windows 在写入目标前把 Node 加入 kill-on-close Job Object；取消和服务退出结束整棵子进程树。真实进程 fixture 验证后代终止。Linux 使用进程组，其产物仅交叉编译。每个 attempt 的 runtime state 留在节点数据目录用于现场核对。
+
+OpenClaw CLI 固定 `agent exec --message-file - --json --code-mode direct`，每个 attempt 独立运行。有效执行预算 10 分钟，墙钟 2 小时；问答等待由 Go 回调承载。 stdout/stderr 各最多保存 1 MiB，不展示无限模型输出。
 
 ## 文件工具
 
-首版逻辑操作为创建 UTF-8 文本与读取文本，参数包含 project_id、相对路径、内容和明确写入策略。默认 create-only，文件已存在返回可理解冲突，不覆盖用户文件。
+Go `os.OpenRoot` 约束路径解析，拒绝绝对路径、穿越、NTFS 流、尾随点/空格和越界 junction。文件 create-only：`O_EXCL`，不覆盖已有内容。文本有效 UTF-8，最多 64 KiB；不自动加换行或 BOM，父目录须已经存在。
 
-目标节点解析授权根目录，在执行处校验最终路径，防止路径穿越、绝对路径绕过、符号链接与 junction 逃逸。测试目录与源码 / 凭据目录分离。若路径校验与写入存在竞争，使用可验证的安全文件访问策略，M1 需针对平台实测。
+调用绑定 job/attempt/native tool-call ID，摘要相同的重试读取原操作结果，摘要不同返回冲突。写前取得普通事件预算并持久化 prepared 操作；写后 fsync、close、回读校验，再把完成操作与任务产物/事件同事务提交，包含大小、完整 SHA-256 和最多 8000 字节预览。旧分步提交留下的 completed 操作可按原证据幂等补齐任务产物；prepared 仍进入待核对，不根据同内容旧文件伪造成功。
 
-记录实际位置、字节数、内容摘要和执行关联。文件创建后读取验证，结果预览由实际文件取得。相同内容的已有文件本身不足以证明本 attempt 已成功，必须有操作关联证据。
+普通问题持久化 interaction，绑定 attempt 与 native tool-call ID；回答后才释放等待回调。取消时等已接收回调退出再释放执行槽，防止上一个写入尚未结束就开始下一个任务。
 
-编码固定 UTF-8；hello-world 场景精确为 `hello world`，不隐式增加 BOM 或换行。设置文本大小上限，数值随 M0 契约固定。
-
-首次问文件名的场景由 B 产生持久 interaction，得到回答后才能写入。验收延迟是隔离验收配置下的确定性工具行为，不让模型猜测等待时间，不在正常工具界面开放任意延迟脚本。
-
-## 后续连接器
-
-Everything 按 exact_name、scope、max_results 接口返回覆盖范围、索引状态、截断和错误，使用参数化 CLI / SDK 调用；非首版必做。
-
-Coding harness 后续按能力接入，才讨论模型认证、工作区 worktree、diff、验证和进程树管理。首版保留这些扩展方向，不提供空的 Codex adapter。
-
-FakeExecutor 与独立进程 fixture 的设计见 [测试框架](../testing/design.md)。
+工具层不提供权限审批工具或任意 shell。远端 peer 无本地人工处置权限。后续 Everything、VCS、coding harness 需单独实现并申明能力。

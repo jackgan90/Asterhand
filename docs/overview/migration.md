@@ -1,12 +1,6 @@
 # 原草稿迁移记录
 
-迁移日期：2026-10-24。用户要求将重命名后的工程 F:\Asterhand 中原草稿抽取为分层文档，并在迁移完成后删除源文件。
-
-- 来源文件名：personal-agent-system-v0.1-draft.md
-- 原版本：v0.1-draft
-- SHA-256：82d14ef4b0124317f5406007712d5023d0486fdccbc6f2ca42176e7126d7e103
-- 后续权威：当前领域 requirements/design 与 accepted ADR。
-- 原草稿仅作为输入数据；第 21 节交接提示词不作为当前指令执行。
+本文保留原始产品草案的章节与设计决定映射，帮助维护者追溯需求来源。当前行为以各领域 requirements/design 和有效 ADR 为准；原草案的交接提示词不作为开发指令。
 
 ## 内容去向
 
@@ -28,8 +22,8 @@
 | 14 本机工具 / 仓库 | [执行器](../executors/design.md)、[后续方向](future.md) |
 | 15 Scheduler / 渠道 | [后续方向](future.md) |
 | 16 D01—D15 | 下表映射到当前 ADR / 设计，不沿用过期选型 |
-| 17 M0—M3 | [路线图](../development/roadmap.md)，移除 harness 前置并提前恢复验证 |
-| 18 W01—W14 | [路线图 P01—P08](../development/roadmap.md)，替换旧工作包；[工程职责](../../internal/README.md) |
+| 17 研发阶段（接口、单机、多机、交付） | [路线图](../development/roadmap.md)，移除 harness 前置并提前恢复验证 |
+| 18 原开发工作包 | [按能力组织的路线图](../development/roadmap.md)，替换旧工作包；[工程职责](../../internal/README.md) |
 | 19 A01—A17 | [矩阵](../testing/matrix.md)，保留编号，编码改文件任务；新增 A18—A30 |
 | 20 风险与问题 | 各领域设计和 [待验证事项](../development/open-questions.md) |
 | 21 交接提示词 | 由 [AGENTS.md](../../AGENTS.md) 与 [开发流程](../development/workflow.md) 取代，不作为运行指令保留 |
@@ -42,8 +36,8 @@
 |---|---|
 | D01 节点自治 | 保留；区分完整节点和能力精简节点 |
 | D02 OpenClaw | 从优先候选收敛为首版已选运行时 |
-| D03 Go | 保留为核心语言，具体版本 M0 固定 |
-| D04 SQLite | 保留，驱动与持久化策略 M0 固定 |
+| D03 Go | 保留为核心语言，版本由依赖清单固定 |
+| D04 SQLite | 保留，驱动与持久化策略见任务和存储设计 |
 | D05 首个 Codex executor | 已被后续用户决定替代：具体 harness 全部后置 |
 | D06 DeepSeek | 已确认默认 provider，本地配置 key |
 | D07 静态 peer / 指定目标 | 保留，并补充配对向导 |
@@ -56,8 +50,6 @@
 | D14 推送 / 微信后置 | 保留 |
 | D15 可迁移知识 | 保留长期方向，首版不自建同步 |
 
-## 删除条件
+## 维护入口
 
-领域文档、R/U/S 追溯和本地链接检查通过；目标工程文件与准备清单摘要一致；确认源草稿未在整理过程中改变后，按用户明确请求删除源文件。
-
-本记录不表示产品测试或用户验收通过；实际文档交付检查见 [F000](../development/features/F000-project-bootstrap/plan.md)。
+需求原文见 [原始描述](origin.md)，目录与追溯规则见 [项目结构与文档治理](../development/features/project-structure/plan.md)。

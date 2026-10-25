@@ -1,6 +1,6 @@
 # 文档导航
 
-状态：2026-10-24 建立设计基线；产品未实现。有效决定来自用户确认和本轮设计讨论，原始草稿按领域抽取迁移。
+本文按产品领域组织需求、架构决策、使用指南和维护入口；每个链接均指向仓库中的长期文档。
 
 ## 阅读顺序
 
@@ -26,8 +26,12 @@
 - [研究来源](overview/research.md)、[后续方向](overview/future.md)。
 - [手工验收](testing/acceptance.md)、[自动化验收矩阵](testing/matrix.md)、[平台矩阵](testing/platforms.md)。
 - [开发流程](development/workflow.md)、[代码风格](development/code-style.md)、[待验证事项](development/open-questions.md)。
-- [Feature 模板](development/templates/feature-plan.md)、[ADR 模板](development/templates/adr.md)、[验证报告模板](development/templates/verification.md)。
-- [当前骨架任务](development/features/F000-project-bootstrap/plan.md)、[接口契约](../contracts/README.md)。
+- [Feature 模板](development/templates/feature-plan.md)、[ADR 模板](development/templates/adr.md)、[验证说明模板](development/templates/validation.md)。
+- [项目结构与文档治理](development/features/project-structure/plan.md)、[接口契约](../contracts/README.md)。
+- [Windows 跨节点助手](development/features/windows-assistant/plan.md)、[源码许可与发布](development/features/source-publication/plan.md)。
+- [模型、运行时与依赖边界](development/features/provider-runtime-boundaries/plan.md)、[提供者无关的公共流程](development/features/provider-neutral-flows/plan.md)。
+- [任务可靠性与配置保留](development/features/task-reliability/plan.md)、[Windows 安装路径解析](development/features/installer-path-resolution/plan.md)。
+- [双节点交互与连接同步](development/features/two-node-usability/plan.md)、[依赖维护流程](../packaging/upgrade.md)。
 
 ## 组织规则
 

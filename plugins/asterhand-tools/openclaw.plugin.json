@@ -1,0 +1,9 @@
+{
+  "id": "asterhand-tools",
+  "name": "Asterhand restricted node tools",
+  "description": "Authenticated callbacks for durable node tasks; no host shell access.",
+  "categories": ["other"],
+  "contracts": {"tools": ["asterhand_create_text", "asterhand_read_text", "asterhand_ask_user", "asterhand_submit", "asterhand_probe"]},
+  "activation": {"onStartup": true},
+  "configSchema": {"type": "object", "additionalProperties": false}
+}

@@ -1,6 +1,6 @@
 # 全局需求
 
-状态：已确认首版范围；未实现。来源为 [原始需求](origin.md) 及 2026-10-24 用户决策；冲突以后续明确决定为准。
+本文定义首版范围，并保留 [原始需求](origin.md) 的追溯关系。实现支持边界见 [平台矩阵](../testing/platforms.md)，重要范围变化记录于 ADR。
 
 ## 产品目标
 
@@ -29,7 +29,7 @@
 | R15 | Coding harness memory manager | 后置 |
 | R16 | Repository update scheduler | 后置 |
 | R17 | 可配置 LLM provider | 配置边界清晰，仅 DeepSeek 为首版必测 provider |
-| R18 | 默认 DeepSeek，重视速度成本 | 已确认；具体模型和版本 M0 验证 |
+| R18 | 默认 DeepSeek，重视速度成本 | 已确认；具体模型和版本按依赖清单验证 |
 | R19 | Coding subscription 备选 | 具体 harness 接入后处理，首版无登录要求 |
 | R20 | 多角色，同机或跨机 | 首版通用助手；角色扩展保留边界 |
 | R21 | coder、teacher、advisor、news 等 | 后续按场景实现 |
@@ -42,7 +42,7 @@
 | R28 | 先做原型，不追求大而全 | 首版范围最高优先原则 |
 | R29 | 汇总 Markdown 交接材料 | 分层项目文档，持续维护 |
 
-## 本轮新增与收敛需求
+## 收敛后的产品与工程需求
 
 | ID | 已确认要求 | 权威文档 |
 |---|---|---|
@@ -55,7 +55,10 @@
 | C07 | 按主要领域分层文档，feature 强制同步 | [开发治理](../development/requirements.md) |
 | C08 | 文件 1000 行、函数 100 行软限制；安全拆分先确认 | [代码风格](../development/code-style.md) |
 | C09 | 单 Windows 快测、两 Windows 验收、低配 Linux、无 Mac | [测试平台](../testing/platforms.md) |
-| C10 | 当前只建骨架与文档，抽取并删除旧 draft | [F000](../development/features/F000-project-bootstrap/plan.md) |
+| C10 | 先建立分层文档和工程规范，再按功能维护实现范围 | [项目结构与文档治理](../development/features/project-structure/plan.md) |
+| C11 | 跨 NAT 使用 Tailscale，安装和登录纳入引导 | [节点设计](../node/design.md) |
+| C12 | 模型 provider、agent runtime 和依赖升级验证职责分离 | [模型、运行时与依赖边界](../development/features/provider-runtime-boundaries/plan.md) |
+| C13 | 公共配置、目录保护和包描述通过契约分派；首版只实现 DeepSeek + OpenClaw | [提供者无关的公共流程](../development/features/provider-neutral-flows/plan.md) |
 
 ## 明确排除
 
@@ -69,3 +72,9 @@
 - 支持矩阵细到 OS、架构、依赖版本与能力，语言支持平台不能替代产品验证。
 - 实现、工程测试、真实设备验收、用户接受、发布分别记录。
 - 密钥、对话和活跃数据库保留本地，默认不跨节点复制。
+
+## 实现范围与验收
+
+主验收为 B 安装、配置并启动，A 用自然语言让 B 创建 hello-world.txt。跨 NAT 使用 Tailscale，安装和登录纳入引导。
+
+手机远程登录、运行时无缝恢复、远端审批和完整 Linux 助手尚未交付。支持边界见 [平台矩阵](../testing/platforms.md)，操作规程见 [人工验收](../testing/acceptance.md)。

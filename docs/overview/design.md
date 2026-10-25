@@ -1,6 +1,6 @@
 # 全局设计
 
-状态：已确认架构方向；接口、依赖版本及 OS adapter 细节待 M0 验证。当前无功能实现。
+本文描述 Windows 跨节点助手的当前架构。接口与数值由各领域契约定义，验证能力与平台限制见 [支持矩阵](../testing/platforms.md)。
 
 ## 系统边界
 
@@ -18,15 +18,15 @@
 A / B 页面 ← B 权威任务、事件、交互、结果
 ```
 
-A 的助手理解意图并提交结构化目标；B 的助手在 B 上完成已接收任务。两者通过任务边界协作，不复制会话、不维持同步 RPC 执行链。工具注册与异步会话控制能力必须在 M0 真实验证。
+A 的助手理解意图并提交结构化目标；B 的助手在 B 上完成已接收任务。两者通过任务边界协作，不复制会话、不维持同步 RPC 执行链。运行时工具与生命周期能力必须通过真实调用验证。
 
-每台完整 Windows 节点运行相同组件。低配 Linux 可只启用任务服务、FakeExecutor 或确定性工具；参与网络不强制安装完整助手或 coding harness。
+每台完整 Windows 节点运行相同组件。Linux 基础包提供服务、状态、Web 和配对；不包含助手，ModelVerified 为 false，不接收真实模型执行任务。FakeExecutor 只用于测试，不暴露为产品能力。
 
 ## 组件职责
 
 | 组件 | 职责 |
 |---|---|
-| Asterhand 核心服务（计划进程名 asterhandd） | 身份、配对、任务、持久事件、交互、取消、恢复、产物引用 |
+| Asterhand 核心服务（asterhand.exe / asterhand） | 身份、配对、任务、持久事件、交互、取消、恢复、产物引用 |
 | OpenClaw | LLM 工具循环、会话、自然语言、运行时 skills/memory |
 | OpenClaw 执行适配器 | job/attempt 与会话映射、事件和交互转换、生命周期核对 |
 | 受限本机工具 | 参数与路径校验、文件操作和真实结果，不接受任意 shell 字符串 |
@@ -35,7 +35,7 @@ A 的助手理解意图并提交结构化目标；B 的助手在 B 上完成已�
 | 本地产物目录 | 文件或报告，通过授权 artifact ID 读取 |
 | 环境准备 | 引导安装、能力选择、诊断、配置和启动 |
 
-Go 是核心服务语言，运行节点使用预编译程序，无需安装 Go。SQLite 驱动优先避免 cgo；精确驱动、Go 版本、前端工具和最低 OS 版本 M0 固定。进程和路径行为使用窄 OS adapter。
+Go 是核心服务语言，运行节点使用预编译程序，无需安装 Go。SQLite 使用纯 Go 驱动 modernc.org/sqlite 1.61.0，Go 1.27.3，Web 为原生 ES module；Windows 10+ x64 为安装器门槛，实际测试 OS 见平台矩阵。进程和路径行为使用窄 OS adapter。
 
 ## 状态权威
 
@@ -47,7 +47,7 @@ Go 是核心服务语言，运行节点使用预编译程序，无需安装 Go�
 
 ## 协议与部署
 
-先实现版本化 HTTP + SSE，HTTPS 与独立 peer 凭据；不宣称 A2A 兼容。浏览器使用人类用户会话。OpenClaw 管理接口保留本机内部，具体认证 M0 验证。
+先实现版本化 HTTP + SSE，HTTPS 与独立 peer 凭据；不宣称 A2A 兼容。浏览器使用人类用户会话。OpenClaw 管理接口保留本机内部，认证由执行适配器管理。
 
 使用 LAN / 已有 Tailnet，无固定业务中心。浏览器证书信任与网络部署在 [节点设计](../node/design.md) 限定并实测，不自建 NAT 穿透。
 
@@ -59,6 +59,16 @@ LLM 提出工具调用，目标节点校验权限；角色指令不构成权限�
 
 未来 coding harness 通过执行契约接入，各自能力可不同。首版只定义服务于实际需求的契约，不提前实现任意插件框架。
 
+将模型选择（provider/model/credential_ref/endpoint）、agent Runtime adapter（执行/能力/发现/诊断）和安装 bundle（单一清单/锁/升级验证）分开。首版仅实现 DeepSeek/OpenClaw；新增 provider 或 Hermes 通过各自 adapter 接入，任务与节点协议保留。见 [ADR-AST-003](../assistant/adr/003-provider-runtime-bundle-boundaries.md)。
+
+将公共配置改为按 runtime ID 隔离的选项 JSON，并由适配器声明受保护目录。安装包采用通用组件与目标描述，公共流程只分派描述，不按具体模型或 agent 名称判断；旧配置的厂商名称只留在兼容迁移器。见 [ADR-AST-004](../assistant/adr/004-provider-neutral-public-flows.md)。
+
 ## 相关领域
 
 [节点](../node/design.md) · [任务](../tasks/design.md) · [助手](../assistant/design.md) · [执行器](../executors/design.md) · [Web](../web/design.md) · [安装](../installation/design.md) · [测试](../testing/design.md)
+
+## 首版部署与实测
+
+Windows 包含 Go 1.27.3 编译产物、Node 24.22.1、OpenClaw/provider 2026.10.7；纯 Go SQLite 驱动 modernc.org/sqlite 1.61.0。浏览器只连接本机，跨设备通信通过 Tailscale 上的独立 TLS API。用户批准的 Tailscale 引导见 [ADR](../node/adr/002-tailscale-connectivity.md)。
+
+每次输入经 A 的 route attempt，再由选定节点持久接收 execute attempt；OpenClaw 使用一次性 agent exec 运行。状态查询来自 SQLite，取消使用 OS 进程树控制，重启进入人工核对。尚未提供 runtime 原生 resume、远端审批与手机远程登录，具体限制见 [平台矩阵](../testing/platforms.md)。

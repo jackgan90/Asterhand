@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Asterhand · 星伴</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="/"
+        >✳ <strong>Asterhand</strong><span>星伴</span></a
+      >
+      <div id="connection">正在连接本机节点</div>
+      <button id="settings-open" class="quiet">节点设置</button>
+    </header>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <section id="login" class="panel narrow" hidden>
+      <p class="eyebrow">欢迎回来</p>
+      <h1>连接你的节点</h1>
+      <p>使用节点启动时显示的登录链接，或在这里输入登录码。</p>
+      <form id="login-form">
+        <label
+          >本机登录码<input
+            name="token"
+            type="password"
+            required
+            autocomplete="off" /></label
+        ><button>登录</button>
+      </form>
+    </section>
+    <main id="workspace" hidden>
+      <aside>
+        <p class="eyebrow">执行节点</p>
+        <div id="nodes"></div>
+        <button id="pair-open" class="secondary full">＋ 配对另一台设备</button>
+        <div class="aside-note">
+          任务由执行节点独立保存。页面关闭后，已接收的任务继续执行。
+        </div>
+      </aside>
+      <section class="work-area">
+        <div class="page-title">
+          <div>
+            <p class="eyebrow">你的设备，协同工作</p>
+            <h1>今天想完成什么？</h1>
+          </div>
+          <span class="tag">FIRST EDITION</span>
+        </div>
+        <p id="node-warning" class="status-box" role="status" hidden></p>
+        <form id="task-form" class="composer">
+          <div class="composer-target">
+            <label>执行节点<select id="target" name="target"></select></label
+            ><label
+              >授权位置<select id="project" name="project"></select
+            ></label>
+          </div>
+          <textarea
+            name="goal"
+            id="goal"
+            rows="4"
+            required
+            maxlength="16000"
+            placeholder="在授权目录下新建 hello-world.txt，内容为 hello world。"
+          ></textarea>
+          <div class="composer-footer">
+            <div><span id="target-hint">文件会保存在所选执行节点</span><div id="submit-status" role="status"></div></div
+            ><button id="submit-task">发送任务 ↗</button>
+          </div>
+        </form>
+        <div class="section-title">
+          <h2>任务与结果</h2>
+          <span id="last-refresh"></span>
+        </div>
+        <div id="tasks">
+          <div class="empty">
+            还没有任务。先完成节点配置，再从一个文件任务开始。
+          </div>
+        </div>
+      </section>
+    </main>
+    <dialog id="settings">
+      <form id="settings-form">
+        <div class="dialog-title">
+          <div>
+            <p class="eyebrow">本机配置</p>
+            <h2>准备好你的节点</h2>
+          </div>
+          <button type="button" data-close="settings" class="quiet">
+            关闭
+          </button>
+        </div>
+        <p>模型凭据只保存在本机。Windows 使用当前用户的 DPAPI 加密。</p>
+        <label
+          >节点名称<input
+            name="name"
+            required
+            maxlength="80"
+            placeholder="Windows B" /></label
+        ><label
+          >授权目录<input
+            name="root"
+            required
+            placeholder="例如 F:\AsterhandWorkspace" /></label
+        ><small
+          >不存在的目录会自动创建；工具只允许在此目录内创建和读取文本。</small
+        >
+        <div id="network-status" class="status-box">正在检测 Tailscale…</div>
+        <button type="button" id="use-tailnet" class="quiet" hidden>
+          使用 Tailscale 地址</button
+        ><label
+          >节点地址<input
+            name="endpoint"
+            placeholder="https://100.x.x.x:17433" /></label
+        ><label>节点监听地址（修改后需重启）<input name="peer_listen" required placeholder="100.x.x.x:17433" /></label
+        ><small
+          >跨 NAT 使用 Tailscale 地址，A、B 加入同一
+          Tailnet。局域网或隔离测试也可填写可达 IP。配对始终校验节点 TLS
+          身份。</small
+        ><label>Agent 运行时<select name="agent_runtime"></select></label>
+        <label>模型提供方<select name="provider"></select></label>
+        <label>模型<select name="model"></select></label>
+        <input type="hidden" name="credential_ref" />
+        <label
+          >API key<input
+            name="key"
+            type="password"
+            autocomplete="new-password"
+            placeholder="输入 key；已保存时留空保持原值" /></label
+        ><small id="key-status"></small
+        ><label class="checkbox"
+          ><input type="checkbox" name="delete_key" />删除本机已保存的
+          key</label
+        >
+        <div class="actions">
+          <button type="submit">保存设置</button
+          ><button type="button" id="probe" class="secondary">
+            验证模型与工具
+          </button>
+        </div>
+        <small>验证会发起一次小型模型请求，可能产生少量 API 费用。</small>
+        <div id="settings-status" class="status-box" role="status"></div>
+        <div id="probe-status" class="status-box">尚未运行检查</div>
+        <div id="runtime-status" class="metadata"></div>
+        <button type="button" id="stop-node" class="quiet">停止本机节点</button>
+      </form>
+    </dialog>
+    <dialog id="pair">
+      <div class="dialog-title">
+        <div>
+          <p class="eyebrow">设备协作</p>
+          <h2>建立节点信任</h2>
+        </div>
+        <button data-close="pair" class="quiet">关闭</button>
+      </div>
+      <p>
+        在 B 生成一次性配对码，完整复制到 A。配对码包含 B
+        的证书和一次性凭据，请仅交给自己的设备。
+      </p>
+      <button id="make-invite" class="secondary">在本机生成配对码</button
+      ><textarea
+        id="invite"
+        rows="3"
+        readonly
+        placeholder="配对码将在这里显示，10 分钟内有效"
+      ></textarea
+      ><button id="copy-invite" class="quiet">复制配对码</button>
+      <hr />
+      <form id="pair-form">
+        <label
+          >粘贴另一台节点的配对码<textarea
+            name="code"
+            rows="4"
+            required
+          ></textarea></label
+        ><button>添加并验证节点</button>
+      </form>
+    </dialog>
+    <dialog id="detail">
+      <div class="dialog-title">
+        <h2>任务详情</h2>
+        <button data-close="detail" class="quiet">关闭</button>
+      </div>
+      <div id="detail-content"></div>
+    </dialog>
+    <footer>ASTERHAND / 个人设备助手 <span id="version"></span></footer>
+  </body>
+</html>

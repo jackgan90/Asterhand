@@ -2,48 +2,34 @@
 
 A personal agent system across your devices.
 
-Asterhand 是面向个人设备的分布式 agent 助手系统。用户通过自然语言调用本机或其他已配对节点的工具；每个执行节点独立持有任务，发起节点离线后仍可继续执行。
+Asterhand 让自己的设备通过自然语言协作。A 提交任务，B 用自己的 OpenClaw、DeepSeek 凭据和授权目录执行；任务与结果保存在 B，A 下线后 B 已接收的任务继续运行。
 
-## 当前状态
+## 能力与支持范围
 
-**2026-10-24：项目骨架与设计文档已建立，尚未进入功能编码。**
+- Windows x64 完整节点：Go 持久任务服务、SQLite、OpenClaw + DeepSeek 和统一 Web。
+- 授权目录内创建和读取 UTF-8 文本，提供实际路径、文件大小、内容摘要和预览；创建操作拒绝覆盖已有文件。
+- 节点配对、远端任务、普通问答、取消、断线补读和重启后的人工对账。
+- 每个节点使用自己的凭据和授权目录；Windows 使用当前用户 DPAPI 保护秘密，节点间使用 TLS 与固定证书。
+- 首版每节点一个执行槽、一个授权目录，文件最大 64 KiB；删除文件、任意 shell 和具体 coding harness 尚未提供。
 
-当前没有可运行程序、安装脚本、已发布二进制或通过验收的功能。本文描述首版交付目标。Go module 路径和依赖精确版本在实施前确定；当前仅发布文档与工程骨架。
+版本与支持边界见 [平台矩阵](docs/testing/platforms.md)。Linux 基础包仅完成交叉编译，macOS 和手机远程访问尚未验证。Web 默认只绑定本机 loopback，在各自设备打开。
 
-## 首版交付目标
+## 安装与使用
 
-- 两台 Windows 分别运行独立的 OpenClaw 助手，默认使用 DeepSeek。
-- 每节点提供统一 Web：聊天、节点选择、任务进度、远程问答与结果。
-- A 向 B 发起自然语言请求，B 在本地授权目录中创建、读取文本文件。
-- B 持久接收后，A 下线不终止 B；A 重连可补读进度。
-- 安装引导、DeepSeek key 配置、节点配对及环境诊断。
-- Go 核心服务，SQLite 本地持久化，版本化 HTTP + SSE。
-- 保留执行器接口；首版不安装、不认证、不集成任何 coding harness。
+从同一构建取得安装脚本、发布清单和 Windows ZIP，放入同一目录。发布前使用构建产物，公开版本从 [GitHub Releases](https://github.com/jackgan90/Asterhand/releases) 获取。安装方式：
 
-Linux 用于轻量节点和跨平台测试；Mac 暂未提供实际运行验证，手机使用响应式 Web。自动调度、微信、多仓库更新、跨节点记忆同步和自进化发布留待后续。
+~~~powershell
+.\install.ps1 -PackagePath .\asterhand-0.1.0-alpha.1-windows-amd64.zip
+~~~
 
-## 计划中的使用流程
+安装包包含 Node.js、OpenClaw 和模型插件。A、B 加入同一 Tailscale 网络，在各自设置页配置凭据、授权目录并验证，再用 B 生成的配对码在 A 配对。
 
-正式发布后：下载指定 GitHub Release 的 `install.ps1` → 在 B 执行 → 本地 Web 向导配置 DeepSeek、目录和节点 → 启动 B → 在 A 配对 B → 发送请求。
+在 A 选择 B，发送“在授权目录新建 hello-world.txt，内容精确为 hello world，不添加换行或 BOM”。成功后检查 B 的实际文件及页面显示的 11 字节结果。完整步骤见 [安装、升级与诊断](docs/installation/quickstart.md)。
 
-示例：“让节点 B 在验收项目下新建 hello-world.txt，内容为 hello world。”
+## 开发
 
-发布物必须包含安装入口、匹配平台的程序包和校验清单。当前尚不提供安装入口，流程见 [安装设计](docs/installation/design.md) 和 [人工验收](docs/testing/acceptance.md)。
+工具链版本以 [依赖清单](packaging/dependencies.json) 为准。运行 `go test ./...` 和 `go vet ./...`；完整构建、依赖升级和验证入口见 [脚本指南](scripts/README.md)、[依赖维护](packaging/upgrade.md) 和 [测试指南](tests/README.md)。
 
-## 阅读入口
+[开发规范](AGENTS.md) · [文档导航](docs/README.md) · [需求](docs/overview/requirements.md) · [架构](docs/overview/design.md) · [路线图](docs/development/roadmap.md)
 
-| 内容 | 文档 |
-|---|---|
-| 开发 agent 必读约束 | [AGENTS.md](AGENTS.md) |
-| 文档导航 | [docs/README.md](docs/README.md) |
-| 首版范围与原始需求映射 | [全局需求](docs/overview/requirements.md) |
-| 总体架构 | [全局设计](docs/overview/design.md) |
-| 阶段与验证事项 | [路线图](docs/development/roadmap.md) |
-| 测试与平台证据 | [测试设计](docs/testing/design.md)、[平台矩阵](docs/testing/platforms.md) |
-| 贡献流程 | [CONTRIBUTING.md](CONTRIBUTING.md) |
-
-## 工程与开源状态
-
-`cmd/`、`internal/`、`web/`、`contracts/`、`tests/`、`scripts/`、`packaging/` 目前只有职责说明或占位，不包含功能实现。模块可随 M0 结果收敛。
-
-公开仓库：[jackgan90/Asterhand](https://github.com/jackgan90/Asterhand)。本项目采用 [MIT License](LICENSE)，版权归属以 LICENSE 为准；当前没有二进制 Release。引入和再分发第三方组件前记录其版本、来源、许可证和分发方式。
+源码：[jackgan90/Asterhand](https://github.com/jackgan90/Asterhand)。项目采用 [MIT License](LICENSE)，分发时保留第三方许可与 NOTICE。提交、推送和二进制发布分别执行，发布状态以仓库记录与 Release 为准。

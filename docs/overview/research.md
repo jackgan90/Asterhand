@@ -4,8 +4,8 @@
 
 ## 已收敛的复用方向
 
-- OpenClaw：首版助手运行时，实际消息、工具、交互和异步执行接口待 M0 验证。
-- Hermes：历史备选，本轮已选 OpenClaw，不在首版同时接入。
+- OpenClaw：首版助手运行时，正式接口与能力见 [执行器设计](../executors/design.md)。
+- Hermes：历史备选，首版已选 OpenClaw，不在首版同时接入。
 - Codex / Claude Code / ACP：后续 coding adapter 研究线索，不是首版前置。
 - A2A：长期互操作方向；当前先用版本化 HTTP + SSE。
 - EnvoyMesh / HAPI：架构与交互参考；不因功能列表认定满足本项目可靠性要求。
@@ -21,11 +21,11 @@
 - [Go 平台与构建](https://go.dev/doc/install/source)
 - [Go cgo](https://pkg.go.dev/cmd/cgo)
 
-本轮对话曾核对 Windows 支持、DeepSeek 配置和 Go 跨平台说明；没有产品级运行测试。能力验证结论写入 [平台矩阵](../testing/platforms.md)，不写成此处链接永远有效的保证。
+外部资料用于理解接口与方案；产品支持以 [平台矩阵](../testing/platforms.md) 为准，依赖变化时重新验证。
 
 ## 原草稿来源清单 S01—S30
 
-以下链接来自本轮调研。实施时应复核实际版本，尤其不要把主分支能力自动当作已安装版本的能力。
+以下为技术方案的来源链接。实施时应复核实际版本，尤其不要把主分支能力自动当作已安装版本的能力。
 
 | 编号 | 资料 | 链接 |
 |---|---|---|

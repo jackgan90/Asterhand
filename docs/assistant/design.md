@@ -1,43 +1,43 @@
 # 助手设计
 
-状态：已选 OpenClaw 与默认 DeepSeek；准确版本、插件安装方式、模型和 API 由 M0 验证锁定。
+当前实现：OpenClaw 2026.10.7、对应 DeepSeek provider、Node.js 24.22.1；默认 `deepseek/deepseek-flash`。精确来源和摘要见 [依赖清单](../../packaging/dependencies.json)。
 
-## 接入边界
+## 执行与路由
 
-统一 Web 调用 Asterhand 的会话 adapter，再使用 OpenClaw 正式消息与事件接口。产品不自行实现 LLM 工具循环。
+统一 Web 的每次输入形成持久 route job，A 的 OpenClaw 负责理解意图。普通问题可直接回答；动作通过 `asterhand_submit(goal,target_id,project_id)` 保存 outbox。B 持久接收后创建独立 execute job，由 B 的 OpenClaw 执行；本机动作也经相同边界。
 
-自然语言路由分两步：A 的助手把目标节点、project_id、goal、验收条件转换成提交工具参数；B 接收后由本机 OpenClaw 执行。B 会话独立于 A 的浏览器和 runtime 会话。
+明确选择器优先；与文字目标冲突时要求重新选择。默认选择器允许文字指定已知节点，未知或重名节点先澄清。文件名、内容等执行细节问题交给执行节点，转发目标时保留“先询问”的要求。
 
-节点选择器与文字目标冲突时澄清。普通会话回答不创建执行任务；工具动作进入持久任务边界，避免 UI 显示成功而实际没有 job。
+每个 attempt 启动一个 `agent exec` 进程，使用独立 config/state/workspace，JSON 结果和 stdin 目标，不启动 Gateway。模型内部工具循环由 OpenClaw 提供，任务生命周期由 Asterhand 监督。没有跨 attempt 长期会话或 memory 同步。
 
-B 的可执行工具由本地配置限定。首版提供授权目录内的文本创建、读取和必要查询；不默认开放任意 shell 或跨节点再委派。
+## 工具与权限
 
-M0 必须实际验证会话创建、流式消息、工具注册、异步启动、问答、审批、取消与查询；若接口无法满足目标，记录阻塞和调整方案，不能静默替换掉用户已确认的 OpenClaw。
+插件只允许 `asterhand_create_text`、`asterhand_read_text`、`asterhand_ask_user`；route 仅允许 submit/ask，probe 仅允许无副作用检查。配置使用显式工具白名单及内置工具组拒绝；受认证回调再次按 attempt/mode 校验。文件权限、节点身份均由 Go 绑定，模型不能传入另一个身份。
 
-## DeepSeek 配置体验
+OpenClaw 内置 shell、任意文件访问、代码模式和自动再次委派关闭。角色指令不替代服务端边界，任务内容不能改写开发规范或扩大授权。
 
-安装向导默认选择 DeepSeek，提供密码输入框、已验证模型选择和“验证”按钮。模型默认值随发布清单锁定，不照搬滚动文档中的型号。
+## 配置与凭据
 
-验证包括配置格式、认证、一次小型模型请求及无副作用工具调用；显示认证失败、网络故障、模型不可用或额度问题等可行动错误。该验证使用真实 API，可能产生少量调用费用，按钮说明其用途。
+用户在本机设置页输入 DeepSeek key。Windows 使用当前用户 DPAPI；数据目录 ACL 仅该用户和 SYSTEM。页面只返回 has_key。key 仅注入对应 runtime 子进程环境，不写入任务或 OpenClaw JSON；错误输出做脱敏。A、B 各自配置，配对不传 key。
 
-key 由用户在 DeepSeek 平台创建。A、B 分别保存，可手动使用相同 key，推荐独立 key 便于撤销。配对不传递 key。完整节点缺少模型配置时显示“助手待配置”，其他健康能力可独立展示。
+保存有效执行配置的变化将 ModelVerified 置为 false，名称和网络设置保持既有就绪；点击检查会通过真实模型调用 `asterhand_probe`，仅收到回调才标为就绪。替换、删除 key 后必须重新验证。运行时或网络在检查后失效时，执行返回具体失败。
 
-## 凭据存储
+### 模型 provider 边界
 
-专用设置表单直接交给本地凭据层，不进入聊天和模型上下文。配置保存 credential_ref，运行时通过支持的凭据引用机制读取。
+`internal/llm.Provider` 提供 Describe/Validate，`Selection` 包含 provider、model、credential_ref 和可选 endpoint。当前唯一实现为 DeepSeek，仅接受清单中的三个模型；自定义 endpoint 尚未实现，传入时明确拒绝。Web 从设置 API 返回的 provider/runtime 描述生成选项，不维护另一份硬编码模型列表。
 
-Windows 优先使用操作系统提供的凭据保护，Linux 使用受限本地存储；具体实现和 OpenClaw 接口在 M0 验证。不能把环境变量或明文文件本身宣称为加密存储。
+配置保存为 `llm` 与 `agent_runtime`。读取旧 flat `model` 时归一化为 DeepSeek/OpenClaw，保留模型 ID、节点身份、授权目录和 DPAPI 文件，下一次保存去掉旧字段。凭据引用是受限标识符，不是路径；`deepseek` 仍对应原有 deepseek.secret。通用凭据存储支持分开替换、删除；选择 provider 不会复制另一 provider 的凭据。设置 API 只返回 has_key，不返回明文。
 
-运行进程按需要访问密钥，用户同权限下的任意恶意进程不在“密钥绝对不可读取”的承诺内；首版工具范围不得允许模型随意读凭据目录。
+provider 描述不执行模型调用。OpenClaw 的 provider bridge 把选择转换为插件 ID、插件路径及环境变量；其他 agent 需提供自己的转换。模型 key 只在 adapter 内读取并注入子进程。当前 adapter 对 final/error/stderr 中已知 key 和回调 token 脱敏。
 
-日志、错误、任务、配置导出和诊断包不包含明文 key。支持替换、删除和重新验证；启动服务的实际账户必须能读取配置。测试需要覆盖服务重启后的模型调用。
+就绪记录绑定源码摘要、依赖清单摘要和有效执行配置摘要（runtime ID、LLM Selection、该 runtime 的选项）。新候选、自动路径迁移或任何有效配置变化使旧记录失效；缺少执行摘要的旧就绪记录也要求重新 probe。成功 probe 后重新绑定。自动验证报告还核对正在运行节点的源码摘要，防止用旧程序验证新源码。
 
-## Memory 与角色
+扩展步骤见 [边界 ADR](adr/003-provider-runtime-bundle-boundaries.md)。首版仍只交付 DeepSeek + OpenClaw，其他 provider 和 Hermes 尚未实现或验证。
 
-首版仅使用通用助手，运行时角色、skills 与 memory 本地隔离。项目事实随项目文档管理，原始会话默认本机保存。产品学习结果不能修改仓库 AGENTS.md 或扩大工具权限。
+收口公共流程：新节点默认模型/runtime 从包描述读取；runtime_options 按 runtime ID 隔离，由适配器解析。公共 CLI、设置目录保护、安装准备和包诊断不出现具体提供者选择分支；专用 API 和环境变量只位于 adapter/bridge。历史 OpenClaw flat 字段单独兼容迁移，不改变凭据字节或节点身份。见 [ADR-AST-004](adr/004-provider-neutral-public-flows.md)。
 
-未来记忆传播、角色包、用户纠正和删除语义见 [后续方向](../overview/future.md)。
+Linux 密钥层为权限受限本地文件，未宣称加密；当前 Linux 基础包不含助手运行时。按 [助手验证方法](../development/features/windows-assistant/validation.md) 区分工程测试和真实双机验收。
 
-## 参考与证据状态
+## 就绪保持
 
-[OpenClaw DeepSeek](https://docs.openclaw.ai/providers/deepseek)、[Secrets](https://docs.openclaw.ai/gateway/secrets)、[Gateway](https://docs.openclaw.ai/concepts/architecture) 是验证入口。本轮讨论查阅过配置文档，尚未在本项目中实际运行。精确依赖与结果写入 [平台矩阵](../testing/platforms.md)。
+保存节点名称、公布地址或监听地址不撤销已完成的模型验证。模型选择、凭据写入/删除、运行时选择或授权目录变化则撤销并清除旧 passed 探测展示；程序包或运行时选项变化按执行配置摘要失效规则处理。重启后 GET probe 与持久 ModelVerified 一致，不能显示“检查通过”而实际禁止提交。

@@ -11,6 +11,7 @@
 /web/dist/
 
 # Local settings, node data and credentials
+/.codex/
 .env
 .env.*
 !.env.example

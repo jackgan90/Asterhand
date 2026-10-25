@@ -1,11 +1,13 @@
-# 测试目录
+# 测试入口
 
-当前无测试实现或通过记录。
+使用 Go 1.27.3 运行 `go test ./...` 和 `go vet ./...`。测试源在 internal、cmd、packaging 各包的 *_test.go；临时目录独立，普通测试无网络模型费用。
 
-- `fixtures/`：脱敏协议样本、测试文件和隔离验收配置。
-- `integration/`：真实进程、网络、SQLite 和故障注入。
-- `e2e/`：Web 交互、安装和真实设备场景。
+覆盖 SQLite 事务和幂等、文件回读和链接边界、交互去重、恢复待核对、真实 HTTP/TLS 双实例、A App 停止后 B 继续、配对重放与撤销、Web 来源保护、Windows Job Object 子进程清理。
 
-Go 单元测试随实现放在对应包。测试控制器、FakeExecutor 和命令在实施 feature 中加入，不能用始终成功的测试占位。
+公共流程测试覆盖公共运行时选项迁移/快照隔离、目录别名保护、异名包目标分派、描述完整性和 CLI 拒绝时不写配置。Node 插件契约与 PowerShell 通用组件准备守卫由 verify-dependencies.ps1 编排。
 
-见 [测试设计](../docs/testing/design.md)、[人工验收](../docs/testing/acceptance.md) 与 [平台矩阵](../docs/testing/platforms.md)。
+可靠性回归覆盖：事件边界与受限收尾、文件证据原子回滚、旧满日志节点重启、取消与问答交错、重复控制请求、持久化失败停止调度、显式路径重启保留、旧自动路径升级和执行配置验证摘要。隔离数据库/进程测试不调用真实模型。
+
+双节点交互测试覆盖 peer 元数据身份验证、改名保留信任、单向地址修复、监听配置及就绪保持回归。`node --test tests/plugin-contract.test.mjs tests/web-state.test.mjs` 覆盖路由转执行的统一排序、去重和发送按钮状态，并由完整验证入口执行。
+
+单机多实例包含 FakeExecutor，不能代替真实双 Windows。方法见 [双节点交互验证](../docs/development/features/two-node-usability/validation.md) 与 [任务可靠性验证](../docs/development/features/task-reliability/validation.md)，用户步骤见 [操作指南](../docs/installation/quickstart.md)。

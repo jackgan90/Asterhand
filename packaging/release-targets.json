@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "targets": [
+    {"id": "windows-amd64", "os": "windows", "arch": "amd64", "profile": "assistant", "host_os": "windows", "enabled": true, "prepare": "scripts/prepare-release-windows.ps1", "builder": "scripts/build.ps1", "verify": "scripts/test-install.ps1", "installer": "install.ps1"},
+    {"id": "linux-amd64", "os": "linux", "arch": "amd64", "profile": "assistant", "host_os": "linux", "enabled": false, "prepare": null, "builder": null, "verify": null, "installer": null},
+    {"id": "darwin-arm64", "os": "darwin", "arch": "arm64", "profile": "assistant", "host_os": "darwin", "enabled": false, "prepare": null, "builder": null, "verify": null, "installer": null}
+  ]
+}

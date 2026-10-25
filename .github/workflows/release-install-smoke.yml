@@ -1,0 +1,80 @@
+name: Public release installation
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: Public repository containing the release
+        required: true
+        default: jackgan90/Asterhand-release-test
+      tag:
+        description: Exact published release tag
+        required: true
+      fresh_vc_runtime:
+        description: Remove preinstalled VC++ x64 on this disposable hosted runner before testing
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  windows-install:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - name: Prepare a disposable machine without VC++ x64
+        if: ${{ inputs.fresh_vc_runtime }}
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'This preparation is restricted to disposable GitHub-hosted runners.' }
+          $entries = @(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -match '^Microsoft Visual C\+\+ (?:2015-20[0-9]{2}|v14) Redistributable \(x64\)' } |
+            Sort-Object PSChildName -Unique)
+          foreach ($entry in $entries) {
+            if ($entry.UninstallString -notmatch '^"([^"]+\.exe)"') { throw 'Cannot resolve the installed Microsoft runtime uninstaller.' }
+            $uninstaller = $Matches[1]
+            $signature = Get-AuthenticodeSignature -LiteralPath $uninstaller
+            if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') { throw 'Uninstaller signature is not valid for Microsoft.' }
+            Write-Host "Removing the preinstalled test-runtime package: $($entry.DisplayName)"
+            $process = Start-Process -FilePath $uninstaller -ArgumentList '/uninstall', '/quiet', '/norestart' -WindowStyle Hidden -Wait -PassThru
+            if ($process.ExitCode -notin @(0,3010)) { throw "Runtime removal failed: $($process.ExitCode)" }
+          }
+          # Visual Studio can retain MSI components after the redistributable bundle is removed.
+          $components = @(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Publisher -eq 'Microsoft Corporation' -and $_.DisplayName -match '^Microsoft Visual C\+\+ (?:20[0-9]{2}|v14) X64 (?:Minimum|Additional) Runtime' -and $_.DisplayVersion -like '14.*' } |
+            Sort-Object PSChildName -Unique)
+          foreach ($component in $components) {
+            $productCode = $component.PSChildName
+            if ($productCode -notmatch '^\{[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}\}$' -or $component.WindowsInstaller -ne 1) { throw 'Invalid Microsoft runtime MSI registration.' }
+            Write-Host "Removing the retained test-runtime component: $($component.DisplayName)"
+            $process = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -ArgumentList '/x', $productCode, '/qn', '/norestart' -WindowStyle Hidden -Wait -PassThru
+            if ($process.ExitCode -notin @(0,3010,1605)) { throw "Runtime component removal failed: $($process.ExitCode)" }
+          }
+          if (Test-Path "$env:SystemRoot\System32\vcruntime140.dll") { throw 'The hosted image still contains VC++ x64; this run cannot prove a missing-runtime installation.' }
+      - name: Install from a single public installer
+        shell: powershell
+        env:
+          RELEASE_REPOSITORY: ${{ inputs.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          REQUIRE_FRESH_VC: ${{ inputs.fresh_vc_runtime }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          if ($env:RELEASE_REPOSITORY -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $env:RELEASE_TAG -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { throw 'Invalid release coordinates' }
+          $base = "https://github.com/$env:RELEASE_REPOSITORY/releases/download/$env:RELEASE_TAG"
+          Invoke-WebRequest "$base/test-release-download.ps1" -OutFile "$env:RUNNER_TEMP/test-release-download.ps1" -UseBasicParsing
+          Invoke-WebRequest "$base/SHA256SUMS" -OutFile "$env:RUNNER_TEMP/SHA256SUMS" -UseBasicParsing
+          $entry = @(Get-Content "$env:RUNNER_TEMP/SHA256SUMS" | Where-Object { $_ -match '^[a-f0-9]{64}  test-release-download.ps1$' })
+          if ($entry.Count -ne 1 -or ($entry[0] -split '  ')[0] -ne (Get-FileHash "$env:RUNNER_TEMP/test-release-download.ps1").Hash.ToLowerInvariant()) { throw 'Installation test checksum mismatch' }
+          $options = @{Repository=$env:RELEASE_REPOSITORY;Tag=$env:RELEASE_TAG;OutputDirectory="$env:RUNNER_TEMP/asterhand-clean-install";RequireFreshDependencies=$true}
+          if ($env:REQUIRE_FRESH_VC -eq 'true') { $options.RequireFreshVCRuntime = $true }
+          & "$env:RUNNER_TEMP/test-release-download.ps1" @options
+      - name: Preserve installation report
+        if: always()
+        shell: powershell
+        run: |
+          $report = "$env:RUNNER_TEMP/asterhand-clean-install/download-install.json"
+          if (Test-Path $report) {
+            '```json' | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            Get-Content $report | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            '```' | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }

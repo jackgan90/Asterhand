@@ -4,7 +4,11 @@ param(
     [string]$Go = 'go',
     [Parameter(Mandatory)][string]$NodeDistribution,
     [Parameter(Mandatory)][string]$RuntimeRoot,
-    [string]$OutputDir
+    [string]$OutputDir,
+    [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')]
+    [string]$Repository = 'jackgan90/Asterhand',
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*$')]
+    [string]$ReleaseTag
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -13,11 +17,16 @@ $OutputDir = [IO.Path]::GetFullPath($OutputDir)
 $versionSource = Get-Content (Join-Path $repo 'internal\config\config.go') -Raw
 if ($versionSource -notmatch 'const Version = "([^"]+)"') { throw 'Cannot resolve application version.' }
 $version = $Matches[1]
+if (-not $ReleaseTag) { $ReleaseTag = 'v' + $version }
+New-Item -ItemType Directory -Path (Join-Path $repo 'out') -Force | Out-Null
+$outputModule = Join-Path $repo 'out/go.mod'
+if (-not (Test-Path -LiteralPath $outputModule)) {
+    Set-Content -LiteralPath $outputModule -Value 'module asterhand.local/build-output' -Encoding ascii
+}
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 $stageRoot = Join-Path $repo ('out\packages-' + [guid]::NewGuid().ToString('N'))
 $windows = Join-Path $stageRoot 'windows'
-$linux = Join-Path $stageRoot 'linux'
-New-Item -ItemType Directory -Path $windows,$linux -Force | Out-Null
+New-Item -ItemType Directory -Path $windows -Force | Out-Null
 
 function Build-Binary([string]$Platform, [string]$Destination) {
     $savedGOOS = $env:GOOS
@@ -58,12 +67,11 @@ function Copy-GoLicenses([string]$Stage) {
 $catalog = Assert-PreparedDependencies $repo $NodeDistribution $RuntimeRoot $Go
 $sourceDigest = Get-SourceFingerprint $repo
 Build-Binary 'windows' (Join-Path $windows 'asterhand.exe')
-Build-Binary 'linux' (Join-Path $linux 'asterhand')
 New-Item -ItemType Directory -Path (Join-Path $windows 'runtime') -Force | Out-Null
 Copy-Item -LiteralPath $NodeDistribution -Destination (Join-Path $windows 'runtime\node') -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $RuntimeRoot 'node_modules') -Destination (Join-Path $windows 'runtime\node_modules') -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $RuntimeRoot 'package.json'),(Join-Path $RuntimeRoot 'package-lock.json') -Destination (Join-Path $windows 'runtime')
-foreach ($stage in @($windows,$linux)) {
+foreach ($stage in @($windows)) {
     Copy-GoLicenses $stage
     Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination $stage
     New-Item -ItemType Directory -Path (Join-Path $stage 'packaging') -Force | Out-Null
@@ -75,14 +83,11 @@ Copy-Item -LiteralPath (Join-Path $repo 'packaging\start.ps1'),(Join-Path $repo 
 & (Join-Path $windows 'asterhand.exe') bundle-check --directory $windows
 if ($LASTEXITCODE -ne 0) { throw 'Staged runtime bundle failed diagnostics.' }
 $windowsName = "asterhand-$version-windows-amd64.zip"
-$linuxName = "asterhand-$version-linux-amd64-base.tar.gz"
 $windowsArchive = Join-Path $OutputDir $windowsName
 if (Test-Path -LiteralPath $windowsArchive) { Remove-Item -LiteralPath $windowsArchive -Force }
 [IO.Compression.ZipFile]::CreateFromDirectory($windows, $windowsArchive, [IO.Compression.CompressionLevel]::Optimal, $false)
-& tar -czf (Join-Path $OutputDir $linuxName) -C $linux .
-if ($LASTEXITCODE -ne 0) { throw 'Linux archive creation failed.' }
 $packages = @()
-foreach ($entry in @(@{os='windows';file=$windowsName;profile='assistant'},@{os='linux';file=$linuxName;profile='base';evidence='cross_compiled_not_runtime_validated'})) {
+foreach ($entry in @(@{os='windows';file=$windowsName;profile='assistant'})) {
     $file = Get-Item -LiteralPath (Join-Path $OutputDir $entry.file)
     $entry.arch = 'amd64'
     $entry.sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -91,7 +96,15 @@ foreach ($entry in @(@{os='windows';file=$windowsName;profile='assistant'},@{os=
 }
 $manifest = @{schema=1;version=$version;source_sha256=$sourceDigest;catalog_sha256=(Get-FileHash (Join-Path $repo 'packaging\dependencies.json')).Hash.ToLowerInvariant();created_utc=[DateTime]::UtcNow.ToString('o');packages=$packages}
 $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $OutputDir 'release-manifest.json') -Encoding utf8NoBOM
-Copy-Item -LiteralPath (Join-Path $repo 'install.ps1'),(Join-Path $repo 'install.sh'),(Join-Path $repo 'docs\installation\quickstart.md') -Destination $OutputDir -Force
+$installer = Get-Content (Join-Path $repo 'install.ps1') -Raw
+foreach ($binding in @{Version=$version;Repository=$Repository;ReleaseTag=$ReleaseTag}.GetEnumerator()) {
+    $pattern = '(?m)^(    \[string\]\$' + [regex]::Escape($binding.Key) + " = ')[^']*(',?\r?$)"
+    if ([regex]::Matches($installer, $pattern).Count -ne 1) { throw "Cannot bind installer default: $($binding.Key)" }
+    $replacementValue = $binding.Value
+    $installer = [regex]::Replace($installer, $pattern, { param($match) $match.Groups[1].Value + $replacementValue + $match.Groups[2].Value })
+}
+Set-Content -LiteralPath (Join-Path $OutputDir 'install.ps1') -Value $installer -Encoding utf8BOM
+Copy-Item -LiteralPath (Join-Path $repo 'docs\installation\quickstart.md') -Destination $OutputDir -Force
 Get-ChildItem -LiteralPath $OutputDir -File | Where-Object Name -ne 'SHA256SUMS' | Sort-Object Name | ForEach-Object {
     ((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()) + '  ' + $_.Name
 } | Set-Content -LiteralPath (Join-Path $OutputDir 'SHA256SUMS') -Encoding ascii

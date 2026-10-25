@@ -6,7 +6,7 @@
 
 ## 1. 准备精确版本
 
-复制 dependencies.json 到 out 下的新候选文件，修改组件精确版本；Node/Tailscale 同时填写官方版本化 URL 和核对的 SHA-256。schema 2 的 components 列表描述 id、manager、package、version、source、integrity、license；bundle.targets 描述 runtime/provider/model/credential_ref，default_target 选择默认项。准备和包诊断按描述遍历。新增提供者先实现并注册适配器，再加入组件与目标；未知安装技术显式拒绝。OpenClaw 和模型插件版本可以不同，但必须通过真实验证。保留原清单和 lock。
+复制 dependencies.json 到 out 下的新候选文件，修改组件精确版本；Go、Node、Tailscale 和 Microsoft VC++ 同时填写官方版本化 URL 和核对的 SHA-256。schema 2 的 components 列表描述 id、manager、package、version、source、integrity、license；bundle.targets 描述 runtime/provider/model/credential_ref，default_target 选择默认项。windows_native_modules 声明安装时必须加载验证的原生模块。准备和包诊断按描述遍历。新增提供者先实现并注册适配器，再加入组件与目标；未知安装技术显式拒绝。OpenClaw 和模型插件版本可以不同，但必须通过真实验证。保留原清单和 lock。
 
 ```powershell
 .\scripts\prepare-dependencies.ps1 -CatalogPath .\out\candidate-dependencies.json -OutputDirectory .\out\prepared-upgrade -RefreshLock

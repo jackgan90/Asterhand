@@ -9,7 +9,7 @@ $prepared = Get-Content .\out\prepared-upgrade\prepared.json -Raw | ConvertFrom-
 
 RuntimeRoot 包含 package.json、与 packaging/runtime-lock.json 完全匹配的 package-lock.json 和按锁安装的 node_modules；安装 OpenClaw 和 @openclaw/deepseek-provider 2026.10.7。NodeDistribution 使用依赖清单中已验证摘要的官方 Windows 发行目录。
 
-构建脚本验证版本与锁文件，产生 Windows 完整 zip、Linux 基础 tar.gz、安装脚本、release-manifest.json、SHA256SUMS 和操作指南。Linux 只表示交叉编译，发布前必须保留该标记。out 下 staging 供人工检查，按需清理自己生成的目录。
+构建脚本验证版本与锁文件，产生 Windows 完整 ZIP、绑定版本的安装脚本、release-manifest.json、SHA256SUMS 和操作指南。当前正式构建不输出 Linux/macOS 安装包。out 下 staging 供人工检查，按需清理自己生成的目录。
 
 prepare-dependencies.ps1（隔离准备）、verify-dependencies.ps1（统一报告）、verify-live.ps1（真实 probe/文件/问答/取消）、test-install.ps1（PowerShell 5.1 安装/升级回归）、dependency-tools.ps1 / test-dependency-tools.ps1（共用清单检查与拒绝测试）。完整命令见 [升级流程](../packaging/upgrade.md)。
 
@@ -24,3 +24,11 @@ powershell.exe -NoProfile -File .\scripts\test-install-paths.ps1 -Installer .\in
 ```
 
 这些示例目录是由构建和测试命令生成的输出，由执行者选择；不依赖仓库作者的本机文件。可用 BaselineInstaller 参数提供旧安装器比较路径行为。测试不联网、不启动服务、不调用模型；test-install.ps1 在完整安装检查前自动执行路径回归。
+
+## 统一发布
+
+`release.ps1` 自动准备 Go、Node 和锁定运行依赖，执行构建、Go/Node 契约与 Windows 安装回归，组装完整附件并上传 GitHub。默认 Draft，公开发布显式选择 Prerelease/Stable。需要已登录的 GitHub CLI；无需手工提供 NodeDistribution/RuntimeRoot。命令、草稿恢复和平台接入契约见 [发布指南](../docs/installation/releases.md)。
+
+`release-prepare.ps1` 负责平台描述和源码/附件摘要；`prepare-release-windows.ps1` 负责 Windows 工具链和依赖准备；`release-github.ps1` 负责上传、回读验证与发布。`test-release.ps1` 验证失败保护，`test-release-download.ps1` 验证公开的单脚本安装。
+
+`test-installer-system-dependencies.ps1` 通过模拟边界检查 VC++ 缺失、复用、升级和失败处理。真正安装时会使用固定 Microsoft 安装器并验证原生模块加载；普通开发机回归应预先具有清单要求的 VC++ 版本，避免在工程测试中触发系统安装。Tailscale 与 VC++ 官方安装器在发布准备阶段均下载校验，但不进入 Release 附件。

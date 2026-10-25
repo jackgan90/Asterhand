@@ -2,14 +2,15 @@
 
 范围：Windows 安装、启动、诊断与构建；使用 schema 2 包描述。验证方法见 [安装路径](../development/features/installer-path-resolution/plan.md) 与 [公共包契约](../development/features/provider-neutral-flows/validation.md)。
 
-## 两层引导
+## 发布与安装边界
 
-`install.ps1`（Windows）和 `install.sh`（Linux）只负责识别平台、取得对应 Asterhand 程序、校验后调用环境准备入口。
+Windows install.ps1 是独立引导脚本：固定仓库与版本，下载 release-manifest.json 和完整平台包，检查摘要、大小、版本及 bundle-check，补齐 Microsoft VC++ x64 运行库并加载声明的原生模块，再安装缺失的 Tailscale。成功后只留下 start.ps1 和 installation.json；不启动节点、不登录 Tailscale、不读取模型凭据。setup/start 属于安装后的节点配置入口。doctor/repair 继续由 Go 实现。
 
-计划命令：`asterhand setup` 初始化和准备环境；`asterhand doctor` 检查环境、认证、网络和能力；`asterhand repair` 修复已识别的问题。环境管理逻辑由 Go 实现，CLI 与 Web 复用，避免脚本分叉。
+scripts/release.ps1 是维护者发布入口，要求 Windows PowerShell 7、Git 和已登录的 GitHub CLI。构建用 Go 和运行用 Node/npm 依赖由固定清单自动准备。平台注册表 packaging/release-targets.json 通过 builder/installer 路径声明扩展点，只启用 Windows x64；Linux/macOS 需实现原生构建和安装检查后接入。
 
-正常运行节点不安装 Go。前端静态资源内嵌发布，用户不需要为 Web 编译前端。OpenClaw 可能需要的运行时依赖由版本清单描述，不能在未验证前承诺全栈为一个二进制。
+发布顺序为依赖准备、平台构建、安装回归、附件摘要生成、GitHub 草稿上传、远端逐项校验、显式发布。默认 Draft；Prerelease 与 Stable 为显式模式。重试只接受同名同内容附件，拒绝覆盖公开版本。源码提交、源码摘要、平台支持边界与验证报告随发布保存。源文件变化后重新准备输出，避免混用旧附件。
 
+普通安装用户无需 Git、Go、npm 或 PowerShell 7。前端静态资源内嵌，完整运行时和第三方许可随平台包分发。发布者登录只用于上传，公开安装下载无需 GitHub 账户。设计决策见 [安装配置分离](adr/002-release-and-install-boundary.md)。
 ## 能力与依赖
 
 | 能力 | 首版处理 |
@@ -21,7 +22,7 @@
 | Coding harness | 后置，不安装或要求任何 coding harness；运行时自身依赖单独验证 |
 | 项目编译工具 | 后续按项目准备，独立于节点安装 |
 
-低配 Linux 可选择基础节点。两台 Windows 选择完整助手节点。开发本项目的工具链另行记录，不能要求普通用户安装全部开发依赖。
+当前发布目标为 Windows 完整助手节点；Linux/macOS 为后续平台。开发本项目的工具链另行记录，不能要求普通用户安装全部开发依赖。
 
 ## 用户流程
 
@@ -64,15 +65,17 @@ Windows x64 包为完整自包含目录，PowerShell 5.1+ 校验 manifest schema
 
 重复安装保留数据与身份；版本目录按包摘要区分。数据迁移目前仅 schema 1，遇到较新数据库拒绝打开。可选登录后启动用当前用户 Startup 快捷方式。程序/数据必须独立，非应用已有程序目录拒绝写入。
 
-Tailscale 缺失时引导官方 1.104.2 MSI，检查固定摘要及有效供应商签名，再请求管理员安装。登录由 Tailscale 自身完成。防火墙脚本仅 TCP 17433、当前程序、Tailnet 地址范围；默认不会自行新增规则。-SkipTailscale 用于已有 LAN / 隔离安装试验，-NoStart 只安装。
+Tailscale 缺失时引导官方 1.104.2 MSI，检查固定摘要及有效供应商签名，再请求管理员安装。安装流程到组件安装完成即结束。之后由用户打开 Tailscale 完成登录。防火墙脚本仅 TCP 17433、当前程序、Tailnet 地址范围；默认不会自行新增规则。-SkipTailscale 用于已有 LAN / 隔离安装试验；安装默认不启动，-NoStart 保留为兼容参数。
 
-Linux install.sh 为实验基础节点入口，需要 curl、sha256sum、tar、python3，尚无真实 Linux 安装证据，不作为完整助手发布承诺。
+Windows 原生 npm 模块需要 Microsoft VC++ v14 x64 运行库。清单固定其版本、不可变供应商 URL、SHA-256 和许可；安装器检查 x64 注册表版本，复用符合要求的版本，缺失或较旧时通过 Microsoft 签名的官方安装器补齐。版本检查后，按 windows_native_modules 中的包内相对路径使用捆绑 Node 实际加载原生模块，失败时不写入激活入口。VC++ 与 Tailscale 系统安装均请求 Windows 管理员许可并禁止自动重启；重启要求明确提示。两者从供应商下载，不重新分发。
+
+Linux install.sh 保留为实验基础节点源码，不进入当前 Release 附件。Linux/macOS 安装尚未实现正式发布接入。
 
 ## 依赖升级与候选验证
 
 清单采用 schema 2：components 描述包管理器组件，bundle.targets 描述实际打包的 runtime/provider/model/credential_ref 组合，default_target 指定新节点默认选择。公共 bundle-check 遍历目标并交给各适配器检查，不构造固定厂商配置。准备与锁检查遍历组件，核对完整的直接依赖集合；未知包管理器或缺失/重复目标拒绝。首版组件安装技术仍为 npm + Node；将来其他安装技术需相应实现，而不是在公共脚本中增加厂商分支。
 
-packaging/dependencies.json 是 Node、OpenClaw、模型插件、Go 构建器及 Tailscale 的唯一版本来源。Go 直接嵌入同一文件；构建和准备脚本直接读取；安装器从已经过 SHA-256 校验的 bundle 读取 Tailscale 元数据，并执行 `asterhand bundle-check --directory ...`。该命令不打开节点数据、不读取凭据、不访问网络；核对内嵌清单摘要、组件存在性、Node 和各插件独立版本。重复使用已有版本目录也重新检查。
+packaging/dependencies.json 是 Node、OpenClaw、模型插件、Go 构建器、Microsoft VC++ 运行库及 Tailscale 的唯一版本来源。Go 直接嵌入同一文件；构建和准备脚本直接读取；安装器从经过 SHA-256 校验的 bundle 读取系统依赖元数据，并执行 `asterhand bundle-check --directory ...`。该命令不打开节点数据、不读取凭据、不访问网络；核对内嵌清单摘要、组件存在性、Node 和各插件独立版本。重复使用已有版本目录也重新执行包检查与原生模块加载检查。
 
 `prepare-dependencies.ps1` 只写新的隔离目录。默认按现有锁 npm ci；RefreshLock 根据明确版本重新解析候选 lock，并从 lock 提取来源/integrity 写候选清单。Node archive 必须匹配清单 SHA-256；npm 完整性由 npm ci 校验，生命周期脚本默认禁用。候选清单和 lock 经审查后才替换源码中的对应文件。支持新组件时应补该组件的包布局与验证，不把通用下载器当作兼容性保证。
 

@@ -22,11 +22,16 @@ function Read-DependencyCatalog([string]$Path) {
             throw "Use an exact version for $name."
         }
     }
-    foreach ($name in @('node','tailscale')) {
+    if ($catalog.vc_runtime.version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Use an exact four-part VC++ runtime version.' }
+    foreach ($name in @('go','node','tailscale','vc_runtime')) {
         $uri = [uri]$catalog.$name.windows_amd64_url
         if ($uri.Scheme -ne 'https' -or $uri.UserInfo -or $catalog.$name.windows_amd64_sha256 -notmatch '^[a-fA-F0-9]{64}$') {
             throw "Invalid download metadata for $name."
         }
+    }
+    if (@($catalog.windows_native_modules).Count -eq 0) { throw 'Windows native component checks are required.' }
+    foreach ($module in $catalog.windows_native_modules) {
+        if ($module -notmatch '^runtime/node_modules/[A-Za-z0-9@_./-]+\.node$' -or $module -match '(^|/)\.\.(/|$)') { throw 'Invalid Windows native component check path.' }
     }
     Assert-BundleDescription $catalog
     return $catalog

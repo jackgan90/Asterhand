@@ -12,10 +12,11 @@
 | 日志预算、取消竞争、文件证据与配置迁移 | [任务可靠性与配置保留](features/task-reliability/plan.md) |
 | Windows 安装、升级、相对路径与数据保留 | [安装路径解析](features/installer-path-resolution/plan.md) |
 | 任务排序、节点名称/地址同步、就绪保持 | [双节点交互与连接同步](features/two-node-usability/plan.md) |
+| 统一发布、单脚本下载安装与平台扩展接口 | [可复现发布与独立安装](features/release-pipeline/plan.md) |
 
 ## 后续验证与功能
 
-- Linux 基础包的真实安装、进程和权限验证；macOS 的构建及真机验证。
+- Linux/macOS 平台准备器、构建器、安装入口与原生系统验证；平台注册表在验证前保持禁用。
 - 手机远程访问的认证、部署方式和物理设备测试。
 - 物理断线与重启、复杂 NAT 环境、长历史规模的系统化可复现测试。
 - 协议故障代理、可控时钟和持续集成；现有覆盖见 [测试设计](../testing/design.md)。

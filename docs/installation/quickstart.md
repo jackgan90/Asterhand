@@ -4,25 +4,37 @@
 
 ## 1. 在 B 安装
 
-从同一版本发布物取得 `install.ps1`、`release-manifest.json`、`asterhand-0.1.0-alpha.1-windows-amd64.zip`。发布前可将这三份本地候选文件一起复制到 B。不要使用尚未存在的下载地址。
+从需要安装的 GitHub Release 只下载 `install.ps1`，在下载目录打开 Windows PowerShell 5.1 或更高版本，运行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+发布的脚本绑定该 Release 的仓库和标签，自动下载清单和 Windows 完整包，按摘要与大小校验。普通用户不需要 Go、Git、npm、PowerShell 7 或预装 Node。私有仓库和未公开草稿不支持匿名安装。
+
+脚本还检查 Microsoft VC++ x64 运行库：符合清单要求时复用，缺失或较旧时自动下载固定版本的 Microsoft 官方安装器，核对摘要和签名后请求 Windows 管理员许可。随后实际加载包内原生模块，确认系统依赖完整。VC++ 与 Tailscale 的安装都不会自动重启 Windows；如提示需要重启，完成重启后再配置节点。
+
+需要使用本地包时，从同一版本发布物取得 `install.ps1`、`release-manifest.json`、`asterhand-0.1.0-alpha.1-windows-amd64.zip`。
 
 在该目录打开 PowerShell，执行本地包安装：
 
 ```powershell
-.\install.ps1 -PackagePath .\asterhand-0.1.0-alpha.1-windows-amd64.zip
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -PackagePath .\asterhand-0.1.0-alpha.1-windows-amd64.zip
 ```
 
 相对路径按当前 PowerShell FileSystem 目录解析；也可向 PackagePath 和 ManifestPath 传绝对路径。默认清单从包所在目录读取。升级时安装器、ZIP 与 manifest 必须来自同一构建，完整性以 manifest 校验为准。
 
-若 Windows 阻止执行从浏览器下载的脚本，先核对随包 SHA256SUMS，再使用 `Unblock-File .\install.ps1` 解除该文件的下载标记；不需要修改整机执行策略。仍受组织策略限制时按组织要求运行，不自动绕过。
+上述命令只为本次 PowerShell 进程设置脚本执行策略，不修改用户或整机策略，适用于默认限制脚本执行的全新 Windows。运行前确认脚本来自所选 Release，也可核对随包 SHA256SUMS。组织组策略优先于进程参数；受管理设备仍按组织要求执行。策略说明见 [Microsoft 文档](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_execution_policies)。
 
-正式 Release 可用后，也可只下载该 Release 的 install.ps1 并运行，脚本会获取固定版本清单和平台包。程序、Node.js 和 OpenClaw 已打包；B 不需要安装 Go、npm 或 coding harness。
+安装完成后脚本退出，输出安装目录内的 `start.ps1` 入口。此时组件已安装；节点身份、模型凭据、工作目录与配对尚未配置。
 
 默认程序目录 `%LOCALAPPDATA%\Programs\Asterhand`，数据目录 `%APPDATA%\Asterhand`。重复安装保留节点身份、配对、key 和数据库。可用 `-InstallDir`、`-DataDir` 指定独立目录；程序和数据分开。
 
 ## 2. 网络与初次配置
 
-安装器检测 Tailscale。缺失时展示系统网络服务安装范围，请求 Windows 管理员许可；登录在 Tailscale 的浏览器页面完成。A、B 加入同一 Tailnet。已有 Tailscale 会复用，不静默升级。
+安装器检测 Tailscale。缺失时展示系统网络服务安装范围，请求 Windows 管理员许可并安装锁定的官方 MSI；已有 Tailscale 会复用，不静默升级。安装过程不执行登录或修改防火墙。若 Windows 要求重启，先重启再开始配置。
+
+后续配置：从 Tailscale 自身入口登录，让 A、B 加入同一 Tailnet；运行安装目录的 `start.ps1` 打开本地设置页。
 
 网页中填写：
 
@@ -39,7 +51,7 @@
 
 ## 已有节点升级
 
-在任务完成后，打开本机设置，记下页面显示的数据目录，并点击“停止本机节点”。将新候选的 install.ps1、release-manifest.json 和 Windows ZIP 三个文件一起复制到机器；进入该目录，运行安装命令。默认安装沿用原数据；曾指定自定义 DataDir 的节点必须继续传入同一目录。
+在任务完成后，打开本机设置，记下页面显示的数据目录，并点击“停止本机节点”。从新版本 Release 下载 install.ps1 并运行；也可使用同一版本的脚本、清单与 ZIP 本地安装。默认安装沿用原数据；曾指定自定义 DataDir 的节点必须继续传入同一目录。
 
 升级后运行安装目录 start.ps1 打开原节点，确认原名称、授权目录、配对和历史任务仍在。点击“使用 Tailscale 地址”并保存；出现重启提示时再停止并启动一次。运行安装目录 configure-firewall.ps1 更新规则。新程序首次启动需要重新验证一次模型与工具。
 
@@ -68,7 +80,7 @@ A 以同样步骤安装、配置并验证独立助手。在 B 点击“配对另
 - 可选登录后启动：安装时显式加 `-LoginAtStartup`；移除 Windows Startup 中的 Asterhand 快捷方式即可关闭。
 - 诊断：安装版本目录中运行 `asterhand.exe doctor --home <数据目录>`；不输出 key。
 - 修复：`repair` 重新发现并检查同包运行时；缺少组件时重新运行安装器，不删除数据。
-- 仅 LAN 或隔离安装测试：`-SkipTailscale`；安装但不启动：`-NoStart`。这两种运行不证明跨 NAT 可达。
+- 仅 LAN 或隔离安装测试：`-SkipTailscale`；默认安装即不启动，`-NoStart` 保留兼容。跳过 Tailscale 的检查不覆盖系统网络组件安装。
 - 未知执行状态显示“需要核对”。检查文件、执行记录后在 B 本机填写证据并关闭；该操作记录人工处置，不伪造成功。
 
-其他验收：A 服务退出后 B 继续、问题回答去重、执行中重启的对账，按项目 `docs/testing/acceptance.md` 的 V04—V06。Linux 基础节点是单独的交叉编译产物；Mac 未验证。
+其他验收：A 服务退出后 B 继续、问题回答去重、执行中重启的对账，按 [人工验收](../testing/acceptance.md) 的 V04—V06。当前 Release 只包含 Windows x64；Linux/macOS 尚未接入发布。

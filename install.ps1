@@ -3,6 +3,10 @@
 param(
     [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.]+)?$')]
     [string]$Version = '0.1.0-alpha.1',
+    [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')]
+    [string]$Repository = 'jackgan90/Asterhand',
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*$')]
+    [string]$ReleaseTag = 'v0.1.0-alpha.1',
     [string]$PackagePath,
     [string]$ManifestPath,
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'Programs\Asterhand'),
@@ -13,6 +17,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
@@ -93,9 +98,7 @@ function Initialize-Tailscale([string]$Cache, $Dependency) {
     if (-not (Test-Path -LiteralPath $tailscale)) {
         Write-Host 'Cross-NAT access uses Tailscale. The official installer needs Windows administrator approval.'
         Write-Host 'It installs a system network service. Asterhand will not change your router or enable unattended mode.'
-        $choice = Read-Host "Install Tailscale $($Dependency.version) now? [Y/n]"
-        if ($choice -match '^[nN]') { throw 'Tailscale installation deferred. Run this installer again when ready, or use -SkipTailscale for an existing LAN.' }
-        $msi = Join-Path $Cache 'tailscale-setup-1.104.2-amd64.msi'
+        $msi = Join-Path $Cache ("tailscale-setup-$($Dependency.version)-amd64.msi")
         Get-VerifiedFile $Dependency.windows_amd64_url $msi $Dependency.windows_amd64_sha256
         $signature = Get-AuthenticodeSignature -LiteralPath $msi
         if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Tailscale') {
@@ -105,18 +108,63 @@ function Initialize-Tailscale([string]$Cache, $Dependency) {
         if ($installer.ExitCode -notin @(0, 3010)) { throw "Tailscale install failed: $($installer.ExitCode)" }
         if ($installer.ExitCode -eq 3010) { Write-Warning 'Windows requested a restart to finish Tailscale installation.' }
     } else { Write-Host 'Reusing the installed Tailscale client; it will not be upgraded automatically.' }
-    $savedPreference = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = 'Continue'
-        $statusText = & $tailscale status --json 2>$null
-    } finally { $ErrorActionPreference = $savedPreference }
-    $status = $null
-    try { $status = $statusText | ConvertFrom-Json } catch { }
-    if ($null -eq $status -or $status.BackendState -ne 'Running') {
-        Write-Host 'Sign in to the same Tailscale account / Tailnet on A and B. Complete authentication in your browser.'
-        & $tailscale up --timeout=5m
-        if ($LASTEXITCODE -ne 0) { throw 'Tailscale login is incomplete. Open Tailscale, sign in, then rerun install.ps1.' }
+    if (-not (Test-Path -LiteralPath $tailscale)) { throw 'Tailscale installation did not produce the expected client. Restart Windows if requested, then rerun install.ps1.' }
+    & $tailscale version
+    if ($LASTEXITCODE -ne 0) { throw 'Installed Tailscale client failed its version check.' }
+}
+
+function Get-InstalledVCRuntime {
+    $newest = $null
+    foreach ($view in @([Microsoft.Win32.RegistryView]::Registry64, [Microsoft.Win32.RegistryView]::Registry32)) {
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, $view)
+        try {
+            $key = $base.OpenSubKey('SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64')
+            if ($null -eq $key) { continue }
+            try {
+                if ($key.GetValue('Installed') -ne 1) { continue }
+                $version = $null
+                if ([version]::TryParse(([string]$key.GetValue('Version')).TrimStart('v'), [ref]$version)) {
+                    if ($null -eq $newest -or $version -gt $newest) { $newest = $version }
+                }
+            } finally { $key.Dispose() }
+        } finally { $base.Dispose() }
     }
+    return $newest
+}
+
+function Initialize-VCRuntime([string]$Cache, $Dependency) {
+    $minimum = [version]$Dependency.version
+    $installed = Get-InstalledVCRuntime
+    if ($null -ne $installed -and $installed -ge $minimum) {
+        Write-Host "Reusing Microsoft VC++ x64 runtime $installed."
+        return
+    }
+    Write-Host "Native runtime components require Microsoft VC++ x64 $minimum. Windows administrator approval is required."
+    $installerPath = Join-Path $Cache ("vc_redist.$minimum.x64.exe")
+    Get-VerifiedFile $Dependency.windows_amd64_url $installerPath $Dependency.windows_amd64_sha256
+    $signature = Get-AuthenticodeSignature -LiteralPath $installerPath
+    if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') {
+        throw 'The VC++ runtime installer signature is not valid for Microsoft.'
+    }
+    $installer = Start-Process $installerPath -ArgumentList @('/install', '/passive', '/norestart') -Verb RunAs -WindowStyle Hidden -Wait -PassThru
+    if ($installer.ExitCode -notin @(0, 3010, 1638)) { throw "VC++ runtime installation failed: $($installer.ExitCode)" }
+    $installed = Get-InstalledVCRuntime
+    if ($null -eq $installed -or $installed -lt $minimum) { throw 'Microsoft VC++ runtime is still missing or too old. Restart Windows if requested, then rerun install.ps1.' }
+    if ($installer.ExitCode -eq 3010) { Write-Warning 'Windows requested a restart to complete the VC++ runtime installation.' }
+}
+
+function Test-WindowsNativeModules([string]$Directory, $Dependencies) {
+    $paths = @()
+    foreach ($module in $Dependencies.windows_native_modules) {
+        if ($module -notmatch '^runtime/node_modules/[A-Za-z0-9@_./-]+\.node$' -or $module -match '(^|/)\.\.(/|$)') { throw 'Invalid native module check path.' }
+        $path = Assert-ChildPath (Join-Path $Directory $module) $Directory
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing native runtime module: $module" }
+        $paths += $path
+    }
+    if ($paths.Count -eq 0) { throw 'The Windows bundle must declare native component checks.' }
+    $node = Join-Path $Directory 'runtime/node/node.exe'
+    & $node -e 'for (const file of process.argv.slice(1)) require(file);' @paths
+    if ($LASTEXITCODE -ne 0) { throw 'Native runtime module loading failed. Check the Microsoft VC++ runtime installation.' }
 }
 
 if ($PackagePath) { $PackagePath = Resolve-FileSystemPath $PackagePath }
@@ -134,7 +182,8 @@ New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 Set-Content -LiteralPath (Join-Path $InstallDir '.asterhand-install') -Value 'Asterhand installer schema 1' -Encoding ASCII
 $cache = Join-Path $InstallDir 'downloads'
 New-Item -ItemType Directory -Path $cache -Force | Out-Null
-$releaseBase = "https://github.com/jackgan90/Asterhand/releases/download/v$Version"
+if ($PSBoundParameters.ContainsKey('Version') -and -not $PSBoundParameters.ContainsKey('ReleaseTag')) { $ReleaseTag = 'v' + $Version }
+$releaseBase = "https://github.com/$Repository/releases/download/$ReleaseTag"
 if (-not $ManifestPath) {
     if ($PackagePath) { $ManifestPath = Join-Path (Split-Path -Parent $PackagePath) 'release-manifest.json' }
     else {
@@ -170,10 +219,13 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Bundled dependency check failed.' }
         Move-Item -LiteralPath $staging -Destination $versionDir
     }
-        $candidate = Join-Path $versionDir 'asterhand.exe'
+    $candidate = Join-Path $versionDir 'asterhand.exe'
+    if ((& $candidate version) -ne $Version -or $LASTEXITCODE -ne 0) { throw 'Installed Asterhand version check failed.' }
     & $candidate bundle-check --directory $versionDir
     if ($LASTEXITCODE -ne 0) { throw 'Installed bundle health check failed.' }
     $dependencies = Get-Content -LiteralPath (Join-Path $versionDir 'packaging\dependencies.json') -Raw | ConvertFrom-Json
+    Initialize-VCRuntime $cache $dependencies.vc_runtime
+    Test-WindowsNativeModules $versionDir $dependencies
     if (-not $SkipTailscale) { Initialize-Tailscale $cache $dependencies.tailscale }
     New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
     $launch = @{ schema = 1; version = $Version; executable = (Join-Path $versionDir 'asterhand.exe'); data = $DataDir; package_sha256 = $package.sha256 }
@@ -196,7 +248,8 @@ try {
         Write-Host 'If peer connectivity is blocked, configure the narrow Tailscale-only firewall rule:'
         Write-Host "  & '$InstallDir\configure-firewall.ps1'"
     }
-    if (-not $NoStart) { & (Join-Path $InstallDir 'start.ps1') }
+    Write-Host 'Installation complete. Run start.ps1 when you are ready to configure this node.'
+    Write-Host 'Tailscale sign-in, model credentials, workspace authorization and pairing are separate setup steps.'
 } finally {
     if (Test-Path -LiteralPath $staging) {
         $safeStaging = Assert-ChildPath $staging $InstallDir

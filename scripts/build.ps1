@@ -60,6 +60,9 @@ function Copy-GoLicenses([string]$Stage) {
         $notices = @(Get-ChildItem -LiteralPath $parts[2] -File | Where-Object { $_.Name -match '^(LICENSE|COPYING|NOTICE)' })
         if ($notices.Count -eq 0) { throw "Missing license notice for $($parts[0])" }
         $notices | Copy-Item -Destination $destination
+        if ($parts[0] -eq 'github.com/wailsapp/go-webview2') {
+            Copy-Item -LiteralPath (Join-Path $parts[2] 'webviewloader\LICENSE') -Destination (Join-Path $destination 'webviewloader-LICENSE')
+        }
     }
     $goRoot = & $Go env GOROOT
     Copy-Item -LiteralPath (Join-Path $goRoot 'LICENSE') -Destination (Join-Path $licenseRoot 'Go-LICENSE')

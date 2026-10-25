@@ -2,6 +2,8 @@
 // It owns no task state and never uses a remote control endpoint to stop a node.
 package desktop
 
+import "github.com/jackgan90/Asterhand/internal/quickinput"
+
 type State struct {
 	Name     string
 	Ready    bool
@@ -14,6 +16,7 @@ type Options struct {
 	LogDirectory string
 	Stop         func(confirmed bool) bool
 	CleanupDone  <-chan struct{}
+	Input        *quickinput.Controller
 }
 
 func (s State) text() string {

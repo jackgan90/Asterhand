@@ -25,6 +25,9 @@ type Catalog struct {
 	Node       Component   `json:"node"`
 	Components []Component `json:"components"`
 	Bundle     Bundle      `json:"bundle"`
+	WebView2   struct {
+		MinimumRuntimeVersion string `json:"minimum_runtime_version"`
+	} `json:"webview2"`
 }
 
 type Target struct {

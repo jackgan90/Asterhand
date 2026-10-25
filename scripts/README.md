@@ -53,6 +53,8 @@ powershell.exe -NoProfile -File .\scripts\test-install-paths.ps1 -Installer .\in
 
 ## Windows 桌面与图标验证
 
+`test-quick-input.ps1 -Go go -OutputDirectory .\out\quick-input-validation -Desktop -Cycles 100` 运行隔离快捷输入测试：真实跨进程冲突、Ctrl+Alt+J 派发/录制/去重、WebView2 草稿/主题/来源保护，以及显式选择的 100 次资源归还。默认不执行成本循环，未选择 Desktop 时原生用例明确跳过；不调用模型。`test-installer-webview2.ps1` 支持 PowerShell 5.1/7，用 mock 验证共享 Runtime 复用与安装失败边界，不改变系统。详细前提和生成物见[快捷输入验证](../docs/development/features/global-hotkey-quick-input/validation.md)。
+
 `build-icons.ps1` 从 [透明 PNG 源](../internal/desktop/assets/README.md) 生成多尺寸应用/托盘 ICO；修改 PNG 后须先显式运行该脚本并保存更新后的 ICO。`build.ps1` 编译时嵌入现有托盘 ICO，随后调用 `set-executable-icon.ps1`，用 Windows 资源 API 给节点和启动器嵌入现有应用 ICO；不要求额外资源编译器或运行时。`test-icon-resources.ps1` 验证透明度、ICO 帧与可执行文件资源往返，生成用于人工检查的尺寸预览，支持 Windows PowerShell 5.1 和 PowerShell 7：
 
 ```powershell

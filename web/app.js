@@ -1,4 +1,5 @@
 import { taskViews, submissionState } from "./view-model.mjs";
+import { desktopSettings } from "./desktop-settings.mjs";
 
 const $ = (s, root = document) => root.querySelector(s);
 const states = {
@@ -43,12 +44,16 @@ async function api(path, options = {}) {
   };
   const response = await fetch(path, { ...options, headers });
   const data = await response.json();
-  if (!response.ok)
-    throw new Error(data.error || `请求失败 (${response.status})`);
+  if (!response.ok) {
+    const error = new Error(data.error || `请求失败 (${response.status})`);
+    error.status = response.status;
+    throw error;
+  }
   return data;
 }
 const post = (path, data = {}) =>
   api(path, { method: "POST", body: JSON.stringify(data) });
+const desktop = desktopSettings(api, post);
 async function guarded(fn) {
   try {
     await fn();
@@ -414,6 +419,7 @@ async function showDetail(job, out) {
   }
 }
 async function openSettings() {
+  void desktop.open();
   const data = await api("/api/settings"),
     c = data.config,
     form = $("#settings-form");
@@ -473,6 +479,7 @@ async function openSettings() {
   $("#runtime-status").textContent =
     `节点 ${c.node_id} · 本机数据 ${data.home}`;
   dialog("#settings");
+  $("#settings").scrollTop = 0;
   await updateProbe();
   const network = await api("/api/network");
   $("#network-status").textContent =

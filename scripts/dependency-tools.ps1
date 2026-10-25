@@ -31,6 +31,12 @@ function Read-DependencyCatalog([string]$Path) {
         }
     }
     if (@($catalog.windows_native_modules).Count -eq 0) { throw 'Windows native component checks are required.' }
+    if ($catalog.PSObject.Properties['webview2']) {
+        $wv = $catalog.webview2
+        if ($wv.version -notmatch '^\d+\.\d+\.\d+\.\d+$' -or $wv.minimum_runtime_version -notmatch '^\d+\.\d+\.\d+\.\d+$' -or
+            $wv.windows_amd64_url -notmatch '^https://msedge\.[a-z.]+/filestreamingservice/files/[a-f0-9-]+/MicrosoftEdgeWebView2RuntimeInstallerX64\.exe$' -or
+            $wv.windows_amd64_sha256 -notmatch '^[a-fA-F0-9]{64}$') { throw 'WebView2 requires fixed official installer metadata and a minimum Runtime version.' }
+    }
     foreach ($module in $catalog.windows_native_modules) {
         if ($module -notmatch '^runtime/node_modules/[A-Za-z0-9@_./-]+\.node$' -or $module -match '(^|/)\.\.(/|$)') { throw 'Invalid Windows native component check path.' }
     }

@@ -12,6 +12,8 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/jackgan90/Asterhand/internal/quickinput"
+
 	"golang.org/x/sys/windows"
 )
 
@@ -33,13 +35,15 @@ type Tray struct {
 	registered     bool
 	lastTip        string
 	menuActive     bool
+	inputCommands  chan hotkeyRequest
+	nextHotkey     int
 }
 
 func Start(options Options) (*Tray, error) {
 	if options.State == nil || options.OpenWeb == nil || options.Stop == nil {
 		return nil, fmt.Errorf("托盘缺少节点生命周期回调")
 	}
-	t := &Tray{options: options, done: make(chan struct{})}
+	t := &Tray{options: options, done: make(chan struct{}), inputCommands: make(chan hotkeyRequest, 32), nextHotkey: 100}
 	ready := make(chan error, 1)
 	go t.run(ready)
 	if err := <-ready; err != nil {
@@ -120,6 +124,9 @@ func (t *Tray) initialize() error {
 	}
 	// Explorer may not exist yet during sign-in. Retry without restarting the node.
 	t.updateIcon()
+	if t.options.Input != nil {
+		t.options.Input.Attach(&trayRegistrar{t}, quickinput.NativeFactory(t.options.Input))
+	}
 	return nil
 }
 
@@ -155,6 +162,17 @@ func trayWindowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintpt
 		return 0
 	}
 	switch message {
+	case wmInputCommand:
+		select {
+		case request := <-t.inputCommands:
+			id, err := request.fn()
+			request.result <- hotkeyResult{id, err}
+		default:
+		}
+	case 0x0312: // WM_HOTKEY; provisional and retired IDs are ignored by the controller.
+		if t.options.Input != nil {
+			t.options.Input.OnHotkey(int(wParam), uint32(lParam&0xffff), uint32(lParam>>16))
+		}
 	case wmTray:
 		t.handleIconEvent(uint32(lParam & 0xffff))
 	case wmTimer:

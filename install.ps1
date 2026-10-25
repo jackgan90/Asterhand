@@ -214,6 +214,48 @@ function Initialize-VCRuntime([string]$Cache, $Dependency) {
     if ($installer.ExitCode -eq 3010) { Write-Warning 'Windows requested a restart to complete the VC++ runtime installation.' }
 }
 
+function Get-InstalledWebView2 {
+    $newest = $null
+    # Match the pure-Go loader: stable Runtime, system installation before user.
+    foreach ($hive in @([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryHive]::CurrentUser)) {
+        foreach ($view in @([Microsoft.Win32.RegistryView]::Registry32)) {
+            $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($hive, $view)
+            try {
+                $key = $base.OpenSubKey('SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}')
+                if ($null -eq $key) { continue }
+                try {
+                    $version = $null
+                    if ([version]::TryParse([string]$key.GetValue('pv'), [ref]$version)) {
+                        if ($version -gt [version]'0.0.0.0') { return $version }
+                    }
+                } finally { $key.Dispose() }
+            } finally { $base.Dispose() }
+        }
+    }
+    return $newest
+}
+
+function Initialize-WebView2([string]$Cache, $Dependency) {
+    $minimum = [version]$Dependency.minimum_runtime_version
+    $installed = Get-InstalledWebView2
+    if ($null -ne $installed -and $installed -ge $minimum) {
+        Write-Host "Reusing shared WebView2 Runtime $installed; its update policy is unchanged."
+        return
+    }
+    $installerPath = Join-Path $Cache ("webview2-standalone-$($Dependency.version)-x64.exe")
+    Get-VerifiedFile $Dependency.windows_amd64_url $installerPath $Dependency.windows_amd64_sha256
+    $signature = Get-AuthenticodeSignature -LiteralPath $installerPath
+    if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') {
+        throw 'The WebView2 standalone installer signature is not valid for Microsoft.'
+    }
+    # A standard-user invocation installs per-user. Never request elevation or
+    # change the shared updater policy, and never restart the active node here.
+    $installer = Start-Process $installerPath -ArgumentList @('/silent', '/install') -WindowStyle Hidden -Wait -PassThru
+    if ($installer.ExitCode -ne 0) { throw "WebView2 preparation failed ($($installer.ExitCode)); the running node was retained. Complete any Windows restart separately, then retry." }
+    $installed = Get-InstalledWebView2
+    if ($null -eq $installed -or $installed -lt $minimum) { throw 'WebView2 is still unavailable; the running node was retained.' }
+}
+
 function Test-WindowsNativeModules([string]$Directory, $Dependencies) {
     $paths = @()
     foreach ($module in $Dependencies.windows_native_modules) {
@@ -591,6 +633,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Installed bundle health check failed.' }
     $dependencies = Get-Content -LiteralPath (Join-Path $versionDir 'packaging\dependencies.json') -Raw | ConvertFrom-Json
     Initialize-VCRuntime $cache $dependencies.vc_runtime
+    if ($dependencies.PSObject.Properties['webview2']) { Initialize-WebView2 $cache $dependencies.webview2 }
     Test-WindowsNativeModules $versionDir $dependencies
     if (-not $SkipTailscale) { Initialize-Tailscale $cache $dependencies.tailscale }
     $guardPath = Join-Path $InstallDir '.activation.lock'

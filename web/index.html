@@ -80,15 +80,37 @@
       </section>
     </main>
     <dialog id="settings">
+      <div class="dialog-title settings-header"><h2>节点设置</h2><button type="button" data-close="settings" class="quiet">关闭</button></div>
+      <section id="desktop-settings" class="desktop-settings" aria-labelledby="desktop-title">
+        <p class="eyebrow">仅本机 · Windows</p>
+        <h2 id="desktop-title">快捷输入</h2>
+        <p>随时呼出一个文本面板。Enter 换行，Esc 收起，草稿保留到本次运行结束。</p>
+        <div id="desktop-state" class="status-box" role="status">正在读取桌面状态…</div>
+        <form id="desktop-form">
+          <fieldset id="desktop-fields">
+            <label class="checkbox"><input type="checkbox" name="enabled">启用全局快捷输入</label>
+            <label>快捷键<input id="desktop-record" readonly aria-label="录制快捷键" placeholder="点击录制后按下组合"></label>
+            <div class="actions"><button type="button" id="desktop-record-start" class="secondary">录制快捷键</button><button type="button" id="desktop-record-cancel" class="quiet" hidden>取消录制</button></div>
+            <small id="desktop-record-status" role="status">也可使用下面的选择器。至少选择 Ctrl 或 Alt。</small>
+            <div class="desktop-modifiers">
+              <label class="checkbox"><input name="ctrl" type="checkbox">Ctrl</label>
+              <label class="checkbox"><input name="alt" type="checkbox">Alt</label>
+              <label class="checkbox"><input name="shift" type="checkbox">Shift</label>
+            </div>
+            <label>按键<select name="key" id="desktop-key"></select></label>
+            <label>面板主题<select name="theme"><option value="star">星核 · 深空霓光</option><option value="frost">霜蓝 · 明亮科技</option></select></label>
+            <div class="actions"><button type="submit" id="desktop-save">保存并应用</button><button type="button" id="desktop-check" class="secondary">检查占用</button><button type="button" id="desktop-retry" class="quiet">重试生效</button><button type="button" id="desktop-reset" class="quiet">恢复默认</button></div>
+          </fieldset>
+        </form>
+        <small>设置只保存在当前节点；系统占用以实际注册结果为准。检查成功表示此刻可用。</small>
+        <hr>
+      </section>
       <form id="settings-form">
         <div class="dialog-title">
           <div>
             <p class="eyebrow">本机配置</p>
             <h2>准备好你的节点</h2>
           </div>
-          <button type="button" data-close="settings" class="quiet">
-            关闭
-          </button>
         </div>
         <p>模型凭据只保存在本机。Windows 使用当前用户的 DPAPI 加密。</p>
         <label

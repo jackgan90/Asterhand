@@ -10,6 +10,7 @@ Asterhand 让自己的设备通过自然语言协作。A 提交任务，B 用自
 - 授权目录内创建和读取 UTF-8 文本，提供实际路径、文件大小、内容摘要和预览；创建操作拒绝覆盖已有文件。
 - 节点配对、远端任务、普通问答、取消、断线补读和重启后的人工对账。
 - Windows 原生启动入口与系统托盘；桌面图标可选创建，运行时可从托盘打开 Web 或退出节点。
+- Windows 全局快捷输入：默认 Ctrl+Alt+J 呼出多行文本面板，支持两种内置主题；在 Web「节点设置 → 快捷输入」自定义组合、检查占用并持久保存本机设置。
 - 每个节点使用自己的凭据和授权目录；Windows 使用当前用户 DPAPI 保护秘密，节点间使用 TLS 与固定证书。
 - 首版每节点一个执行槽、一个授权目录，文件最大 64 KiB；删除文件、任意 shell 和具体 coding harness 尚未提供。
 
@@ -25,7 +26,7 @@ irm https://raw.githubusercontent.com/jackgan90/Asterhand/main/install.ps1 -Erro
 
 `irm` 下载脚本，`iex` 在内存中执行，无需手动保存文件。指定版本或标签的一行命令见 [安装指南](docs/installation/quickstart.md)。版本必须已公开发布；没有稳定版时，可显式选择已发布的预发布版。
 
-脚本解析目标后下载同一标签的完整包，包含 Node.js、OpenClaw 和模型插件，并补齐 Microsoft VC++ x64 运行库与 Tailscale。安装可选择创建桌面图标，也可显式传入 `-DesktopShortcut Create` 或 `Skip`；完成后退出，不启动节点、不要求模型凭据或网络登录。用户随后双击桌面图标，或运行安装目录的 `AsterhandLauncher.exe` / `start.ps1`。让 A、B 加入同一 Tailscale 网络，在各自设置页配置凭据、授权目录并验证，再用 B 生成的配对码在 A 配对。桌面选择、旧包兼容和本地包模式见安装指南。
+脚本解析目标后下载同一标签的完整包，包含 Node.js、OpenClaw 和模型插件，并补齐 Microsoft VC++ x64 运行库、WebView2 Runtime 与 Tailscale。安装可选择创建桌面图标，也可显式传入 `-DesktopShortcut Create` 或 `Skip`；完成后退出，不启动节点、不要求模型凭据或网络登录。用户随后双击桌面图标，或运行安装目录的 `AsterhandLauncher.exe` / `start.ps1`。让 A、B 加入同一 Tailscale 网络，在各自设置页配置凭据、授权目录并验证，再用 B 生成的配对码在 A 配对。桌面选择、旧包兼容和本地包模式见安装指南。
 
 在 A 选择 B，发送“在授权目录新建 hello-world.txt，内容精确为 hello world，不添加换行或 BOM”。成功后检查 B 的实际文件及页面显示的 11 字节结果。完整步骤见 [安装、升级与诊断](docs/installation/quickstart.md)。
 

@@ -42,6 +42,7 @@ func runNode(c *config.Manager, open bool) error {
 		LogDirectory: c.Home,
 		Stop:         a.RequestStop,
 		CleanupDone:  cleanupDone,
+		Input:        a.Input,
 	})
 	if err != nil {
 		a.Close()

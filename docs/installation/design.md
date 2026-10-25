@@ -1,5 +1,11 @@
 # 安装与环境设计
 
+## 快捷输入宿主
+
+Windows 快捷输入由节点内独立 STA 宿主承载，热键注册归现有托盘 OS 线程；控制器负责本地配置事务、录制租约与故障降级。宿主保持 CGO_ENABLED=0，使用固定 Go WebView2 loader/COM bridge 与经官方 SDK 校验的窄接口，go.mod/go.sum 锁定版本与摘要，构建保留 MIT/ISC 许可证。Evergreen Runtime 检测实际版本和最低 API 能力，安装材料固定来源/版本/摘要；补齐失败保留在线节点，运行中更新不重启任务节点。依赖与分发边界见[宿主依赖说明](../../packaging/webview2.md)。
+
+快捷键、主题保存在节点数据目录的独立 desktop-settings.json，profile 为同目录的专用受保护子目录；程序升级不复制真实 Edge profile，不卸载共享 Runtime。标准权限交互会话启用面板，管理员/非交互环境和依赖失败报告具体降级状态，现有 Web、托盘和任务继续。
+
 范围：Windows 安装、启动、诊断与构建；使用 schema 2 包描述。验证方法见 [安装路径](../development/features/installer-path-resolution/plan.md) 与 [公共包契约](../development/features/provider-neutral-flows/validation.md)。
 
 ## 发布与安装边界

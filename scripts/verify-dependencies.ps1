@@ -42,7 +42,7 @@ try {
         $node = Join-Path $NodeDistribution 'node.exe'
         & $node --check (Join-Path $repo 'web\app.js')
         if ($LASTEXITCODE -ne 0) { throw 'Web JavaScript syntax failed.' }
-        & $node --test (Join-Path $repo 'tests\plugin-contract.test.mjs') (Join-Path $repo 'tests\web-state.test.mjs')
+        & $node --test (Join-Path $repo 'tests\plugin-contract.test.mjs') (Join-Path $repo 'tests\web-state.test.mjs') (Join-Path $repo 'tests\quick-input.test.mjs') (Join-Path $repo 'tests\desktop-settings.test.mjs')
         if ($LASTEXITCODE -ne 0) { throw 'Tool plugin contract failed.' }
     }
     if ($LiveHome -and $LiveAddress) {

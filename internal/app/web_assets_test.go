@@ -20,7 +20,7 @@ func TestWebModulesUseExecutableMIMEWithNoSniff(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = mime.AddExtensionType(".mjs", previous) })
 	a := &App{webAddress: "127.0.0.1:17432"}
-	for _, path := range []string{"/app.js", "/view-model.mjs"} {
+	for _, path := range []string{"/app.js", "/view-model.mjs", "/desktop-settings.mjs"} {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
 			t.Run(method+path, func(t *testing.T) {
 				r := httptest.NewRequest(method, "http://"+a.webAddress+path, nil)
@@ -33,7 +33,11 @@ func TestWebModulesUseExecutableMIMEWithNoSniff(t *testing.T) {
 				if w.Header().Get("X-Content-Type-Options") != "nosniff" {
 					t.Fatal("module response removed nosniff")
 				}
-				if method == http.MethodGet && !strings.Contains(w.Body.String(), "taskViews") {
+				expected := "taskViews"
+				if path == "/desktop-settings.mjs" {
+					expected = "desktopSettings"
+				}
+				if method == http.MethodGet && !strings.Contains(w.Body.String(), expected) {
 					t.Fatal("module content missing")
 				}
 				if method == http.MethodHead && w.Body.Len() != 0 {

@@ -16,6 +16,7 @@ const (
 	wmDPIChanged      = 0x02E0
 	wmTray            = 0x8001
 	wmDispose         = 0x8002
+	wmInputCommand    = 0x8003
 	ninKeySelect      = 0x0401
 	nimAdd            = 0
 	nimModify         = 1

@@ -8,7 +8,7 @@ $repo = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'release-prepare.ps1')
 $catalog = Read-DependencyCatalog (Join-Path $repo 'packaging/dependencies.json')
 $builderGo = Get-ReleaseGo $catalog $Workspace $Go
-foreach ($name in @('vc_runtime', 'tailscale')) {
+foreach ($name in @('vc_runtime', 'tailscale', 'webview2')) {
     $dependency = $catalog.$name
     $extension = if ($name -eq 'tailscale') { '.msi' } else { '.exe' }
     $file = Join-Path $Workspace ($name + $extension)

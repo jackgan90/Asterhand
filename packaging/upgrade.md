@@ -39,4 +39,6 @@ LiveHome 必须属于当前用户并与地址对应；脚本只读取本机 Web 
 
 ## 回退边界
 
-版本目录保留，数据目录独立。安装器不自动停止或热替换现有进程，升级后由用户控制停止和启动。数据库遇到较新 schema 会拒绝打开；二进制回退不保证数据兼容，升级前应停机备份。当前没有自动回滚命令。
+版本目录保留，数据目录独立。安装器默认保留运行节点；显式 StopRunning/StartAfterInstall 沿用归属核对与正常退出流程，不热替换进程。数据库遇到较新 schema 会拒绝打开；二进制回退不保证数据兼容，升级前应停机备份。当前没有自动回滚命令。
+
+快捷输入还依赖[WebView2 宿主与共享 Runtime](webview2.md)。更新安装材料时保留固定官方 URL、摘要和签名验证，区分安装器外壳版本与 Runtime 版本；go.mod/go.sum 锁定 loader/bridge，构建收集 MIT/ISC 许可证。升级保留 desktop-settings.json 和专用 profile，不卸载或降级共享 Runtime。

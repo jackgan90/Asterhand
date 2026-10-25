@@ -6,6 +6,8 @@
 /coverage/
 /test-results/
 /playwright-report/
+/.playwright-cli/
+/output/playwright/
 /node_modules/
 /web/node_modules/
 /web/dist/

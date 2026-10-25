@@ -1,0 +1,47 @@
+:root {
+  color-scheme: dark;
+  --bg: #0d1421; --fg: #edf5ff; --muted: #a9bdd6;
+  --line: #35475e; --accent: #76e1ff;
+  font: 14px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); }
+main {
+  height: 100vh; border: 1px solid var(--line); border-radius: 15px;
+  overflow: hidden; position: relative;
+  background: radial-gradient(ellipse at 90% 0, #a28fff35, transparent 55%),
+    radial-gradient(ellipse at 10% 100%, #62dcff20, transparent 60%);
+}
+main::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(#76e1ff07 1px, transparent 1px),
+    linear-gradient(90deg, #76e1ff07 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: linear-gradient(to bottom, black, transparent 80%);
+}
+header, footer {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 15px 20px; position: relative;
+}
+header strong { color: var(--accent); font-weight: 600; letter-spacing: .06em; }
+header strong::before { content: "◈"; margin-right: 9px; text-shadow: 0 0 14px #76e1ff99; }
+header span, footer { color: var(--muted); font-size: 12px; }
+textarea {
+  display: block; width: calc(100% - 40px); height: calc(100vh - 108px);
+  min-height: 60px; margin: 0 20px; padding: 8px 0; position: relative;
+  border: 0; background: transparent; color: var(--fg);
+  font: 18px/1.65 "Segoe UI", "Microsoft YaHei", sans-serif; resize: none;
+  caret-color: var(--accent); outline: 0;
+}
+textarea::placeholder { color: var(--muted); }
+textarea:focus-visible { box-shadow: inset 0 -1px var(--accent); }
+footer { border-top: 1px solid var(--line); box-shadow: 0 -12px 40px #76e1ff07; }
+#status { text-align: right; }
+:root[data-theme=frost] {
+  color-scheme: light; --bg: #f1f7ff; --fg: #172f49; --muted: #4e6680;
+  --line: #b5cce3; --accent: #22618e;
+}
+@media (forced-colors: active) {
+  main { background: Canvas; } header strong { color: CanvasText; }
+  textarea:focus-visible { outline: 1px solid Highlight; }
+}

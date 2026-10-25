@@ -48,6 +48,13 @@ func (t *Tray) showMenu() {
 		flags = 1
 	}
 	menuItem(menu, flags, menuOpen, "打开 Asterhand")
+	if t.options.Input != nil {
+		input := t.options.Input.Status()
+		menuItem(menu, flags, 4, "快捷输入 · "+input.Desired.Binding.String())
+		if input.Error != "" {
+			menuItem(menu, 1, 0, "快捷输入需要处理：请打开 Web 设置")
+		}
+	}
 	menuItem(menu, 0, menuLogs, "打开日志目录")
 	menuItem(menu, 0x800, 0, "")
 	menuItem(menu, flags, menuExit, "退出 Asterhand")
@@ -59,6 +66,12 @@ func (t *Tray) showMenu() {
 	// The null message lets Windows dismiss the next menu normally (Shell rule).
 	postMessage.Call(hwnd, 0, 0, 0)
 	switch command {
+	case 4:
+		go func() {
+			if err := t.options.Input.Open(); err != nil {
+				Error(err.Error(), t.options.LogDirectory)
+			}
+		}()
 	case menuOpen:
 		t.openWeb()
 	case menuLogs:

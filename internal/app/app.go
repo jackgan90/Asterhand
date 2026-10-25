@@ -17,6 +17,7 @@ import (
 	"github.com/jackgan90/Asterhand/internal/executor"
 	"github.com/jackgan90/Asterhand/internal/model"
 	"github.com/jackgan90/Asterhand/internal/peer"
+	"github.com/jackgan90/Asterhand/internal/quickinput"
 	"github.com/jackgan90/Asterhand/internal/store"
 	"github.com/jackgan90/Asterhand/internal/tasks"
 )
@@ -26,28 +27,30 @@ type session struct {
 	csrf    string
 }
 type App struct {
-	Config       *config.Manager
-	Store        *store.Store
-	Peers        *peer.Manager
-	Engine       *tasks.Engine
-	loginToken   string
-	mu           sync.Mutex
-	sessions     map[string]session
-	probeTokens  map[string]bool
-	probeRunning bool
-	probeStatus  string
-	probeError   string
-	webAddress   string
-	peerAddress  string
-	wg           sync.WaitGroup
-	cancel       context.CancelFunc
-	done         <-chan struct{}
-	ctx          context.Context
-	peerSync     chan struct{}
-	requests     requestGate
-	stopping     bool
-	closeOnce    sync.Once
-	closeErr     error
+	Config          *config.Manager
+	Store           *store.Store
+	Peers           *peer.Manager
+	Engine          *tasks.Engine
+	Input           *quickinput.Controller
+	desktopRequests chan struct{}
+	loginToken      string
+	mu              sync.Mutex
+	sessions        map[string]session
+	probeTokens     map[string]bool
+	probeRunning    bool
+	probeStatus     string
+	probeError      string
+	webAddress      string
+	peerAddress     string
+	wg              sync.WaitGroup
+	cancel          context.CancelFunc
+	done            <-chan struct{}
+	ctx             context.Context
+	peerSync        chan struct{}
+	requests        requestGate
+	stopping        bool
+	closeOnce       sync.Once
+	closeErr        error
 }
 
 func New(c *config.Manager, x executor.Executor) (*App, error) {
@@ -85,6 +88,8 @@ func New(c *config.Manager, x executor.Executor) (*App, error) {
 		return nil, err
 	}
 	a.loginToken = string(b)
+	a.Input = quickinput.New(c.Home)
+	a.desktopRequests = make(chan struct{}, 8)
 	return a, nil
 }
 func (a *App) Start(ctx context.Context) (string, error) {
@@ -144,6 +149,9 @@ func (a *App) Close() error {
 		a.RequestStop(true)
 		a.requests.wg.Wait()
 		a.wg.Wait()
+		if a.Input != nil {
+			a.Input.Close()
+		}
 		a.closeErr = a.Store.Close()
 	})
 	return a.closeErr

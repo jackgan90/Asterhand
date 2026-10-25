@@ -16,9 +16,11 @@
 | 仓库固定安装入口、默认 Latest 与显式版本选择 | [固定安装入口](features/stable-installer-entry/plan.md) |
 | 原生双击启动、可选桌面入口、节点托盘和统一退出 | [Windows 桌面启动与托盘生命周期](features/windows-desktop-lifecycle/plan.md) |
 | 当前源码双击安装、显式停止与安装后启动、PowerShell 下载引导 | [本地一键安装与在线引导](features/local-install-entry/plan.md) |
+| Ctrl+Alt+J 全局呼出、本地自定义与冲突检测、科技风文本浮层（首版用户验收完成） | [本机全局快捷输入](features/global-hotkey-quick-input/plan.md) |
 
 ## 后续验证与功能
 
+- 快捷输入的隐藏 CPU 成本优化，以及物理 IME、多屏/DPI/锁屏、干净 Windows Runtime 安装和双机专项验证，范围见[快捷输入验证](features/global-hotkey-quick-input/validation.md)。
 - Windows 桌面专项验收：Explorer 重启、注销、深浅主题与 DPI，以及两台 Windows + OpenClaw + DeepSeek 下的退出与恢复；工程测试和合成系统消息的边界见 [桌面启动验证](features/windows-desktop-lifecycle/validation.md)。
 - Linux/macOS 平台准备器、构建器、安装入口与原生系统验证；平台注册表在验证前保持禁用。
 - 手机远程访问的认证、部署方式和物理设备测试。

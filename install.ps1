@@ -1,12 +1,12 @@
 #requires -Version 5.1
 [CmdletBinding()]
 param(
-    [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.]+)?$')]
-    [string]$Version = '0.1.0-alpha.1',
+    [ValidatePattern('^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$')]
+    [string]$Version,
     [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')]
     [string]$Repository = 'jackgan90/Asterhand',
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*$')]
-    [string]$ReleaseTag = 'v0.1.0-alpha.1',
+    [string]$ReleaseTag,
     [string]$PackagePath,
     [string]$ManifestPath,
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'Programs\Asterhand'),
@@ -31,6 +31,52 @@ function Resolve-FileSystemPath([string]$Path) {
     $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path, [ref]$provider, [ref]$drive)
     if ($provider.Name -ne 'FileSystem') { throw 'Installation paths must use the FileSystem provider.' }
     return $resolved
+}
+
+function Get-InstallRelease([string]$Repository, [string]$Version, [string]$ReleaseTag,
+    [string]$PackagePath, [string]$ManifestPath, [string]$Cache) {
+    $requestedVersion = $Version -replace '^v', ''
+    if (-not $ManifestPath -and $PackagePath) {
+        $ManifestPath = Join-Path (Split-Path -Parent $PackagePath) 'release-manifest.json'
+    }
+    if (-not $ManifestPath) {
+        if ($requestedVersion -and -not $ReleaseTag) { $ReleaseTag = 'v' + $requestedVersion }
+        if (-not $ReleaseTag) {
+            try {
+                $latest = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repository/releases/latest" `
+                    -Headers @{Accept='application/vnd.github+json';'User-Agent'='Asterhand-Installer'} -TimeoutSec 30
+            } catch {
+                throw "Cannot resolve the latest stable release for $Repository. Check network/API availability and that a stable release exists. Use -Version or -ReleaseTag for a published prerelease. $($_.Exception.Message)"
+            }
+            if ($latest.draft -ne $false -or $latest.prerelease -ne $false) {
+                throw 'Latest must identify a published stable release.'
+            }
+            $ReleaseTag = [string]$latest.tag_name
+        }
+        if ($ReleaseTag -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { throw 'Invalid release tag.' }
+        $ManifestPath = Join-Path $Cache "manifest-$ReleaseTag.json"
+        Invoke-WebRequest -Uri "https://github.com/$Repository/releases/download/$ReleaseTag/release-manifest.json" `
+            -OutFile $ManifestPath -UseBasicParsing
+    }
+    $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+    if ($manifest.schema -ne 1 -or $manifest.version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$') {
+        throw 'Unsupported release manifest schema or version.'
+    }
+    if ($requestedVersion -and $manifest.version -ne $requestedVersion) { throw 'Release manifest version mismatch.' }
+    $manifestTag = $manifest.PSObject.Properties['tag']
+    $manifestRepository = $manifest.PSObject.Properties['repository']
+    if (-not $ReleaseTag) {
+        $ReleaseTag = if ($manifestTag) { [string]$manifestTag.Value } else { 'v' + $manifest.version }
+    }
+    if ($ReleaseTag -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { throw 'Invalid release tag.' }
+    if ($manifestTag -and $manifestTag.Value -ne $ReleaseTag) { throw 'Release manifest tag mismatch.' }
+    if ($manifestRepository -and $manifestRepository.Value -ne $Repository) { throw 'Release manifest repository mismatch.' }
+    return [pscustomobject]@{
+        version = [string]$manifest.version
+        tag = $ReleaseTag
+        base = "https://github.com/$Repository/releases/download/$ReleaseTag"
+        manifest = $manifest
+    }
 }
 
 function Resolve-AppDirectory([string]$Path) {
@@ -182,17 +228,12 @@ New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 Set-Content -LiteralPath (Join-Path $InstallDir '.asterhand-install') -Value 'Asterhand installer schema 1' -Encoding ASCII
 $cache = Join-Path $InstallDir 'downloads'
 New-Item -ItemType Directory -Path $cache -Force | Out-Null
-if ($PSBoundParameters.ContainsKey('Version') -and -not $PSBoundParameters.ContainsKey('ReleaseTag')) { $ReleaseTag = 'v' + $Version }
-$releaseBase = "https://github.com/$Repository/releases/download/$ReleaseTag"
-if (-not $ManifestPath) {
-    if ($PackagePath) { $ManifestPath = Join-Path (Split-Path -Parent $PackagePath) 'release-manifest.json' }
-    else {
-        $ManifestPath = Join-Path $cache "manifest-$Version.json"
-        Invoke-WebRequest -Uri "$releaseBase/release-manifest.json" -OutFile $ManifestPath -UseBasicParsing
-    }
-}
-$manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
-if ($manifest.schema -ne 1 -or $manifest.version -ne $Version) { throw 'Release manifest version mismatch.' }
+$release = Get-InstallRelease $Repository $Version $ReleaseTag $PackagePath $ManifestPath $cache
+$Version = $release.version
+$ReleaseTag = $release.tag
+$releaseBase = $release.base
+$manifest = $release.manifest
+Write-Host "Installing Asterhand $Version from $Repository ($ReleaseTag)."
 $package = @($manifest.packages | Where-Object { $_.os -eq 'windows' -and $_.arch -eq 'amd64' })
 if ($package.Count -ne 1 -or $package[0].sha256 -notmatch '^[a-fA-F0-9]{64}$') { throw 'Missing or invalid Windows package manifest.' }
 $package = $package[0]

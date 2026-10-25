@@ -6,7 +6,8 @@ param(
     [Parameter(Mandatory)][string]$OutputDirectory,
     [switch]$SkipTailscale,
     [switch]$RequireFreshDependencies,
-    [switch]$RequireFreshVCRuntime
+    [switch]$RequireFreshVCRuntime,
+    [string]$InstallerPath
 )
 $ErrorActionPreference = 'Stop'
 $OutputDirectory = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
@@ -18,6 +19,7 @@ $data = Join-Path $OutputDirectory 'data'
 $installer = Join-Path $OutputDirectory 'install.ps1'
 $reportPath = Join-Path $OutputDirectory 'download-install.json'
 $report = [ordered]@{status='running';repository=$Repository;tag=$Tag;os=[Environment]::OSVersion.VersionString;ps_version=$PSVersionTable.PSVersion.ToString();fresh_node_and_tailscale=[bool]$RequireFreshDependencies;tailscale='not_checked';vc_runtime_before='absent';vc_runtime_after='not_checked';configuration='not_checked';repeat_install='not_checked'}
+$report.installer_source = if ($InstallerPath) { 'local_candidate' } else { 'release_asset' }
 $savedPath = $env:PATH
 $savedProgress = $ProgressPreference
 try {
@@ -37,9 +39,11 @@ try {
         if (Get-Command $tool -CommandType Application -ErrorAction SilentlyContinue) { throw "Developer tool unexpectedly available to installer: $tool" }
     }
     $report.developer_tools_on_path = 'absent'
-    Invoke-WebRequest "https://github.com/$Repository/releases/download/$Tag/install.ps1" -OutFile $installer -UseBasicParsing
+    if ($InstallerPath) { Copy-Item -LiteralPath $InstallerPath -Destination $installer }
+    else { Invoke-WebRequest "https://github.com/$Repository/releases/download/$Tag/install.ps1" -OutFile $installer -UseBasicParsing }
+    $report.installer_sha256 = (Get-FileHash -LiteralPath $installer).Hash.ToLowerInvariant()
     $ps5 = Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe'
-    $arguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$installer,'-InstallDir',$program,'-DataDir',$data)
+    $arguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$installer,'-Repository',$Repository,'-ReleaseTag',$Tag,'-InstallDir',$program,'-DataDir',$data)
     if ($SkipTailscale) { $arguments += '-SkipTailscale' }
     & $ps5 @arguments | Tee-Object -FilePath (Join-Path $OutputDirectory 'first-install.log') | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'Downloaded installer failed.' }

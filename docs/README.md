@@ -33,6 +33,7 @@
 - [任务可靠性与配置保留](development/features/task-reliability/plan.md)、[Windows 安装路径解析](development/features/installer-path-resolution/plan.md)。
 - [双节点交互与连接同步](development/features/two-node-usability/plan.md)、[依赖维护流程](../packaging/upgrade.md)。
 - [可复现发布与独立安装](development/features/release-pipeline/plan.md)、[Release 发布指南](installation/releases.md)。
+- [固定安装入口与版本选择](development/features/stable-installer-entry/plan.md)。
 
 ## 组织规则
 

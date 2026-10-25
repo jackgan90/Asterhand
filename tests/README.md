@@ -13,3 +13,5 @@
 单机多实例包含 FakeExecutor，不能代替真实双 Windows。方法见 [双节点交互验证](../docs/development/features/two-node-usability/validation.md) 与 [任务可靠性验证](../docs/development/features/task-reliability/validation.md)，用户步骤见 [操作指南](../docs/installation/quickstart.md)。
 
 发布测试见 [发布与安装验证](../docs/development/features/release-pipeline/validation.md)：`test-release.ps1` 覆盖草稿失败恢复和附件不可覆盖；`test-release-download.ps1` 通过公开安装脚本验证匿名下载、无开发工具安装、配置分离及重复安装。Tailscale 首次安装在独立 Windows 环境执行，不修改开发者现有网络配置。
+
+固定入口的默认 Latest、显式版本/标签、本地清单推导和错误响应由 `test-installer-release-selection.ps1` 在 Windows PowerShell 5.1 验证。GitHub API 边界使用可控响应，真实下载回归另行运行；复现方法见 [固定安装入口计划](../docs/development/features/stable-installer-entry/plan.md)。

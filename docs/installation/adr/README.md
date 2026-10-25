@@ -4,5 +4,6 @@
 
 - [001-bootstrap-and-setup — 薄引导与能力化环境准备](001-bootstrap-and-setup.md)
 - [002-release-and-install-boundary — 版本化发布与安装配置分离](002-release-and-install-boundary.md)
+- [003-stable-installer-entry — 固定安装入口与版本解析](003-stable-installer-entry.md)
 
 新增决策使用 [ADR 模板](../../development/templates/adr.md)。历史决定通过新 ADR 替代，不改写历史理由。

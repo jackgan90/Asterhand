@@ -16,13 +16,15 @@ Asterhand 让自己的设备通过自然语言协作。A 提交任务，B 用自
 
 ## 安装与使用
 
-从所选 [GitHub Release](https://github.com/jackgan90/Asterhand/releases) 下载单独的 `install.ps1`，在 PowerShell 中运行：
+从仓库[固定安装入口](https://raw.githubusercontent.com/jackgan90/Asterhand/main/install.ps1) 下载 `install.ps1`，在 PowerShell 中运行，默认安装最新稳定 Release：
 
 ~~~powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ~~~
 
-脚本下载固定版本完整包，包含 Node.js、OpenClaw 和模型插件，并补齐 Microsoft VC++ x64 运行库与 Tailscale。安装完成后退出，不要求模型凭据或网络登录。用户随后运行安装目录的 `start.ps1`，让 A、B 加入同一 Tailscale 网络，在各自设置页配置凭据、授权目录并验证，再用 B 生成的配对码在 A 配对。只有已经公开的 Release 才能匿名下载安装；本地包模式见安装指南。
+指定版本可追加 `-Version 0.1.0-alpha.1`，也接受 `v` 前缀；自定义发布标签用 `-ReleaseTag <tag>`。版本和标签必须已在目标仓库公开发布。没有稳定版时默认安装会明确报错，可显式选择已发布的预发布版。
+
+脚本解析目标后下载同一标签的完整包，包含 Node.js、OpenClaw 和模型插件，并补齐 Microsoft VC++ x64 运行库与 Tailscale。安装完成后退出，不要求模型凭据或网络登录。用户随后运行安装目录的 `start.ps1`，让 A、B 加入同一 Tailscale 网络，在各自设置页配置凭据、授权目录并验证，再用 B 生成的配对码在 A 配对。本地包模式见安装指南。
 
 在 A 选择 B，发送“在授权目录新建 hello-world.txt，内容精确为 hello world，不添加换行或 BOM”。成功后检查 B 的实际文件及页面显示的 11 字节结果。完整步骤见 [安装、升级与诊断](docs/installation/quickstart.md)。
 

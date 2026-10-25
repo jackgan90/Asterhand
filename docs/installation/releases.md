@@ -31,7 +31,9 @@ Windows 准备阶段还下载并校验 Microsoft VC++ x64 与 Tailscale 官方�
 
 ## 附件与恢复
 
-附件包含 Windows 完整 ZIP、绑定仓库与标签的 install.ps1、清单、SHA256SUMS、依赖/平台描述、验证摘要、许可证、说明和公开下载测试脚本。第三方详细许可位于完整包内。Microsoft VC++ 与 Tailscale 不重新分发，安装器从固定供应商地址获取并检查 Authenticode 签名。VC++ 部署与版本检测依据 [Microsoft 部署文档](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files)。
+附件包含 Windows 完整 ZIP、面向目标仓库的 install.ps1 副本、清单、SHA256SUMS、依赖/平台描述、验证摘要、许可证、说明和公开下载测试脚本。入口脚本不绑定应用版本，默认 Latest；复现某次 Release 时显式使用 ReleaseTag。第三方详细许可位于完整包内。Microsoft VC++ 与 Tailscale 不重新分发，安装器从固定供应商地址获取并检查 Authenticode 签名。VC++ 部署与版本检测依据 [Microsoft 部署文档](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files)。
+
+普通用户从仓库默认分支的固定 raw URL 取得入口脚本，见 [安装指南](quickstart.md)。修改该入口必须推送源码后才对外生效，上传二进制 Release 不会自动更新默认分支。后续 Linux/macOS 入口同样保存在源码仓库，采用默认 Latest、显式版本与解析后固定标签的契约。
 
 上传先创建 Draft，逐项上传并下载回读核对大小和 SHA-256。任何步骤失败均保持草稿；不会用不同内容覆盖已存在附件，也不会修改已公开 Release。全部校验后才公开。网络中断后保留本地输出，可使用相同参数和 `-ResumeDirectory <原输出目录>` 继续；恢复前重新核对源码摘要、参数及本地附件摘要。源代码或附件变动时使用新输出目录及新标签。
 

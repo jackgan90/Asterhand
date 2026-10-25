@@ -4,8 +4,9 @@
 
 - [test-release.ps1](../../../../scripts/test-release.ps1)：禁用平台拒绝、本地内容篡改、标签提交冲突和注释标签解析、上传失败保留草稿、相同草稿重试、同大小远端篡改拒绝、公开版本拒绝覆盖；CLI 边界用可控替身，真实上传另外验证。
 - [test-installer-system-dependencies.ps1](../../../../scripts/test-installer-system-dependencies.ps1)：复用兼容 VC++、缺失时安装、旧版升级、错误签名拒绝、安装退出码与后置检查、原生模块路径越界；模拟 Windows 系统安装边界，不修改本机运行库。
+- [test-installer-release-selection.ps1](../../../../scripts/test-installer-release-selection.ps1)：Windows PowerShell 5.1 下的默认 Latest、指定版本、预发布版、自定义标签、本地清单推导与失败保护，使用可控 GitHub 响应。
 - [test-install.ps1](../../../../scripts/test-install.ps1)：Windows PowerShell 5.1 首次/重复安装、相对路径、中文空格目录、节点启动、身份与凭据保留；系统网络安装跳过。已有包可通过 PreviousPackageDirectory 增加升级验证。
-- [test-release-download.ps1](../../../../scripts/test-release-download.ps1)：只下载公开的安装脚本，通过隔离 PATH 验证无开发工具安装、组件检查、配置未初始化和重复安装数据保留。
+- [test-release-download.ps1](../../../../scripts/test-release-download.ps1)：默认下载公开安装脚本，也可用 InstallerPath 指定本地候选入口；总是显式传 Tag，通过隔离 PATH 验证无开发工具安装、组件检查、配置未初始化和重复安装数据保留。
 - [公开下载工作流](../../../../.github/workflows/release-install-smoke.yml)：在新 Windows 托管运行器运行完整 Tailscale 首次安装，工作流摘要显示具体系统和结果。
 
 ```powershell

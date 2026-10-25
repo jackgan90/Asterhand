@@ -9,7 +9,7 @@ $prepared = Get-Content .\out\prepared-upgrade\prepared.json -Raw | ConvertFrom-
 
 RuntimeRoot 包含 package.json、与 packaging/runtime-lock.json 完全匹配的 package-lock.json 和按锁安装的 node_modules；安装 OpenClaw 和 @openclaw/deepseek-provider 2026.10.7。NodeDistribution 使用依赖清单中已验证摘要的官方 Windows 发行目录。
 
-构建脚本验证版本与锁文件，产生 Windows 完整 ZIP、绑定版本的安装脚本、release-manifest.json、SHA256SUMS 和操作指南。当前正式构建不输出 Linux/macOS 安装包。out 下 staging 供人工检查，按需清理自己生成的目录。
+构建脚本验证版本与锁文件，产生 Windows 完整 ZIP、面向目标仓库的安装入口副本、包含仓库和标签的 release-manifest.json、SHA256SUMS 和操作指南。脚本默认 Latest，复现安装时显式传 ReleaseTag。当前正式构建不输出 Linux/macOS 安装包。out 下 staging 供人工检查，按需清理自己生成的目录。
 
 prepare-dependencies.ps1（隔离准备）、verify-dependencies.ps1（统一报告）、verify-live.ps1（真实 probe/文件/问答/取消）、test-install.ps1（PowerShell 5.1 安装/升级回归）、dependency-tools.ps1 / test-dependency-tools.ps1（共用清单检查与拒绝测试）。完整命令见 [升级流程](../packaging/upgrade.md)。
 
@@ -32,3 +32,5 @@ powershell.exe -NoProfile -File .\scripts\test-install-paths.ps1 -Installer .\in
 `release-prepare.ps1` 负责平台描述和源码/附件摘要；`prepare-release-windows.ps1` 负责 Windows 工具链和依赖准备；`release-github.ps1` 负责上传、回读验证与发布。`test-release.ps1` 验证失败保护，`test-release-download.ps1` 验证公开的单脚本安装。
 
 `test-installer-system-dependencies.ps1` 通过模拟边界检查 VC++ 缺失、复用、升级和失败处理。真正安装时会使用固定 Microsoft 安装器并验证原生模块加载；普通开发机回归应预先具有清单要求的 VC++ 版本，避免在工程测试中触发系统安装。Tailscale 与 VC++ 官方安装器在发布准备阶段均下载校验，但不进入 Release 附件。
+
+`test-installer-release-selection.ps1` 在 Windows PowerShell 5.1 验证固定入口的 Latest、指定版本、预发布版、自定义标签、本地清单与失败保护，GitHub 边界使用可控响应。`test-release-download.ps1 -InstallerPath <candidate-install.ps1>` 可使用本地候选入口安装真实公开包；省略 InstallerPath 时下载 Release 附件中的入口。该回归总是显式选择 Tag，以复现同一发布物。

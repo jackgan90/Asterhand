@@ -94,10 +94,10 @@ foreach ($entry in @(@{os='windows';file=$windowsName;profile='assistant'})) {
     $entry.size = $file.Length
     $packages += $entry
 }
-$manifest = @{schema=1;version=$version;source_sha256=$sourceDigest;catalog_sha256=(Get-FileHash (Join-Path $repo 'packaging\dependencies.json')).Hash.ToLowerInvariant();created_utc=[DateTime]::UtcNow.ToString('o');packages=$packages}
+$manifest = @{schema=1;version=$version;repository=$Repository;tag=$ReleaseTag;source_sha256=$sourceDigest;catalog_sha256=(Get-FileHash (Join-Path $repo 'packaging\dependencies.json')).Hash.ToLowerInvariant();created_utc=[DateTime]::UtcNow.ToString('o');packages=$packages}
 $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $OutputDir 'release-manifest.json') -Encoding utf8NoBOM
 $installer = Get-Content (Join-Path $repo 'install.ps1') -Raw
-foreach ($binding in @{Version=$version;Repository=$Repository;ReleaseTag=$ReleaseTag}.GetEnumerator()) {
+foreach ($binding in @{Repository=$Repository}.GetEnumerator()) {
     $pattern = '(?m)^(    \[string\]\$' + [regex]::Escape($binding.Key) + " = ')[^']*(',?\r?$)"
     if ([regex]::Matches($installer, $pattern).Count -ne 1) { throw "Cannot bind installer default: $($binding.Key)" }
     $replacementValue = $binding.Value

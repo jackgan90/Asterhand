@@ -10,7 +10,7 @@
 
 ## V01 新节点安装与配置
 
-1. 在全新 Windows 仅下载公开 Release 的 install.ps1 并执行；确认无需预装 Go、Git、Node 或 npm。未发布候选可使用同一构建的脚本、清单和 ZIP，但应另记匿名下载为未验证。
+1. 在全新 Windows 仅下载仓库固定入口 install.ps1 并执行，默认选择最新稳定 Release；另用 Version / ReleaseTag 验证指定版本，确认无需预装 Go、Git、Node 或 npm。没有稳定版时应明确失败，不能自动选择预发布版。未发布候选可使用兼容脚本与同一构建的清单、ZIP，但应另记匿名下载为未验证。
 2. 自动识别环境并补齐运行依赖与 Tailscale，完成后退出。确认没有登录 Tailscale、启动节点或生成模型配置。记录 UAC 与重启要求。随后手动完成 Tailscale 登录，并执行安装目录 start.ps1 打开 Web 向导。
 3. 设置节点名、DeepSeek key / 模型、授权目录，运行模型与无副作用工具检查。
 4. 启动 B，在 A 的 Web 使用 B 地址与一次性码配对。

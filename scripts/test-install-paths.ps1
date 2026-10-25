@@ -19,6 +19,7 @@ $packageLocation = Join-Path $OutputDirectory 'package space'
 $processLocation = Join-Path $OutputDirectory 'process location'
 New-Item -ItemType Directory -Path $packageLocation,$processLocation -Force | Out-Null
 $manifest = Get-Content -LiteralPath (Join-Path $PackageDirectory 'release-manifest.json') -Raw | ConvertFrom-Json
+$repository = if ($manifest.PSObject.Properties['repository']) { $manifest.repository } else { 'jackgan90/Asterhand' }
 $package = $manifest.packages | Where-Object { $_.os -eq 'windows' -and $_.arch -eq 'amd64' }
 Copy-Item -LiteralPath (Join-Path $PackageDirectory $package.file),(Join-Path $PackageDirectory 'release-manifest.json') -Destination $packageLocation
 # Build Unicode names without relying on Windows PowerShell's BOM-less script decoding.
@@ -44,18 +45,18 @@ try {
     if ($BaselineInstaller) {
         $failure = $null
         try {
-            & $BaselineInstaller -PackagePath ('.\' + $package.file) -InstallDir $relativeProgram -DataDir $relativeData -SkipTailscale -NoStart
+            & $BaselineInstaller -Repository $repository -PackagePath ('.\' + $package.file) -InstallDir $relativeProgram -DataDir $relativeData -SkipTailscale -NoStart
         } catch { $failure = $_.Exception.Message }
         if (-not $failure -or -not $failure.Contains((Join-Path $processLocation 'release-manifest.json'))) { throw 'The original manifest-path defect did not reproduce.' }
         $report.baseline = @{status='failed_as_expected';error=$failure}
     }
-    & $Installer -PackagePath ('.\' + $package.file) -InstallDir $relativeProgram -DataDir $relativeData -SkipTailscale -NoStart
+    & $Installer -Repository $repository -PackagePath ('.\' + $package.file) -InstallDir $relativeProgram -DataDir $relativeData -SkipTailscale -NoStart
     Assert-Installation 'relative-package-auto-manifest'
     [IO.File]::WriteAllText($sentinel, 'preserve-user-data')
-    & $Installer -PackagePath ('.\' + $package.file) -ManifestPath '.\release-manifest.json' -InstallDir $relativeProgram -DataDir $relativeData -SkipTailscale -NoStart
+    & $Installer -Repository $repository -PackagePath ('.\' + $package.file) -ManifestPath '.\release-manifest.json' -InstallDir $relativeProgram -DataDir $relativeData -SkipTailscale -NoStart
     Assert-Installation 'relative-explicit-manifest-repeat'
     Set-Location -LiteralPath $OutputDirectory
-    & $Installer -PackagePath (Join-Path $packageLocation $package.file) -InstallDir $program -DataDir $data -SkipTailscale -NoStart
+    & $Installer -Repository $repository -PackagePath (Join-Path $packageLocation $package.file) -InstallDir $program -DataDir $data -SkipTailscale -NoStart
     Assert-Installation 'absolute-package-from-other-location'
     if ([IO.File]::ReadAllText($sentinel) -ne 'preserve-user-data') { throw 'Repeated installation changed existing data.' }
     $report.checks += @{name='existing-data-preserved';status='passed'}

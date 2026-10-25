@@ -13,6 +13,7 @@
 | Windows 安装、升级、相对路径与数据保留 | [安装路径解析](features/installer-path-resolution/plan.md) |
 | 任务排序、节点名称/地址同步、就绪保持 | [双节点交互与连接同步](features/two-node-usability/plan.md) |
 | 统一发布、单脚本下载安装与平台扩展接口 | [可复现发布与独立安装](features/release-pipeline/plan.md) |
+| 仓库固定安装入口、默认 Latest 与显式版本选择 | [固定安装入口](features/stable-installer-entry/plan.md) |
 
 ## 后续验证与功能
 

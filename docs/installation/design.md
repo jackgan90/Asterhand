@@ -4,7 +4,9 @@
 
 ## 发布与安装边界
 
-Windows install.ps1 是独立引导脚本：固定仓库与版本，下载 release-manifest.json 和完整平台包，检查摘要、大小、版本及 bundle-check，补齐 Microsoft VC++ x64 运行库并加载声明的原生模块，再安装缺失的 Tailscale。成功后只留下 start.ps1 和 installation.json；不启动节点、不登录 Tailscale、不读取模型凭据。setup/start 属于安装后的节点配置入口。doctor/repair 继续由 Go 实现。
+仓库根目录 install.ps1 是独立固定引导入口，默认解析 GitHub Latest 稳定 Release；Version 指定应用版本，ReleaseTag 指定精确标签。解析只执行一次，随后从固定标签下载 release-manifest.json 和完整平台包，检查摘要、大小、版本及 bundle-check，补齐 Microsoft VC++ x64 运行库并加载声明的原生模块，再安装缺失的 Tailscale。成功后生成 start.ps1 和 installation.json；不启动节点、不登录 Tailscale、不读取模型凭据。setup/start 属于安装后的节点配置入口。doctor/repair 继续由 Go 实现。
+
+默认入口不含应用版本常量，未来 Linux/macOS 固定脚本遵循相同版本选择契约。没有稳定版时明确失败并提示指定版本，不自动使用预发布版。Version 支持带或不带 v 前缀；自定义 ReleaseTag 从清单推导应用版本，同时指定 Version 时检查二者一致。本地包或本地清单优先按其内容推导版本，不查询 Latest；只提供清单时从清单标签或 v<version> 获取包。清单包含仓库/标签元数据时必须与所选坐标一致。决策见 [固定安装入口](adr/003-stable-installer-entry.md)。
 
 scripts/release.ps1 是维护者发布入口，要求 Windows PowerShell 7、Git 和已登录的 GitHub CLI。构建用 Go 和运行用 Node/npm 依赖由固定清单自动准备。平台注册表 packaging/release-targets.json 通过 builder/installer 路径声明扩展点，只启用 Windows x64；Linux/macOS 需实现原生构建和安装检查后接入。
 
@@ -26,7 +28,7 @@ scripts/release.ps1 是维护者发布入口，要求 Windows PowerShell 7、Git
 
 ## 用户流程
 
-1. 从指定 GitHub Release 下载 install.ps1；仅发布源码还不能执行安装；正式 Release 可用前不提供虚构安装下载地址。
+1. 从仓库固定入口下载 install.ps1；默认安装最新稳定 Release，或通过参数选择已发布版本。仅发布源码而没有稳定 Release 时，默认安装明确报错。
 2. B 执行脚本，查看待安装版本和范围，自动补齐依赖。
 3. 打开本地设置页，配置节点名、DeepSeek key、已验证模型、授权目录。
 4. 运行小型模型和无副作用工具检查，确认助手就绪。

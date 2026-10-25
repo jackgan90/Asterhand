@@ -1,20 +1,28 @@
 # 首版安装与 hello-world 验收
 
-版本：0.1.0-alpha.1。Windows x64 是完整助手目标。支持边界见 [平台矩阵](../testing/platforms.md)，可下载版本以 GitHub Release 为准。
+Windows x64 是完整助手目标。支持边界见 [平台矩阵](../testing/platforms.md)，可下载版本以 GitHub Release 为准。下文的 0.1.0-alpha.1 用于演示指定版本，执行时应选择目标仓库实际已发布的版本。
 
 ## 1. 在 B 安装
 
-从需要安装的 GitHub Release 只下载 `install.ps1`，在下载目录打开 Windows PowerShell 5.1 或更高版本，运行：
+从仓库[固定安装入口](https://raw.githubusercontent.com/jackgan90/Asterhand/main/install.ps1) 下载 `install.ps1`，在下载目录打开 Windows PowerShell 5.1 或更高版本，运行：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-发布的脚本绑定该 Release 的仓库和标签，自动下载清单和 Windows 完整包，按摘要与大小校验。普通用户不需要 Go、Git、npm、PowerShell 7 或预装 Node。私有仓库和未公开草稿不支持匿名安装。
+默认查询 GitHub Latest 稳定版，解析后从同一标签下载清单和 Windows 完整包，按摘要与大小校验。Latest 不包含草稿或预发布版。若仓库尚无稳定版，脚本会明确提示；指定已公开的版本或标签可安装预发布版：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.1.0-alpha.1
+# 自定义标签与应用版本不同，用精确 Release 标签选择。
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Repository <owner>/<repository> -ReleaseTag <published-tag>
+```
+
+Version 也接受 v 前缀；同时提供 Version 与 ReleaseTag 时，清单必须匹配指定应用版本。普通用户不需要 Go、Git、npm、PowerShell 7 或预装 Node。私有仓库和未公开草稿不支持匿名安装。
 
 脚本还检查 Microsoft VC++ x64 运行库：符合清单要求时复用，缺失或较旧时自动下载固定版本的 Microsoft 官方安装器，核对摘要和签名后请求 Windows 管理员许可。随后实际加载包内原生模块，确认系统依赖完整。VC++ 与 Tailscale 的安装都不会自动重启 Windows；如提示需要重启，完成重启后再配置节点。
 
-需要使用本地包时，从同一版本发布物取得 `install.ps1`、`release-manifest.json`、`asterhand-0.1.0-alpha.1-windows-amd64.zip`。
+需要使用本地包时，使用固定入口脚本，并从同一版本发布物取得 `release-manifest.json` 和对应 ZIP，例如 `asterhand-0.1.0-alpha.1-windows-amd64.zip`。
 
 在该目录打开 PowerShell，执行本地包安装：
 
@@ -22,9 +30,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -PackagePath .\asterhand-0.1.0-alpha.1-windows-amd64.zip
 ```
 
-相对路径按当前 PowerShell FileSystem 目录解析；也可向 PackagePath 和 ManifestPath 传绝对路径。默认清单从包所在目录读取。升级时安装器、ZIP 与 manifest 必须来自同一构建，完整性以 manifest 校验为准。
+相对路径按当前 PowerShell FileSystem 目录解析；也可向 PackagePath 和 ManifestPath 传绝对路径。默认清单从包所在目录读取，本地包不查询 Latest，版本由清单推导。ZIP 与 manifest 必须来自同一构建；入口脚本可以使用当前兼容版本。来自其他发布仓库的包同时传入对应 Repository；显式版本或标签与清单冲突时拒绝安装。
 
-上述命令只为本次 PowerShell 进程设置脚本执行策略，不修改用户或整机策略，适用于默认限制脚本执行的全新 Windows。运行前确认脚本来自所选 Release，也可核对随包 SHA256SUMS。组织组策略优先于进程参数；受管理设备仍按组织要求执行。策略说明见 [Microsoft 文档](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_execution_policies)。
+上述命令只为本次 PowerShell 进程设置脚本执行策略，不修改用户或整机策略，适用于默认限制脚本执行的全新 Windows。运行前确认脚本来自官方仓库固定入口；Release 附带的脚本副本可核对该 Release 的 SHA256SUMS。组织组策略优先于进程参数；受管理设备仍按组织要求执行。策略说明见 [Microsoft 文档](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_execution_policies)。
 
 安装完成后脚本退出，输出安装目录内的 `start.ps1` 入口。此时组件已安装；节点身份、模型凭据、工作目录与配对尚未配置。
 
@@ -51,7 +59,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -PackagePa
 
 ## 已有节点升级
 
-在任务完成后，打开本机设置，记下页面显示的数据目录，并点击“停止本机节点”。从新版本 Release 下载 install.ps1 并运行；也可使用同一版本的脚本、清单与 ZIP 本地安装。默认安装沿用原数据；曾指定自定义 DataDir 的节点必须继续传入同一目录。
+在任务完成后，打开本机设置，记下页面显示的数据目录，并点击“停止本机节点”。运行固定入口 install.ps1 安装最新稳定版，或用 Version / ReleaseTag 指定目标；也可使用当前脚本及同一构建的清单与 ZIP 本地安装。建议从固定入口更新脚本，以取得最新安装兼容性修复。默认安装沿用原数据；曾指定自定义 DataDir 的节点必须继续传入同一目录。
 
 升级后运行安装目录 start.ps1 打开原节点，确认原名称、授权目录、配对和历史任务仍在。点击“使用 Tailscale 地址”并保存；出现重启提示时再停止并启动一次。运行安装目录 configure-firewall.ps1 更新规则。新程序首次启动需要重新验证一次模型与工具。
 

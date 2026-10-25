@@ -84,6 +84,8 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Node contract tests failed.' }
         & (Join-Path $PSScriptRoot 'test-release.ps1') -OutputDirectory (Join-Path $workspace 'release-contract') | Out-Host
         & (Join-Path $PSScriptRoot 'test-installer-system-dependencies.ps1') -OutputDirectory (Join-Path $workspace 'system-dependency-contract') | Out-Host
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'test-installer-release-selection.ps1') -OutputDirectory (Join-Path $workspace 'release-selection-contract') | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw 'Installer release-selection checks failed.' }
         & (Join-Path $repo $target.verify) -PackageDirectory $assets -OutputDirectory (Join-Path $workspace 'install-check')
         if ((Get-ReleaseTreeFingerprint $repo) -ne $tree) { throw 'Source changed while the release was being prepared.' }
         Copy-Item -LiteralPath (Join-Path $repo 'packaging/release-targets.json'),(Join-Path $repo 'packaging/dependencies.json'),(Join-Path $repo 'LICENSE') -Destination $assets
@@ -97,12 +99,18 @@ try {
         $manifest.release_tree_sha256 = $tree
         $manifest | ConvertTo-Json -Depth 8 | Set-Content $manifestPath -Encoding utf8NoBOM
         $catalog = Read-DependencyCatalog (Join-Path $repo 'packaging/dependencies.json')
-        @{schema=1;platform=$Platform;source_sha256=$source;created_utc=[DateTime]::UtcNow.ToString('o');os=[Environment]::OSVersion.VersionString;powershell=$PSVersionTable.PSVersion.ToString();go=$catalog.go.version;node=$catalog.node.version;vc_runtime=$catalog.vc_runtime.version;go_tests='passed';go_vet='passed';node_contracts='passed';release_contracts='passed';system_dependency_contracts='passed';vendor_installer_hashes_and_signatures='passed';windows_install_regression='passed';clean_windows='not_run';tailscale_fresh_install='not_run';vc_runtime_fresh_install='not_run';model_validation='not_run'} |
+        @{schema=1;platform=$Platform;source_sha256=$source;created_utc=[DateTime]::UtcNow.ToString('o');os=[Environment]::OSVersion.VersionString;powershell=$PSVersionTable.PSVersion.ToString();go=$catalog.go.version;node=$catalog.node.version;vc_runtime=$catalog.vc_runtime.version;go_tests='passed';go_vet='passed';node_contracts='passed';release_selection_contracts='passed';system_dependency_contracts='passed';vendor_installer_hashes_and_signatures='passed';windows_install_regression='passed';clean_windows='not_run';tailscale_fresh_install='not_run';vc_runtime_fresh_install='not_run';model_validation='not_run'} |
             ConvertTo-Json | Set-Content (Join-Path $assets 'validation.json') -Encoding utf8NoBOM
         @"
 # Asterhand $Tag
 
-Windows x64 complete assistant bundle. Download **install.ps1** from this release and run it with Windows PowerShell 5.1 or later. The script downloads and verifies this exact release, installs the required Microsoft VC++ x64 runtime when missing or too old, and installs missing Tailscale with Windows administrator approval.
+Windows x64 complete assistant bundle. The repository-root **install.ps1** is the fixed installation entry: no version argument selects the latest stable release. This release also includes a copy targeting $Repository. To install this exact release:
+
+~~~powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -ReleaseTag $Tag
+~~~
+
+It verifies the selected package, installs the required Microsoft VC++ x64 runtime when missing or too old, and installs missing Tailscale with Windows administrator approval.
 
 Installation ends before configuration. Start the installed start.ps1 when ready to configure Tailscale sign-in, model credentials, authorized folders and node pairing. Go, Git and npm are not required on the destination machine.
 

@@ -12,21 +12,14 @@ import (
 
 func NativeFactory(c *Controller) SurfaceFactory {
 	return func() (Surface, error) {
-		if err := checkInteractiveDesktop(); err != nil {
-			return nil, err
-		}
 		c.mu.Lock()
 		generation := c.surfaceGeneration
 		c.mu.Unlock()
-		s, err := startNativeSurface(c.home, nil, func(err error) { c.failedGeneration(generation, err) }, &c.draft)
+		s, err := startRemoteSurface(c.home, c.Status().Desired.Theme, &c.draft, launchWindowsHost, func(err error) { c.failedGeneration(generation, err) }, c.Status().RecoveryNotice != "")
 		if err == nil {
 			c.mu.Lock()
-			c.status.RuntimeVersion = s.version
-			notice := c.status.RecoveryNotice
+			c.status.RuntimeVersion = s.runtime
 			c.mu.Unlock()
-			if notice != "" {
-				_ = s.dispatch(context.Background(), func() { _ = s.postJSON(map[string]string{"kind": "error", "message": notice}) })
-			}
 		}
 		return s, err
 	}
@@ -40,14 +33,20 @@ func (s *nativeSurface) bridgeMessage(raw string) {
 	if m.Kind == "ready" && !s.documentReady {
 		s.documentReady = true
 		text, revision := s.draft.Read()
-		err := s.postJSON(map[string]any{"kind": "init", "generation": s.epoch, "text": text, "revision": revision, "theme": s.theme})
-		s.suspend(func() { s.ready <- err })
+		if err := s.postJSON(map[string]any{"kind": "init", "generation": s.epoch, "text": text, "revision": revision, "theme": s.theme}); err != nil {
+			s.ready <- err
+		}
 		return
 	}
 	if m.Epoch != s.epoch || !s.documentReady {
 		return
 	}
 	switch m.Kind {
+	case "initialized":
+		if !s.pageInitialized {
+			s.pageInitialized = true
+			s.suspend(func() { s.ready <- nil })
+		}
 	case "resize":
 		if m.Height >= 240 && m.Height <= 480 {
 			s.height = m.Height
@@ -58,18 +57,33 @@ func (s *nativeSurface) bridgeMessage(raw string) {
 			_ = s.postJSON(map[string]string{"kind": "error", "message": err.Error()})
 			return
 		}
-		if m.Kind == "snapshot" {
-			if done, ok := s.waiters[m.ID]; ok {
-				delete(s.waiters, m.ID)
-				if visible, _, _ := uiDLL.NewProc("IsWindowVisible").Call(s.hwnd.Load()); visible == 0 {
-					s.suspend(func() { close(done) })
-				} else {
-					close(done)
+		if s.remoteDraft != nil {
+			id := ""
+			var complete func()
+			if m.Kind == "snapshot" {
+				if _, ok := s.waiters[m.ID]; !ok {
+					return
 				}
+				id = m.ID
+				complete = func() { _ = s.dispatch(context.Background(), func() { s.completeSnapshot(id) }) }
 			}
+			s.remoteDraft.submit(m.Text, m.Revision, id, complete)
+		} else if m.Kind == "snapshot" {
+			s.completeSnapshot(m.ID)
 		}
 	case "hide":
 		s.hide(true)
+	}
+}
+
+func (s *nativeSurface) completeSnapshot(id string) {
+	if done, ok := s.waiters[id]; ok {
+		delete(s.waiters, id)
+		if visible, _, _ := uiDLL.NewProc("IsWindowVisible").Call(s.hwnd.Load()); visible == 0 {
+			s.suspend(func() { close(done) })
+		} else {
+			close(done)
+		}
 	}
 }
 
@@ -113,6 +127,9 @@ func (s *nativeSurface) Snapshot(ctx context.Context) error {
 
 func (s *nativeSurface) cancelSnapshot(id string) {
 	delete(s.waiters, id)
+	if s.remoteDraft != nil {
+		s.remoteDraft.cancelSnapshot(id)
+	}
 	if visible, _, _ := uiDLL.NewProc("IsWindowVisible").Call(s.hwnd.Load()); visible == 0 {
 		s.suspend(nil)
 	}

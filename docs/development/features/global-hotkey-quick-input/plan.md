@@ -121,7 +121,7 @@ Web 增加“本机快捷输入”设置区域，显示作用节点、期望/实
 
 ## 桌面线程与生命周期
 
-HotkeyService 复用节点托盘所属 OS 线程和专用消息分派，注册资源与托盘图标分开。QuickInputSurface 使用独立、锁定的 STA UI 线程和自己的窗口/消息循环，避免现有托盘 MessageBox/TrackPopupMenu 的嵌套消息循环影响 WebView2。窗口过程不做磁盘 I/O、HTTP 或阻塞等待；配置写入由控制器执行，UI 回调只投递消息。COM 初始化/释放、WebView 创建和调用都在其所属线程。
+HotkeyService 复用节点托盘所属 OS 线程和专用消息分派，注册资源与托盘图标分开。QuickInputSurface 位于独立非提权宿主进程，使用锁定的 STA UI 线程和自己的窗口/消息循环，避免现有托盘 MessageBox/TrackPopupMenu 的嵌套消息循环影响 WebView2。窗口过程不做磁盘 I/O、HTTP 或阻塞等待；配置写入由控制器执行，UI 回调只投递消息。COM 初始化/释放、WebView 创建和调用都在其所属线程。
 
 快捷输入窗口的 WM_CLOSE 只隐藏，WM_DESTROY 只结束其自身 UI 线程；不能套用现有托盘窗口的停止节点回调。初始化、激活、渲染进程失败等预期错误只进入 surface.failed/unavailable，不调用 RequestStop。面板不可用时释放/屏蔽本功能注册，避免一个无法显示的面板持续吞掉用户快捷键；期望配置保留，用户可显式重试。
 
@@ -129,19 +129,19 @@ HotkeyService 复用节点托盘所属 OS 线程和专用消息分派，注册�
 
 面板收尾在其 STA 上按“关闭业务消息入口、解除业务事件订阅、关闭 controller、释放对应 WebView/controller 引用、异步观察本 profile 的浏览器进程退出、撤销剩余观察者并释放 environment/handler COM 引用、COM 反初始化、退出该 UI 消息循环”执行。不得在回调内同步等待本线程事件；Go 回调对象在最后一次可能调用结束前保持有效，不能只销毁 HWND 或提前释放 callback。重建的旧实例未收尾时不再创建第二个实例。节点退出只等待有界收尾期限，超时保留 closing/残留诊断，不能阻塞核心收尾或删除仍在使用的 UDF。
 
-本方案不增加常驻启动器、监督进程或 Windows Service。使用 WebView2 自身的子进程，关闭时只处理本实例拥有的对象/进程，不按进程名终止系统或其他应用的 WebView2。可恢复的 renderer 失败与整个宿主进程崩溃分开：同进程方案不承诺宿主崩溃后任务继续，沿用节点重启对账语义。
+当前方案新增专用 UI 宿主，由节点直接管理，不增加常驻启动器、监督进程或 Windows Service。关闭时只处理本实例自有 Job 内的宿主与浏览器进程，不按进程名终止其他应用的 WebView2。UI 宿主崩溃由主进程有限重建，恢复最后接受的草稿，任务服务继续运行；节点主进程自身退出仍沿用既有重启对账语义。
 
 ## WebView 内容、安全与存储
 
 快捷输入页面从随包资源加载到独立的应用虚拟 HTTPS 来源，唯一主入口为 `/quick-input/index.html`；不使用 file://，不携带本机 Web 登录 token，不复用通用浏览器 profile。它不访问通用任务/设置 HTTP API；认证设置页仍在现有 loopback Web 中运行，两条权限链明确分开。
 
-原生桥只接受预定义的 ready、hide、resize、snapshot 和 draft_updated 消息，带协议版本、窗口代次和草稿版本。双向发送前均验证当前 WebView 实例、固定的主文档 origin/path、消息结构、大小和范围；页面不创建子框架，任何来自子框架的消息均拒绝。单条 JSON 消息最多 128 KiB，解码后的有效草稿仍受 16,000 UTF-8 字节限制，窗口大小由宿主按工作区限幅。桥不暴露通用 host object、脚本执行、文件读取、进程调用或任意 URL 打开。消息通过 JSON 序列化，输入按文本呈现，不拼接可执行脚本或 HTML。
+原生桥只接受预定义的 ready、initialized、hide、resize、snapshot 和 draft_updated 消息，带协议版本、窗口代次和草稿版本。双向发送前均验证当前 WebView 实例、固定的主文档 origin/path、消息结构、大小和范围；页面不创建子框架，任何来自子框架的消息均拒绝。单条 JSON 消息最多 128 KiB，解码后的有效草稿仍受 16,000 UTF-8 字节限制，窗口大小由宿主按工作区限幅。桥不暴露通用 host object、脚本执行、文件读取、进程调用或任意 URL 打开。消息通过 JSON 序列化，输入按文本呈现，不拼接可执行脚本或 HTML。
 
 宿主在顶层/子框架导航、新窗口、下载、权限请求和资源请求处实施允许列表，仅允许随包资源；禁止外部网络、任意本地路径、拖入文件导航和未经授权的 frame。页面 CSP 与宿主限制共同生效；发布版关闭调试入口、默认脚本弹窗和不需要的浏览器功能。主题来自固定资源 ID，不接受任意 CSS/HTML/远程背景 URL。
 
 UDF 显式位于节点数据目录的独立受保护子目录，不能落在版本安装目录或用户默认浏览器目录；已有授权目录保护覆盖整个节点数据目录。使用独立的 InPrivate profile，禁用自动填充与密码保存，不使用 localStorage/sessionStorage/IndexedDB 保存草稿。正常退出后等待本实例相关浏览器进程释放，再按 API 支持清理会话数据；不在进程仍使用 UDF 时删除目录。清理失败保留可诊断状态，不阻断任务服务。
 
-首版桌面面板仅在标准权限的当前用户交互进程启用。节点以管理员、SYSTEM 或非交互模式启动时保留 Web/任务能力，面板报告 unavailable；不静默提升权限、不禁用浏览器沙箱。普通权限节点面对管理员前台窗口的唤起能力必须实测，失败按 focus_denied 处理。锁屏、UAC 安全桌面、其他登录会话不属于可输入桌面。
+当前宿主架构由[进程隔离计划](../quick-input-process-isolation/plan.md)与[ADR 007](../../../installation/adr/007-quick-input-process-isolation.md)接续：普通用户和管理员节点均启动独立非提权 Medium 宿主。SYSTEM 或非交互模式保留 Web/任务能力，面板报告 unavailable；不静默提升节点权限、不禁用浏览器沙箱。普通权限节点面对管理员前台窗口的唤起能力必须实测，失败按 focus_denied 处理。锁屏、UAC 安全桌面、其他登录会话不属于可输入桌面。
 
 ## 外观、依赖与资源门禁
 
@@ -169,13 +169,13 @@ Evergreen 后续更新是外部平台变化，启动检查所用 API 能力与�
 |---|---|
 | 本地配置、组合与事务 | internal/quickinput 持有偏好、草稿和控制器；保存/注册/释放使用明确提交点和故障状态 |
 | Windows 注册 | internal/desktop 在原托盘 OS 线程注册和注销，候选/退休 ID 的事件不触发面板 |
-| 文本宿主 | internal/quickinput 的独立 STA 线程管理 WebView2、窗口、受限桥和私有 profile；正文与主题资源随包嵌入 |
+| 文本宿主 | 独立 AsterhandInputHost.exe 内的 STA 管理 WebView2、窗口、受限桥和私有 profile；主进程持有权威草稿；正文与主题资源随包嵌入 |
 | Web 设置 | internal/app/desktop_api.go 与 web/desktop-settings.mjs 提供独立认证设置入口、录制租约、占用检查和重试 |
 | 安装与回归 | 固定依赖清单、构建许可收集、Runtime 安装边界和桌面测试接入已有构建/验证流程 |
 
 底层桌面包不导入 app/task，应用通过窄接口调度。macOS/Linux 适配器返回显式能力状态，不通过空成功模拟支持。当前不建立通用命令注册表、解析器或插件运行时。
 
-Web、安装领域 requirements/design 及节点生命周期、测试说明、路线图和支持矩阵已同步。线程、权限、安全来源与依赖取舍由[快捷输入宿主决策](../../../installation/adr/006-global-hotkey-input-surface.md)维护，与[桌面入口决策](../../../installation/adr/004-desktop-launcher-and-tray.md)共同约束节点生命周期。
+Web、安装领域 requirements/design 及节点生命周期、测试说明、路线图和支持矩阵已同步。进程与权限取舍由[隔离宿主决策](../../../installation/adr/007-quick-input-process-isolation.md)维护；[原宿主决策](../../../installation/adr/006-global-hotkey-input-surface.md)保留安全来源与依赖依据，与[桌面入口决策](../../../installation/adr/004-desktop-launcher-and-tray.md)共同约束节点生命周期。
 
 实现按 [代码风格](../../code-style.md) 评估实际修改后的文件/函数规模，避免把新职责全部加入既有 api.go、app.js 或托盘窗口过程；触发超限且可安全拆分时，先提交拆分方案取得同意。新增职责分布在独立文件，修改后文件均未超过 1000 行。原有 settings 函数为 125 行，其职责和实现保持，新桌面路由另设文件；desktopSettings 的外层表单闭包超过 100 行，内部事件函数共用状态，保留以避免将一次性表单状态散布到全局。
 
@@ -195,7 +195,7 @@ Web、安装领域 requirements/design 及节点生命周期、测试说明、�
 | V08 草稿与主题 | 收起、切换主题不丢已确认草稿、选区和撤销；禁用/重建快照失败可见；renderer 失败恢复最近已确认版本；退出重启不恢复草稿 | 组件测试 + WebView 真实进程事件 |
 | V09 安全边界 | 伪来源/子框架/错误代次/超大桥消息被拒绝；外链、新窗、文件导航、权限与下载被阻断；草稿不出现在业务日志与应用持久存储 | 自动化攻击 fixture + 文件/网络检查 |
 | V10 对象外回归 | 在途任务/模型检查时修改组合不影响其状态或 ModelVerified；面板初始化失败、关闭、取消录制不调用节点退出；节点正式退出仍释放任务/端口/本实例进程 | 既有生命周期/设置回归 + 桌面测试 |
-| V11 平台与权限 | Windows 标准用户；管理员/SYSTEM/非交互模式降级；peer 无设置入口；macOS/Linux 能编译适配器且返回 unsupported | 原生 Windows 与平台构建，跨编译不记原生通过 |
+| V11 平台与权限 | Windows 普通用户和管理员使用非提权宿主；SYSTEM/非交互模式降级；peer 无设置入口；macOS/Linux 能编译适配器且返回 unsupported | 原生 Windows 与平台构建，跨编译不记原生通过 |
 | V12 安装依赖 | 全新安装、已有 Runtime、离线、中断、缺安装材料与升级；失败不停止原节点，不影响其他应用 Runtime；新包保留配置 | 隔离 Windows/VM，正式安装链 |
 | V13 性能 | 按原型阶段冻结的预算测冷/热延迟、内存/CPU、服务 ready 回归和 100 次启停后的资源归还 | 代表性 Windows 设备与基线对比 |
 

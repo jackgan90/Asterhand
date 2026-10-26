@@ -50,7 +50,11 @@ func (t *Tray) showMenu() {
 	menuItem(menu, flags, menuOpen, "打开 Asterhand")
 	if t.options.Input != nil {
 		input := t.options.Input.Status()
-		menuItem(menu, flags, 4, "快捷输入 · "+input.Desired.Binding.String())
+		inputFlags := flags
+		if !input.Supported || !input.Desired.Enabled {
+			inputFlags = 1
+		}
+		menuItem(menu, inputFlags, 4, input.MenuLabel())
 		if input.Error != "" {
 			menuItem(menu, 1, 0, "快捷输入需要处理：请打开 Web 设置")
 		}

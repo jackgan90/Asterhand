@@ -82,9 +82,20 @@ func TestNativeSurfaceCostAndRepeatedCleanup(t *testing.T) {
 	var peakAdded uint64
 	var idlePercent float64
 	base := processTreeCost()
+	var launch func() (Surface, error)
+	if directory := os.Getenv("ASTERHAND_INPUT_HOST_TEST_DIRECTORY"); directory != "" {
+		launch = func() (Surface, error) {
+			return startRemoteSurface(t.TempDir(), "star", &Draft{}, func() (hostProcess, error) { return launchWindowsHostFrom(directory) }, func(err error) { t.Errorf("surface: %v", err) })
+		}
+	} else {
+		requireNativeDesktop(t)
+		launch = func() (Surface, error) {
+			return startNativeSurface(t.TempDir(), nil, func(err error) { t.Errorf("surface: %v", err) })
+		}
+	}
 	for i := 0; i < n; i++ {
 		start := time.Now()
-		s, err := startNativeSurface(t.TempDir(), nil, func(err error) { t.Errorf("surface: %v", err) })
+		s, err := launch()
 		if err != nil {
 			t.Fatal(err)
 		}

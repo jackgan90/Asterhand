@@ -1,5 +1,9 @@
 # 构建脚本
 
+独立宿主、主进程草稿、权限矩阵与退出清理的当前验证入口见[进程隔离验证](../docs/development/features/quick-input-process-isolation/validation.md)。
+
+Windows 构建同时生成 `AsterhandInputHost.exe` 和 `input-host.json`，`bundle-check` 校验版本、源码指纹及最终可执行文件摘要。直接开发构建节点时，在其可执行文件同目录运行 `build-input-host.ps1 -Go <go-executable> -OutputDirectory <node-directory>`；默认使用 development 指纹，若节点指定 SourceDigest，宿主须传入相同值。`test-quick-input.ps1 -Desktop` 自动构建隔离测试宿主；100 次生命周期允许 30 分钟超时，原性能预算保持不变。
+
 Go 1.27.3：`go test ./...`、`go vet ./...`、`go build ./cmd/asterhand`。完整包在 Windows PowerShell 7 执行。先按 [依赖维护流程](../packaging/upgrade.md) 生成 prepared.json；从该文件读取依赖目录，Go 使用 PATH 中与清单一致的版本：
 
 ```powershell

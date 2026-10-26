@@ -5,17 +5,22 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
-$savedDesktop=$env:ASTERHAND_DESKTOP_TEST; $savedCycles=$env:ASTERHAND_SURFACE_CYCLES; $savedReport=$env:ASTERHAND_SURFACE_REPORT
+$savedDesktop=$env:ASTERHAND_DESKTOP_TEST; $savedCycles=$env:ASTERHAND_SURFACE_CYCLES; $savedReport=$env:ASTERHAND_SURFACE_REPORT; $savedHost=$env:ASTERHAND_INPUT_HOST_TEST_DIRECTORY
 try {
     if ($Cycles -gt 0 -and -not $Desktop) { throw 'Cycles requires an explicitly enabled interactive desktop.' }
     $env:ASTERHAND_DESKTOP_TEST = if ($Desktop) {'1'} else {'0'}
     $env:ASTERHAND_SURFACE_CYCLES = $Cycles
     $env:ASTERHAND_SURFACE_REPORT = Join-Path $OutputDirectory 'surface-cost.json'
-    & $Go -C $repo test ./internal/quickinput ./internal/desktop -count=1 -json | Tee-Object -FilePath (Join-Path $OutputDirectory 'go-desktop.jsonl')
+    if ($Desktop) {
+        $env:ASTERHAND_INPUT_HOST_TEST_DIRECTORY = Join-Path $OutputDirectory 'input-host'
+        & (Join-Path $PSScriptRoot 'build-input-host.ps1') -Go $Go -OutputDirectory $env:ASTERHAND_INPUT_HOST_TEST_DIRECTORY
+    }
+    & $Go -C $repo test ./internal/quickinput ./internal/desktop -count=1 -timeout=30m -json | Tee-Object -FilePath (Join-Path $OutputDirectory 'go-desktop.jsonl')
     if ($LASTEXITCODE -ne 0) { throw 'Quick input Go tests failed.' }
     & node --test (Join-Path $repo 'tests/quick-input.test.mjs') (Join-Path $repo 'tests/quick-input-bridge.test.mjs') (Join-Path $repo 'tests/desktop-settings.test.mjs')
     if ($LASTEXITCODE -ne 0) { throw 'Quick input text tests failed.' }
     & (Join-Path $PSScriptRoot 'test-installer-webview2.ps1') -OutputDirectory (Join-Path $OutputDirectory 'installer')
 } finally {
     $env:ASTERHAND_DESKTOP_TEST=$savedDesktop; $env:ASTERHAND_SURFACE_CYCLES=$savedCycles; $env:ASTERHAND_SURFACE_REPORT=$savedReport
+    $env:ASTERHAND_INPUT_HOST_TEST_DIRECTORY=$savedHost
 }

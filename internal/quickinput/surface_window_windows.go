@@ -11,8 +11,12 @@ import (
 
 func checkInteractiveDesktop() error {
 	if windows.GetCurrentProcessToken().IsElevated() {
-		return fmt.Errorf("请使用标准用户权限启动快捷输入；当前节点其他功能继续可用")
+		return fmt.Errorf("输入宿主权限异常：必须使用非提权令牌")
 	}
+	return checkInteractiveSession()
+}
+
+func checkInteractiveSession() error {
 	station, _, _ := uiDLL.NewProc("GetProcessWindowStation").Call()
 	var flags struct{ Inherit, Reserved, Flags uint32 }
 	var size uint32
@@ -30,7 +34,7 @@ func (s *nativeSurface) Toggle() {
 			s.hide(true)
 			return
 		}
-		if s.closing || !s.documentReady {
+		if s.closing || !s.pageInitialized {
 			return
 		}
 		s.previous, _, _ = uiDLL.NewProc("GetForegroundWindow").Call()

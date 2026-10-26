@@ -78,6 +78,10 @@ type Controller struct {
 	operations        map[string]operation
 	record            *recording
 	draft             Draft
+	readyAt           time.Time
+	recoveryUsed      bool
+	pendingActivation activationIntent
+	captureIntent     func() activationIntent
 }
 
 type operation struct {
@@ -88,7 +92,7 @@ type operation struct {
 }
 
 func New(home string) *Controller {
-	c := &Controller{home: home, store: NewPreferencesStore(home), operations: map[string]operation{}}
+	c := &Controller{home: home, store: NewPreferencesStore(home), operations: map[string]operation{}, captureIntent: captureActivation}
 	c.status = Status{Desired: Defaults(), Registration: "initializing", Surface: "not_created", Supported: runtime.GOOS == "windows"}
 	if p, err := c.store.Load(); err == nil {
 		c.status.Desired = p
@@ -159,6 +163,7 @@ func (c *Controller) ReadySurface() (Surface, error) {
 	c.mu.Lock()
 	c.surface = surface
 	c.status.Surface = "ready"
+	c.readyAt = time.Now()
 	c.mu.Unlock()
 	if c.isStopping() {
 		c.closeSurface()
@@ -180,6 +185,7 @@ func (c *Controller) Retry() (Status, error) {
 	if c.invalid {
 		return c.Status(), &Error{409, "桌面配置无效，请恢复默认"}
 	}
+	c.recoveryUsed = false
 	if !c.Status().Supported || c.registrar == nil {
 		return c.Status(), &Error{503, "当前没有可用的 Windows 交互桌面"}
 	}
@@ -197,6 +203,9 @@ func (c *Controller) Retry() (Status, error) {
 		return c.Status(), err
 	}
 	if c.active != 0 {
+		c.mu.Lock()
+		c.status.Registration, c.status.Error, c.status.ErrorCode = "registered", "", ""
+		c.mu.Unlock()
 		return c.Status(), nil
 	}
 	id, err := c.registrar.Register(c.Status().Desired.Binding)
@@ -242,7 +251,15 @@ func (c *Controller) OnHotkey(id int, combination ...uint32) {
 		return
 	}
 	c.record = nil
+	if c.status.Registration == "recovering" {
+		c.pendingActivation = c.captureIntent()
+		c.mu.Unlock()
+		return
+	}
 	s := c.surface
+	if c.status.Surface != "ready" {
+		s = nil
+	}
 	c.mu.Unlock()
 	if s != nil {
 		s.Toggle()
@@ -250,6 +267,14 @@ func (c *Controller) OnHotkey(id int, combination ...uint32) {
 }
 
 func (c *Controller) Open() error {
+	intent := c.captureIntent()
+	c.mu.Lock()
+	if !c.stopping && c.status.Registration == "recovering" {
+		c.pendingActivation = intent
+		c.mu.Unlock()
+		return nil
+	}
+	c.mu.Unlock()
 	c.op.Lock()
 	defer c.op.Unlock()
 	if c.isStopping() {
@@ -258,12 +283,31 @@ func (c *Controller) Open() error {
 	if c.invalid {
 		return fmt.Errorf("请在 Web 恢复有效的桌面设置")
 	}
+	if c.registrar == nil || !c.Status().Supported {
+		return fmt.Errorf("当前没有可用的交互桌面")
+	}
 	if !c.Status().Desired.Enabled {
 		return fmt.Errorf("请先在 Web 启用快捷输入")
 	}
+	c.recoveryUsed = false
 	s, err := c.ReadySurface()
 	if err == nil {
-		s.Toggle()
+		if c.active == 0 {
+			id, registrationErr := c.registrar.Register(c.Status().Desired.Binding)
+			if registrationErr != nil {
+				c.registrationFailed(registrationErr)
+			} else {
+				c.mu.Lock()
+				c.active = id
+				b := c.status.Desired.Binding
+				c.status.Effective = &b
+				c.status.Registration, c.status.Error, c.status.ErrorCode = "registered", "", ""
+				c.mu.Unlock()
+			}
+		}
+		applyActivation(intent, s)
+	} else {
+		c.setError("unavailable", err)
 	}
 	return err
 }
@@ -298,7 +342,7 @@ func (c *Controller) failedGeneration(generation uint64, err error) {
 			return
 		}
 		c.mu.Unlock()
-		c.failSurface(err)
+		c.recoverSurface(err)
 	}()
 }
 
@@ -307,6 +351,7 @@ func (c *Controller) failSurface(err error) {
 	id := c.active
 	c.active = 0
 	c.status.Effective = nil
+	c.pendingActivation = nil
 	c.status.RecoveryNotice = "输入界面曾中断，重建后恢复最近已确认草稿；请检查未提交的输入法候选。"
 	c.mu.Unlock()
 	if id != 0 {
@@ -326,6 +371,10 @@ func (c *Controller) closeSurface() {
 	if c.surface == nil {
 		return
 	}
+	c.mu.Lock()
+	c.surfaceGeneration++ // Invalidate callbacks before closing the old host.
+	c.status.Surface = "closing"
+	c.mu.Unlock()
 	err := c.surface.Close()
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -390,6 +439,7 @@ func (c *Controller) BeginStop() {
 	c.mu.Lock()
 	c.stopping = true
 	c.record = nil
+	c.pendingActivation = nil
 	c.mu.Unlock()
 }
 

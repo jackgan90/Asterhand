@@ -22,6 +22,7 @@ func init() {
 }
 
 func TestNativeSurfaceVisualCapture(t *testing.T) {
+	requireNativeDesktop(t)
 	directory := os.Getenv("ASTERHAND_SURFACE_CAPTURE")
 	if os.Getenv("ASTERHAND_DESKTOP_TEST") != "1" || directory == "" {
 		t.Skip("explicit visual output required")

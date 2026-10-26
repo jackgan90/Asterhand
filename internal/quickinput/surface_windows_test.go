@@ -10,6 +10,7 @@ import (
 )
 
 func TestNativeSurfacePrivateProfile(t *testing.T) {
+	requireNativeDesktop(t)
 	if os.Getenv("ASTERHAND_DESKTOP_TEST") != "1" {
 		t.Skip("requires an explicitly enabled Windows interactive desktop")
 	}
@@ -37,5 +38,15 @@ func TestNativeSurfacePrivateProfile(t *testing.T) {
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func requireNativeDesktop(t *testing.T) {
+	t.Helper()
+	if os.Getenv("ASTERHAND_DESKTOP_TEST") != "1" {
+		t.Skip("explicit desktop required")
+	}
+	if err := checkInteractiveDesktop(); err != nil {
+		t.Skip("direct STA test requires a non-elevated test runner; production restricted host tested separately")
 	}
 }

@@ -9,3 +9,7 @@ Go 模块 github.com/wailsapp/go-webview2 v1.0.23 为 MIT，其 webviewloader �
 完整安装器只在准备目录下载，不附入 Release。用户安装复用合格 Runtime，否则在停止旧节点前补齐。标准权限运行安装器为 per-user；不主动提权、修改共享更新策略、降级、自动重启系统或卸载共享 Runtime。运行中的节点不因 Evergreen 更新自动重启。实际加载版本由桌面状态返回，未来 Runtime 仍需能力查询与回归。
 
 发布准备下载并核验固定材料；干净设备、供应商退出码/重启与 offline 验收见[快捷输入验证](../docs/development/features/global-hotkey-quick-input/validation.md)。常规脚本测试 mock 供应商执行，不能代替干净 Windows 新装。
+
+Windows 包同时包含 `AsterhandInputHost.exe` 与 `input-host.json`。宿主为 GUI 子系统程序，与节点使用相同应用版本和源码指纹；清单摘要在图标写入后计算，`bundle-check` 和每次启动都验证。开发时使用 `scripts/build-input-host.ps1` 在节点可执行文件同目录生成配套宿主；带源码指纹的节点必须传入相同 `-SourceDigest`。缺失或不匹配时不搜索其他目录的宿主。
+
+宿主使用非提权 Medium 令牌、限定的环境和继承句柄，在恢复执行前加入父进程自有的 kill-on-close Job。其 WebView2 保持默认浏览器沙箱；不接受继承的 `WEBVIEW2_*` 环境覆盖，并拒绝为本程序或通配符设置的浏览器参数、运行时路径及 profile 路径注册表覆盖。失败只影响快捷输入；不修改用户策略或扩大安装目录权限。权限与真实桌面验证见[隔离验证](../docs/development/features/quick-input-process-isolation/validation.md)。

@@ -13,7 +13,7 @@ try {
     $env:ASTERHAND_SURFACE_REPORT = Join-Path $OutputDirectory 'surface-cost.json'
     & $Go -C $repo test ./internal/quickinput ./internal/desktop -count=1 -json | Tee-Object -FilePath (Join-Path $OutputDirectory 'go-desktop.jsonl')
     if ($LASTEXITCODE -ne 0) { throw 'Quick input Go tests failed.' }
-    & node --test (Join-Path $repo 'tests/quick-input.test.mjs') (Join-Path $repo 'tests/desktop-settings.test.mjs')
+    & node --test (Join-Path $repo 'tests/quick-input.test.mjs') (Join-Path $repo 'tests/quick-input-bridge.test.mjs') (Join-Path $repo 'tests/desktop-settings.test.mjs')
     if ($LASTEXITCODE -ne 0) { throw 'Quick input text tests failed.' }
     & (Join-Path $PSScriptRoot 'test-installer-webview2.ps1') -OutputDirectory (Join-Path $OutputDirectory 'installer')
 } finally {

@@ -72,6 +72,8 @@ runtime 契约用真实子进程 fixture 验证 JSON 成功/失败/无效输出�
 
 ## 审计回归
 
+Web 维护性回归分为可注入客户端与生命周期、模拟 DOM 操作序列、真实嵌入资源和真实宿主四层。任务 pending/答案去重由业务控制器测试，连接资源用可控事件源与时钟验证；主输入与回答焦点保护由操作序列和浏览器分别确认。资源测试从 HTML 沿静态 import 检查完整闭包，主 Web 验证 GET/HEAD/MIME/nosniff，浮层验证原生 GET 白名单与禁网。独立 fixture 使用真实 App/SQLite/TLS 和 FakeExecutor，单独 opt-in，不调用模型、不读现有节点数据；[可执行方法与浏览器步骤](../development/features/web-ui-maintainability/validation.md)明确各层证据和未验证平台边界。
+
 安装入口专项回归见 [路径解析说明](../development/features/installer-path-resolution/plan.md)：PS5.1 内先 Set-Location，再人为设置不同的进程 CurrentDirectory，使用真实 ZIP 验证相对包/清单/程序/数据路径。绝对路径测试不能覆盖此交互式安装行为。test-install-paths.ps1 负责该场景，已接入 test-install.ps1，随完整安装/升级门槛运行。
 
 - 真实 SQLite 填到普通日志边界，完成最后一次文件写入后仍有产物证据，后续写入/委派在副作用前拒绝；控制日志保留硬上限。

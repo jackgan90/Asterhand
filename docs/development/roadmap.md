@@ -17,6 +17,7 @@
 | 原生双击启动、可选桌面入口、节点托盘和统一退出 | [Windows 桌面启动与托盘生命周期](features/windows-desktop-lifecycle/plan.md) |
 | 当前源码双击安装、显式停止与安装后启动、PowerShell 下载引导 | [本地一键安装与在线引导](features/local-install-entry/plan.md) |
 | Ctrl+Alt+J 全局呼出、本地自定义与冲突检测、科技风文本浮层（首版用户验收完成） | [本机全局快捷输入](features/global-hotkey-quick-input/plan.md) |
+| 原生 Web 同源客户端、生命周期、任务/节点/设置职责与独立 WebView2 桥；保持现有功能和平台范围 | [Web 与快捷输入维护性重构](features/web-ui-maintainability/plan.md) |
 
 ## 后续验证与功能
 

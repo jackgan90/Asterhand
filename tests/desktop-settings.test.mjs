@@ -1,11 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {desktopSettings} from "../web/desktop-settings.mjs";
+import {domFixture, deferred} from "./web-fixture.mjs";
 
 function fixture(post) {
   class Element {
     constructor() { this.listeners = {}; this.options = []; this.hidden = false; this.value = ""; this.checked = false; }
-    addEventListener(name, fn) { this.listeners[name] = fn; }
+    addEventListener(name, fn) { this.listeners[name] = fn; this["on"+name] = fn; }
     append(option) { this.options.push(option); }
     focus() {}
   }
@@ -86,4 +87,42 @@ test("a new recording waits until the previous cancellation finishes", async t =
   resolveCancel({}); await starting; await tick();
   assert.equal(starts, 2);
   assert.equal(ui.elements.get("#desktop-record-status").textContent, "请按组合键，30 秒内有效。Esc 取消。");
+});
+
+for (const confirmed of [false,true]) test(`page resume reconciles a pending desktop save (confirmed=${confirmed})`, async () => {
+  const dom = domFixture(), replies = [], writes = [];
+  globalThis.document = dom.document; globalThis.window = new EventTarget();
+  let scope = {active:true}, reads = 0;
+  const current = {supported:true,registration:"registered",surface:"ready",desired:{revision:"initial",enabled:true,binding:{modifiers:["ctrl","alt"],key:"KeyJ"},theme_id:"star"}};
+  const component = desktopSettings(async () => { reads++; return structuredClone(current); }, async (path, body) => {
+    assert.equal(path,"/api/desktop/settings");
+    const reply = deferred(); replies.push(reply); writes.push(structuredClone(body)); return reply.promise;
+  }, {session:() => scope});
+  await component.open();
+  dom.select("#desktop-form").elements.theme.value = "frost";
+  dom.select("#desktop-form").fire("submit"); await tick();
+  assert.equal(dom.select("#desktop-fields").disabled,true);
+  scope.active = false; component.stop(); scope = {active:true};
+  if (confirmed) {
+    current.last_operation = writes[0].operation_id;
+    current.desired.revision = "confirmed";
+    current.desired.theme_id = "frost";
+  }
+  await component.open();
+  assert.equal(reads,2);
+  assert.equal(dom.select("#desktop-fields").disabled,false);
+  assert.equal(dom.select("#desktop-save").textContent,confirmed ? "保存并应用" : "重试上次保存");
+  dom.select("#desktop-form").fire("submit"); await tick();
+  assert.equal(writes.length,2);
+  if (!confirmed) assert.deepEqual(writes[1],writes[0]);
+  else assert.notEqual(writes[1].operation_id,writes[0].operation_id);
+  replies[0].resolve({...current,registration:"old response"}); await tick();
+  // The ended transaction must not unlock the new in-flight transaction.
+  dom.select("#desktop-form").fire("submit"); await tick();
+  assert.equal(writes.length,2);
+  assert.equal(dom.select("#desktop-fields").disabled,true);
+  replies[1].resolve(current); await tick();
+  assert.equal(dom.select("#desktop-fields").disabled,false);
+  assert.doesNotMatch(dom.select("#desktop-state").textContent,/old response/);
+  component.stop();
 });

@@ -1,5 +1,7 @@
 # 测试入口
 
+Web 全部 Node 回归：`$uiTests = Get-ChildItem -LiteralPath tests -Filter '*.test.mjs' -File; node --test $uiTests.FullName`。包含同源会话/错误、生命周期、pending/回答 ID、输入保护、设置与桥消息交错，统一依赖验证自动发现这些测试。Go 从真实内嵌入口追踪全部静态 import；真实浏览器 fixture 的独立构建、登录/任务/配对/设置/重连与原生 WebView2 方法见[维护性验证](../docs/development/features/web-ui-maintainability/validation.md)。
+
 快捷输入新增 `node --test tests/quick-input.test.mjs tests/desktop-settings.test.mjs` 与 `pwsh -NoProfile -File scripts/test-quick-input.ps1 -Go go -OutputDirectory .\out\quick-input-validation -Desktop -Cycles 100`。普通 Go 回归覆盖事务、草稿与 API，JS 覆盖文本与录制异步会话边界，真实热键/WebView2 需显式 Desktop。用例、依赖和人工边界见[快捷输入验证](../docs/development/features/global-hotkey-quick-input/validation.md)。
 
 使用 Go 1.27.3 运行 `go test ./...` 和 `go vet ./...`。测试源在 internal、cmd、packaging 各包的 *_test.go；临时目录独立，普通测试无网络模型费用。

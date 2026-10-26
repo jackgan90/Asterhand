@@ -145,16 +145,7 @@ func (s *nativeSurface) resourceRequested(_ uintptr, args *comRef) uintptr {
 	defer request.release()
 	uri, _ := request.text(3)
 	method, _ := request.text(5)
-	file := strings.TrimPrefix(uri, surfaceOrigin+"/quick-input/")
-	body, mime, status := []byte("Blocked"), "text/plain", 403
-	if method == "GET" && strings.HasPrefix(uri, surfaceOrigin+"/quick-input/") {
-		allowed := map[string]string{"index.html": "text/html; charset=utf-8", "input.css": "text/css; charset=utf-8", "input.js": "application/javascript; charset=utf-8", "input-model.mjs": "application/javascript; charset=utf-8"}
-		if contentType, ok := allowed[file]; ok {
-			if data, readErr := inputAssets.ReadFile("assets/" + file); readErr == nil {
-				body, mime, status = data, contentType, 200
-			}
-		}
-	}
+	body, mime, status := inputResource(method, uri)
 	streamPointer, _, _ := windows.NewLazySystemDLL("shlwapi.dll").NewProc("SHCreateMemStream").Call(uintptr(unsafe.Pointer(&body[0])), uintptr(len(body)))
 	if streamPointer == 0 {
 		return 0
@@ -185,4 +176,22 @@ func (s *nativeSurface) postJSON(value any) error {
 		return err
 	}
 	return s.core.putText(32, string(data))
+}
+
+// inputResource is the same allowlist used by the native resource callback.
+func inputResource(method, uri string) ([]byte, string, int) {
+	file := strings.TrimPrefix(uri, surfaceOrigin+"/quick-input/")
+	if method == "GET" && strings.HasPrefix(uri, surfaceOrigin+"/quick-input/") {
+		allowed := map[string]string{
+			"index.html": "text/html; charset=utf-8", "input.css": "text/css; charset=utf-8",
+			"input.js": "application/javascript; charset=utf-8", "input-model.mjs": "application/javascript; charset=utf-8",
+			"webview2-bridge.mjs": "application/javascript; charset=utf-8",
+		}
+		if contentType, ok := allowed[file]; ok {
+			if data, err := inputAssets.ReadFile("assets/" + file); err == nil {
+				return data, contentType, 200
+			}
+		}
+	}
+	return []byte("Blocked"), "text/plain", 403
 }

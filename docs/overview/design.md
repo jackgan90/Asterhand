@@ -29,7 +29,7 @@ A 的助手理解意图并提交结构化目标；B 的助手在 B 上完成已�
 | Asterhand 核心服务（asterhand.exe / asterhand） | 身份、配对、任务、持久事件、交互、取消、恢复、产物引用 |
 | Windows 启动器（AsterhandLauncher.exe） | 读取当前安装记录，串行启动或复用节点，确认健康后打开 Web 并退出 |
 | 节点内置托盘 | 当前用户桌面的状态、Web 与日志入口，和节点同生命周期的停止操作 |
-| 本机快捷输入 | 控制器持有本地快捷键配置和内存草稿；托盘线程注册热键，独立 STA WebView2 线程承载文本浮层 |
+| 本机快捷输入 | 主进程控制器持有本地快捷键配置和原生内存草稿，托盘线程注册热键；独立非提权 UI 进程内的 STA 承载 WebView2 文本浮层，通过有界 IPC 同步；见[宿主隔离 ADR](../installation/adr/007-quick-input-process-isolation.md) |
 | OpenClaw | LLM 工具循环、会话、自然语言、运行时 skills/memory |
 | OpenClaw 执行适配器 | job/attempt 与会话映射、事件和交互转换、生命周期核对 |
 | 受限本机工具 | 参数与路径校验、文件操作和真实结果，不接受任意 shell 字符串 |

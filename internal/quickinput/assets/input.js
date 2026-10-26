@@ -7,10 +7,12 @@ export function inputEditor(bridge) {
     cleanup.push(() => target.removeEventListener(event, callback));
   };
   const input = document.querySelector("#input"), status = document.querySelector("#status");
+  input.disabled = true;
   let generation = "", revision = 0, composing = false, previous = "", pendingSnapshot = "";
   let lastHeight = 240;
   const send = (kind, extra = {}) => bridge.send({version:1,kind,generation,...extra});
   function commit() {
+    if (!generation) return;
     const text = normalizeNewlines(input.value);
     if (!validDraft(text)) {
       input.value = previous;
@@ -51,6 +53,8 @@ export function inputEditor(bridge) {
       case "init":
         generation = message.generation; revision = message.revision;
         input.value = previous = message.text; document.documentElement.dataset.theme = message.theme;
+        input.disabled = false;
+        send("initialized");
         break;
       case "theme": document.documentElement.dataset.theme = message.theme; break;
       case "focus": input.focus(); break;

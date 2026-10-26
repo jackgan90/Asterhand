@@ -73,9 +73,11 @@ $catalog = Assert-PreparedDependencies $repo $NodeDistribution $RuntimeRoot $Go
 $sourceDigest = Get-SourceFingerprint $repo
 Build-Binary 'windows' (Join-Path $windows 'asterhand.exe')
 Build-Binary 'windows' (Join-Path $windows 'AsterhandLauncher.exe') 'asterhand-launcher' -GUI
-foreach ($binary in @('asterhand.exe', 'AsterhandLauncher.exe')) {
+Build-Binary 'windows' (Join-Path $windows 'AsterhandInputHost.exe') 'asterhand-input-host' -GUI
+foreach ($binary in @('asterhand.exe', 'AsterhandLauncher.exe', 'AsterhandInputHost.exe')) {
     & (Join-Path $PSScriptRoot 'set-executable-icon.ps1') -Executable (Join-Path $windows $binary) -Icon (Join-Path $repo 'internal\desktop\assets\application.ico')
 }
+@{schema=1;version=$version;source_sha256=$sourceDigest;sha256=(Get-FileHash -LiteralPath (Join-Path $windows 'AsterhandInputHost.exe')).Hash.ToLowerInvariant()} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $windows 'input-host.json') -Encoding utf8NoBOM
 New-Item -ItemType Directory -Path (Join-Path $windows 'runtime') -Force | Out-Null
 Copy-Item -LiteralPath $NodeDistribution -Destination (Join-Path $windows 'runtime\node') -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $RuntimeRoot 'node_modules') -Destination (Join-Path $windows 'runtime\node_modules') -Recurse -Force

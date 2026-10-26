@@ -26,11 +26,13 @@ test("editor retains handshake, IME snapshot order, generation, theme, size guar
   assert.deepEqual(sent[0],{version:1,kind:"ready",generation:""});
   receive({kind:"init",generation:"current",revision:4,text:"old",theme:"star"});
   const input = dom.select("#input");
+  assert.equal(input.disabled,false);
+  assert.deepEqual(sent[1],{version:1,kind:"initialized",generation:"current"});
   input.fire("compositionstart"); input.value = "new\r\n中文";
   receive({kind:"snapshot",id:"snapshot-id"});
-  assert.equal(sent.length,1);
+  assert.equal(sent.length,2);
   input.fire("compositionend");
-  assert.deepEqual(sent.slice(1).map(message => message.kind),["draft_updated","snapshot"]);
+  assert.deepEqual(sent.slice(2).map(message => message.kind),["draft_updated","snapshot"]);
   assert.equal(sent.at(-1).revision,5); assert.equal(sent.at(-1).text,"new\n中文");
   assert.equal(sent.at(-1).generation,"current");
   receive({kind:"theme",theme:"frost"}); assert.equal(dom.document.documentElement.dataset.theme,"frost");

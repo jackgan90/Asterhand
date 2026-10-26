@@ -27,8 +27,9 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
   }
   function render(value, fill = false) {
     current = value;
-    const registration = {registered:"已注册", disabled:"已禁用", initializing:"准备中", conflict:"组合已被占用", unavailable:"桌面不可用", unsupported:"当前平台暂不支持", config_invalid:"本机配置无效"};
-    state.textContent = `${registration[value.registration] || value.registration} · 面板 ${value.surface === "ready" ? "就绪" : value.surface === "failed" ? "准备失败" : "未就绪"} · 期望 ${label(value.desired.binding)}${value.effective_binding ? " · 生效 "+label(value.effective_binding) : ""}${value.cleanup_pending ? " · 旧注册待清理，请重试；持续失败时从托盘退出并重启" : ""}${value.error ? " · "+value.error : ""}`;
+    const registration = {registered:"已注册", disabled:"已禁用", initializing:"准备中", recovering:"正在恢复", conflict:"组合已被占用", unavailable:"快捷输入不可用", unsupported:"当前平台暂不支持", config_invalid:"本机配置无效"};
+    const usable = value.registration === "registered" && value.surface === "ready" && value.effective_binding;
+    state.textContent = `${registration[value.registration] || value.registration} · 面板 ${value.surface === "ready" ? "就绪" : value.surface === "failed" ? "准备失败" : "未就绪"} · 已设置 ${label(value.desired.binding)}${usable ? " · 生效 "+label(value.effective_binding) : " · 尚未生效"}${value.cleanup_pending ? " · 旧注册待清理，请重试；持续失败时从托盘退出并重启" : ""}${value.error ? " · "+value.error : ""}`;
     document.querySelector("#desktop-fields").disabled = !value.supported;
     if (fill) {
       fields.enabled.checked = value.desired.enabled; fields.theme.value = value.desired.theme_id;

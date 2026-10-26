@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/jackgan90/Asterhand/internal/config"
 	"github.com/jackgan90/Asterhand/internal/executor"
 	"github.com/jackgan90/Asterhand/internal/llm"
+	"github.com/jackgan90/Asterhand/internal/quickinput/hostbundle"
 	"github.com/jackgan90/Asterhand/packaging"
 )
 
@@ -21,6 +23,13 @@ func CheckBundle(ctx context.Context, base string) error {
 	}
 	if sha256.Sum256(b) != packaging.Digest() {
 		return fmt.Errorf("安装包依赖清单与程序内嵌清单不符")
+	}
+	if runtime.GOOS == "windows" {
+		host, err := hostbundle.Verify(base, config.Version, config.SourceDigest)
+		if err != nil {
+			return err
+		}
+		host.Close()
 	}
 	return checkBundleTargets(ctx, base, packaging.Dependencies(), func(id string) (executor.Runtime, error) {
 		return executor.RuntimeFor(id, nil)

@@ -64,9 +64,11 @@ type nativeSurface struct {
 	closeStarted                  time.Time
 	closeError                    error
 	draft                         *Draft
+	remoteDraft                   *editorRelay
 	theme                         string
 	epoch                         string
 	documentReady                 bool
+	pageInitialized               bool
 	creationPending               bool
 	powerGeneration               uint64
 	wantsSuspended                bool
@@ -78,7 +80,12 @@ type nativeSurface struct {
 }
 
 func startNativeSurface(home string, onMessage func(string), onFailure func(error), source ...*Draft) (*nativeSurface, error) {
+	return startConfiguredSurface(home, onMessage, onFailure, nil, source...)
+}
+
+func startConfiguredSurface(home string, onMessage func(string), onFailure func(error), relay *editorRelay, source ...*Draft) (*nativeSurface, error) {
 	s := &nativeSurface{home: home, ready: make(chan error, 1), done: make(chan struct{}), commands: make(chan func(), 32), onMessage: onMessage, onFailure: onFailure}
+	s.remoteDraft = relay
 	s.draft, s.theme, s.epoch, s.waiters = &Draft{}, "star", model.ID(), map[string]chan struct{}{}
 	if len(source) != 0 {
 		s.draft = source[0]

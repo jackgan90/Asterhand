@@ -55,6 +55,7 @@ func evaluate(t *testing.T, s *nativeSurface, script string) string {
 }
 
 func TestNativeTextThemeSnapshotAndIsolation(t *testing.T) {
+	requireNativeDesktop(t)
 	if os.Getenv("ASTERHAND_DESKTOP_TEST") != "1" {
 		t.Skip("requires interactive desktop")
 	}
@@ -144,6 +145,7 @@ func TestBridgeRejectsMalformedMessages(t *testing.T) {
 }
 
 func TestNativeCloseHidesBeforeBrowserCleanup(t *testing.T) {
+	requireNativeDesktop(t)
 	if os.Getenv("ASTERHAND_DESKTOP_TEST") != "1" {
 		t.Skip("requires interactive desktop")
 	}

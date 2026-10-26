@@ -45,6 +45,10 @@ type testSurface struct {
 	theme       string
 }
 
+type testActivation struct{}
+
+func (testActivation) valid() bool { return true }
+
 func (s *testSurface) Toggle()                        { s.toggles++ }
 func (s *testSurface) Update(theme string) error      { s.theme = theme; return nil }
 func (s *testSurface) Snapshot(context.Context) error { return s.snapshotErr }
@@ -52,6 +56,7 @@ func (s *testSurface) Close() error                   { s.closed = true; return 
 func controllerFixture(t *testing.T) (*Controller, *testRegistrar, *testSurface) {
 	t.Helper()
 	c := New(t.TempDir())
+	c.captureIntent = func() activationIntent { return testActivation{} }
 	c.status.Supported = true
 	r := &testRegistrar{held: map[int]Binding{}, failRelease: map[int]bool{}}
 	s := &testSurface{}

@@ -7,7 +7,7 @@
 | EXEC-01 | 任务服务依赖窄执行器契约，不绑定某个 coding harness 的会话类型 |
 | EXEC-02 | 首版真实执行由 OpenClaw 调用受限本机文件工具完成 |
 | EXEC-03 | 能力显式声明：事件、问答、审批、取消、查询、恢复及断连行为 |
-| EXEC-04 | 任何执行必须关联 job/attempt，返回真实工具结果与产物 |
+| EXEC-04 | 任务执行必须关联 job/attempt，返回真实工具结果与产物；持续会话的纯文本轮次按独立会话契约管理 |
 | EXEC-05 | 首版不安装、不认证、不实现具体 coding harness adapter |
 | EXEC-06 | FakeExecutor 支持确定性故障脚本，仅供自动化验证 |
 | EXEC-07 | Agent runtime 由工厂选择，adapter 自己管理执行、配置校验、安装布局发现和诊断；未知 runtime 不回退 |
@@ -17,3 +17,15 @@
 后续候选包括 OpenCode、Claude Code、Codex、Antigravity；它们不是首版依赖，也不假定存在等价 API。首个具体适配器由后续场景选择。
 
 实际接口为 Execute(ctx, Run)，查询/问答/取消/恢复由任务服务和工具回调提供。文本 create-only、64 KiB、os.OpenRoot、操作日志与回读摘要已实现；未支持的 native resume/审批不声明为可用。
+
+## 会话运行时适配
+
+当前源码已接入，验收边界见[本机持续聊天计划](../development/features/local-node-chat/plan.md)；不改变当前 Execute 契约。
+
+| ID | 要求 |
+|---|---|
+| EXEC-CHAT-01 | 持续会话能力与一次性任务执行接口并列；创建/发送/历史/事件/状态核对/停止按产品语义适配，厂商 RPC、ID 与游标保持私有或不透明 |
+| EXEC-CHAT-02 | 首个聊天 adapter 复用锁定 OpenClaw/provider，在独立 state 下管理 Gateway；关闭工具、代码、skill、管理命令及不受控插件/渠道，验证最终有效能力与拒绝路径 |
+| EXEC-CHAT-03 | 新 harness 以能力及契约测试接入；可靠收据、历史和恢复不足时明确不支持；不使用空实现、静默 provider/runtime 回退或未验证持久化保证 |
+
+- EXEC-PROMPT-01：会话适配器保留原生设定，优先使用配置与局部补充解决能力冲突，声明完整覆盖、补充或不支持并报告经确认的应用状态；append 已确认即为正常成功。OpenClaw 保留原生提示词与隔离工作区角色文件，通过受支持钩子补充当前入口约束，失败不得单独阻断聊天。后续 harness 遵循相同原则，工具定义以实际暴露集合为准。

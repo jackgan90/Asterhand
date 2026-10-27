@@ -1,5 +1,15 @@
 # 安装与环境设计
 
+## 聊天运行时
+
+[本机持续聊天](../development/features/local-node-chat/plan.md)使用受管 OpenClaw Gateway，相关源代码随常规构建内嵌，无新增安装组件。完整会话、配置和收尾契约以[持续会话设计](../assistant/conversations.md)为准；本节定义安装与进程归属。
+
+会话目录与 Gateway state/workspace 放在节点数据目录的独立受保护位置，不复用个人 OpenClaw home、任务 attempt state 或 WebView2 profile。端口按实例分配并验证身份与认证；已有未知 Gateway 不自动接管。多个数据目录的进程、凭据、端口和历史互相隔离，首版仍不提供多节点安装管理。
+
+Gateway 按首次历史访问或发送需求启动，节点生命周期内复用；模型只读历史与生成就绪分别检查。启动失败只降级聊天，保留原生草稿、设置与既有任务服务。正常退出停止聊天准入、请求停止在途轮次、有界核对，再清理自有 Gateway；强制退出后的状态在下次启动核对。只结束身份和创建关系可验证的进程，不按进程名全机清理。托盘忙时确认覆盖聊天轮次。
+
+升级保留原生历史、会话目录和绑定，依赖升级先验证历史格式、持久收据、权限与取消。未知较新 schema 拒绝写入；不通过回退安装删除新数据。凭据继续由节点后端保护，具体 busy、就绪失效和旧绑定访问规则由会话设计统一定义。源码接入与实际安装验收分别记录，验证入口见[聊天验证](../development/features/local-node-chat/validation.md)。
+
 ## 快捷输入宿主
 
 Windows 快捷输入使用同版本的独立 GUI 宿主 AsterhandInputHost.exe；主进程控制器持有原生草稿、本地配置事务、录制租约与恢复策略，热键注册归托盘 OS 线程。UI 宿主在非提权 Medium 权限下运行 STA 与 WebView2，使用有界匿名管道交换定型消息；管理员节点通过受限令牌启动，标准用户使用自身非提权身份。创建进程时纳入自有 Job，父进程退出清理所属进程树。宿主保持 CGO_ENABLED=0，使用固定 Go WebView2 loader/COM bridge 与经官方 SDK 校验的窄接口，go.mod/go.sum 锁定版本与摘要，构建保留 MIT/ISC 许可证。Evergreen Runtime 检测实际版本和最低 API 能力，安装材料固定来源/版本/摘要；补齐失败保留在线节点，运行中更新不重启任务节点。取舍见[隔离 ADR](adr/007-quick-input-process-isolation.md)，依赖与分发边界见[宿主依赖说明](../../packaging/webview2.md)。

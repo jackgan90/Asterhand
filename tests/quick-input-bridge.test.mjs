@@ -39,5 +39,44 @@ test("editor retains handshake, IME snapshot order, generation, theme, size guar
   input.value = "😀".repeat(4001); input.fire("input"); assert.equal(input.value,"new\n中文");
   const escape = new Event("keydown",{cancelable:true}); escape.key = "Escape"; input.dispatchEvent(escape);
   assert.equal(sent.at(-1).kind,"hide");
+  // A visible send consumes the composer immediately, while host recovery keeps the pending text.
+  const original = editor.snapshot();
+  assert.equal(editor.stageSubmission('send-1', original), true);
+  assert.equal(input.value, '');
+  assert.equal(editor.snapshot().text, '');
+  editor.setExpanded(true);
+  receive({kind:'snapshot',id:'pending-send'});
+  assert.equal(sent.at(-1).text, original.text);
+  assert.equal(sent.at(-1).revision, original.revision);
+  assert.equal(editor.restoreSubmission('other-send'), false);
+  assert.equal(editor.restoreSubmission('send-1'), true);
+  assert.equal(input.value, original.text);
+  assert.equal(editor.stageSubmission('send-2', editor.snapshot()), true);
+  assert.equal(editor.clearIfRevision(original.revision), true);
+  assert.equal(input.value, '');
+  receive({kind:'snapshot',id:'accepted-send'});
+  assert.equal(sent.at(-1).text, '');
+  assert.equal(editor.restoreSubmission('send-2'), false);
+  // Retyping the same text is still a new draft and must survive an old receipt.
+  input.value = original.text; input.fire('input');
+  const repeated = editor.snapshot();
+  editor.stageSubmission('send-3', repeated);
+  input.value = original.text; input.fire('input');
+  assert.ok(editor.snapshot().revision > repeated.revision);
+  assert.equal(editor.clearIfRevision(repeated.revision), false);
+  assert.equal(editor.restoreSubmission('send-3'), false);
+  assert.equal(input.value, original.text);
+  // Oversized input cannot expose the pending message as an editable duplicate.
+  editor.stageSubmission('send-4', editor.snapshot());
+  input.value = '😀'.repeat(4001); input.fire('input');
+  assert.equal(input.value, '');
+  assert.equal(editor.restoreSubmission('send-4'), true);
+  editor.stageSubmission('send-5', editor.snapshot());
+  input.fire('compositionstart'); input.value = '下一条';
+  assert.equal(editor.restoreSubmission('send-5'), false);
+  assert.equal(editor.snapshot(), null);
+  input.fire('compositionend');
+  assert.equal(editor.restoreSubmission('send-5'), false);
+  assert.equal(input.value, '下一条');
   editor.dispose(); receive({kind:"theme",theme:"star"}); assert.equal(dom.document.documentElement.dataset.theme,"frost");
 });

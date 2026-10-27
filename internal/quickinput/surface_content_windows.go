@@ -186,6 +186,10 @@ func inputResource(method, uri string) ([]byte, string, int) {
 			"index.html": "text/html; charset=utf-8", "input.css": "text/css; charset=utf-8",
 			"input.js": "application/javascript; charset=utf-8", "input-model.mjs": "application/javascript; charset=utf-8",
 			"webview2-bridge.mjs": "application/javascript; charset=utf-8",
+			"chat-client.mjs":     "application/javascript; charset=utf-8", "chat-model.mjs": "application/javascript; charset=utf-8",
+			"chat-renderer.mjs": "application/javascript; charset=utf-8", "chat-ui.mjs": "application/javascript; charset=utf-8",
+			"chat.css":        "text/css; charset=utf-8",
+			"chat-outbox.mjs": "application/javascript; charset=utf-8",
 		}
 		if contentType, ok := allowed[file]; ok {
 			if data, err := inputAssets.ReadFile("assets/" + file); err == nil {

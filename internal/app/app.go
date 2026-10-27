@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jackgan90/Asterhand/internal/config"
+	"github.com/jackgan90/Asterhand/internal/conversation"
 	"github.com/jackgan90/Asterhand/internal/executor"
 	"github.com/jackgan90/Asterhand/internal/model"
 	"github.com/jackgan90/Asterhand/internal/peer"
@@ -32,6 +33,7 @@ type App struct {
 	Peers           *peer.Manager
 	Engine          *tasks.Engine
 	Input           *quickinput.Controller
+	Chat            *conversation.Service
 	desktopRequests chan struct{}
 	loginToken      string
 	mu              sync.Mutex
@@ -89,6 +91,8 @@ func New(c *config.Manager, x executor.Executor) (*App, error) {
 	}
 	a.loginToken = string(b)
 	a.Input = quickinput.New(c.Home)
+	a.Chat = conversation.New(c.Get().NodeID, s, executor.NewConversationRuntime(c))
+	a.Input.SetConversationClient(conversation.Client{Target: a.Chat.Target(), Transport: a.Chat})
 	a.desktopRequests = make(chan struct{}, 8)
 	return a, nil
 }
@@ -122,6 +126,7 @@ func (a *App) Start(ctx context.Context) (string, error) {
 		remote.Close()
 		return "", err
 	}
+	a.Chat.Start()
 	localServer := &http.Server{Handler: a.requests.wrap(a.local), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 * 1024}
 	peerServer := &http.Server{Handler: a.requests.wrap(a.remote), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 * 1024}
 	tlsListener := tls.NewListener(remote, &tls.Config{Certificates: []tls.Certificate{a.Peers.TLS}, MinVersion: tls.VersionTLS13})
@@ -149,10 +154,11 @@ func (a *App) Close() error {
 		a.RequestStop(true)
 		a.requests.wg.Wait()
 		a.wg.Wait()
+		chatErr := a.Chat.Close()
 		if a.Input != nil {
 			a.Input.Close()
 		}
-		a.closeErr = a.Store.Close()
+		a.closeErr = errors.Join(chatErr, a.Store.Close())
 	})
 	return a.closeErr
 }

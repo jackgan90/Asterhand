@@ -19,8 +19,12 @@
 | Ctrl+Alt+J 全局呼出、本地自定义与冲突检测、科技风文本浮层（首版用户验收完成） | [本机全局快捷输入](features/global-hotkey-quick-input/plan.md) |
 | 独立非提权输入宿主、主进程草稿、有限恢复和真实可用状态（本机用户验收完成） | [快捷输入进程隔离](features/quick-input-process-isolation/plan.md) |
 | 原生 Web 同源客户端、生命周期、任务/节点/设置职责与独立 WebView2 桥；保持现有功能和平台范围 | [Web 与快捷输入维护性重构](features/web-ui-maintainability/plan.md) |
+| 本机持续聊天：真实消息发送、历史查询、新对话、展开/收起（用户验收通过） | [持续聊天](features/local-node-chat/plan.md) |
+| 聊天发送反馈、快捷键与正文展示；提示词保留原生身份和角色设定，局部补充能力约束 | [聊天交互](features/chat-prompt-interaction/plan.md)、[原生提示词保留](features/native-harness-prompt-preservation/plan.md) |
 
 ## 后续验证与功能
+
+- 持续聊天的实体 IME、多屏/DPI/RDP、跨应用交互、实际升级、并行真实文件任务与成本专项继续按[验证说明](features/local-node-chat/validation.md)记录；日常聊天用户验收已完成。
 
 - 快捷输入的隐藏 CPU 成本优化，以及其余权限配置、多屏/DPI/锁屏/RDP、干净 Windows Runtime 安装和双机专项验证，范围见[隔离验证](features/quick-input-process-isolation/validation.md)与[快捷输入验证](features/global-hotkey-quick-input/validation.md)。
 - Windows 桌面专项验收：Explorer 重启、注销、深浅主题与 DPI，以及两台 Windows + OpenClaw + DeepSeek 下的退出与恢复；工程测试和合成系统消息的边界见 [桌面启动验证](features/windows-desktop-lifecycle/validation.md)。

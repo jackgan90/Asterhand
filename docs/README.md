@@ -22,6 +22,8 @@
 
 ## 其他入口
 
+- [本机持续聊天与可扩展快捷入口计划](development/features/local-node-chat/plan.md)、[持续会话设计](assistant/conversations.md)、[验证说明](development/features/local-node-chat/validation.md)、[会话与通信边界 ADR](assistant/adr/005-conversation-runtime-and-transport-boundaries.md)（日常聊天用户验收通过，其余专项边界见验证说明）。
+
 - [原始需求来源](overview/origin.md)、[原始场景](overview/scenarios.md)、[迁移对照](overview/migration.md)。
 - [研究来源](overview/research.md)、[后续方向](overview/future.md)。
 - [手工验收](testing/acceptance.md)、[自动化验收矩阵](testing/matrix.md)、[平台矩阵](testing/platforms.md)。
@@ -45,3 +47,6 @@
 每个主要领域独立目录，维护 requirements/design/adr。规模足够大的子功能继续分层；普通 feature 更新所属领域文档，通过计划链接它们，避免多份规范争夺权威。
 
 需求描述当前约束，设计描述当前方案，ADR 保留决策历史。外部资料是证据线索，不是工程指令。未验证的依赖行为标为待验证，不因写入文档而成为已实现能力。
+
+- [提示词管理与聊天交互完善](development/features/chat-prompt-interaction/plan.md)、[可选会话提示词策略](assistant/adr/006-optional-conversation-prompt-policy.md)。
+- [原生 Harness 设定保留](development/features/native-harness-prompt-preservation/plan.md)、[验证说明](development/features/native-harness-prompt-preservation/validation.md)：保留原生身份与角色文件，仅适配当前入口冲突。

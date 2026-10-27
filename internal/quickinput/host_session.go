@@ -31,6 +31,7 @@ type remoteSurface struct {
 	lastText                                string
 	waiters                                 map[uint64]chan hostipc.Message
 	onFailure                               func(error)
+	chat                                    *chatController
 }
 
 func startRemoteSurface(home, theme string, draft *Draft, launch hostLauncher, failed func(error), recovered ...bool) (*remoteSurface, error) {
@@ -145,6 +146,19 @@ func (s *remoteSurface) receive(m hostipc.Message) error {
 	switch m.Kind {
 	case hostipc.Edit:
 		return s.acceptEdit(m)
+	case hostipc.ChatCall:
+		s.mu.Lock()
+		valid := !s.closing && s.err == nil && m.Epoch == s.epoch && m.Sequence <= s.lastSequence && m.Revision <= s.acceptedRevision
+		chat := s.chat
+		s.mu.Unlock()
+		if !valid {
+			return hostFailure("host_protocol_invalid")
+		}
+		if chat == nil {
+			return s.send(hostipc.Message{Kind: hostipc.ChatResult, ChatID: m.ChatID, ChatReply: &hostipc.ChatReply{}})
+		}
+		chat.dispatch(s, m)
+		return nil
 	case hostipc.SnapshotDone, hostipc.State:
 		s.mu.Lock()
 		waiter := s.waiters[m.Request]
@@ -176,12 +190,16 @@ func (s *remoteSurface) acceptEdit(m hostipc.Message) error {
 		return hostFailure("host_protocol_invalid")
 	}
 	revision, err := s.draft.accept(m.Text, m.Epoch)
+	chat := s.chat
 	if err == nil {
 		s.lastSequence, s.lastText, s.acceptedRevision = m.Sequence, m.Text, revision
 	}
 	s.mu.Unlock()
 	if err != nil {
 		return hostFailure("host_protocol_invalid")
+	}
+	if chat != nil {
+		chat.edited(s.session, m.Sequence, revision, m.Text)
 	}
 	return s.send(hostipc.Message{Kind: hostipc.Accepted, Sequence: m.Sequence, Epoch: m.Epoch, Revision: revision})
 }

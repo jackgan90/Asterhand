@@ -17,6 +17,9 @@ func NativeFactory(c *Controller) SurfaceFactory {
 		c.mu.Unlock()
 		s, err := startRemoteSurface(c.home, c.Status().Desired.Theme, &c.draft, launchWindowsHost, func(err error) { c.failedGeneration(generation, err) }, c.Status().RecoveryNotice != "")
 		if err == nil {
+			s.mu.Lock()
+			s.chat = c.chat
+			s.mu.Unlock()
 			c.mu.Lock()
 			c.status.RuntimeVersion = s.runtime
 			c.mu.Unlock()
@@ -48,7 +51,7 @@ func (s *nativeSurface) bridgeMessage(raw string) {
 			s.suspend(func() { s.ready <- nil })
 		}
 	case "resize":
-		if m.Height >= 240 && m.Height <= 480 {
+		if m.Height >= 240 && m.Height <= 800 {
 			s.height = m.Height
 			s.position()
 		}
@@ -73,6 +76,17 @@ func (s *nativeSurface) bridgeMessage(raw string) {
 		}
 	case "hide":
 		s.hide(true)
+	case "pin":
+		s.pinned = m.Pinned
+		s.position()
+	case "copy":
+		if len(m.Text) <= 64*1024 {
+			if err := writeChatClipboard(s.hwnd.Load(), m.Text); err != nil {
+				_ = s.postJSON(map[string]string{"kind": "error", "message": "复制失败，请重试"})
+			}
+		}
+	case "chat":
+		s.chatRequest(m)
 	}
 }
 

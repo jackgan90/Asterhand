@@ -120,12 +120,11 @@
             maxlength="80"
             placeholder="Windows B" /></label
         ><label
-          >授权目录<input
+            >授权目录（文件任务，可选）<input
             name="root"
-            required
             placeholder="例如 F:\AsterhandWorkspace" /></label
         ><small
-          >不存在的目录会自动创建；工具只允许在此目录内创建和读取文本。</small
+            >纯聊天可留空；文件任务只允许在此目录内创建和读取文本。不存在的目录会自动创建。</small
         >
         <div id="network-status" class="status-box">正在检测 Tailscale…</div>
         <button type="button" id="use-tailnet" class="quiet" hidden>

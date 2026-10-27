@@ -7,17 +7,20 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/jackgan90/Asterhand/internal/conversation/wire"
 	"github.com/jackgan90/Asterhand/internal/quickinput/hostipc"
 )
 
 type bridgeMessage struct {
-	Version  int    `json:"version"`
-	Kind     string `json:"kind"`
-	Epoch    string `json:"generation"`
-	Revision uint64 `json:"revision"`
-	Text     string `json:"text"`
-	ID       string `json:"id"`
-	Height   int    `json:"height,omitempty"`
+	Version  int           `json:"version"`
+	Kind     string        `json:"kind"`
+	Epoch    string        `json:"generation"`
+	Revision uint64        `json:"revision"`
+	Text     string        `json:"text"`
+	ID       string        `json:"id"`
+	Height   int           `json:"height,omitempty"`
+	Pinned   bool          `json:"pinned,omitempty"`
+	Chat     *wire.Request `json:"chat,omitempty"`
 }
 
 func decodeBridgeMessage(raw string) (bridgeMessage, error) {

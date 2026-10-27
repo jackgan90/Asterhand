@@ -32,6 +32,7 @@ func TestHostSessionDraftAndSnapshotRoundtrip(t *testing.T) {
 	p := &pipeHost{input, output, make(chan struct{}), sync.Once{}}
 	defer p.Stop()
 	protocolErrors := make(chan error, 1)
+	editAcknowledged := make(chan struct{})
 	go func() {
 		defer commands.Close()
 		defer events.Close()
@@ -62,6 +63,9 @@ func TestHostSessionDraftAndSnapshotRoundtrip(t *testing.T) {
 			switch m.Kind {
 			case hostipc.Accepted:
 				acknowledged = m.Sequence == 1 && m.Revision == 1
+				if acknowledged {
+					close(editAcknowledged)
+				}
 			case hostipc.Snapshot:
 				// The parent writer orders the edit ACK before the test's snapshot.
 				if !acknowledged {
@@ -91,6 +95,15 @@ func TestHostSessionDraftAndSnapshotRoundtrip(t *testing.T) {
 			t.Fatal("edit was not accepted")
 		}
 		time.Sleep(time.Millisecond)
+	}
+	// Draft visibility precedes ACK enqueueing. Wait for the actual host receipt
+	// before asserting that the subsequent snapshot observes that receipt.
+	select {
+	case <-editAcknowledged:
+	case err := <-protocolErrors:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("edit acknowledgement did not reach host")
 	}
 	if err = s.Snapshot(context.Background()); err != nil {
 		t.Fatal(err)

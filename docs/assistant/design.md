@@ -2,6 +2,14 @@
 
 当前实现：OpenClaw 2026.10.7、对应 DeepSeek provider、Node.js 24.22.1；默认 `deepseek/deepseek-flash`。精确来源和摘要见 [依赖清单](../../packaging/dependencies.json)。
 
+## 持续会话路径
+
+[持续会话设计](conversations.md)是本机快捷聊天的数据、运行时与恢复契约权威，关联 [ADR-AST-005](adr/005-conversation-runtime-and-transport-boundaries.md)。当前源码已接入，产品验收边界见验证说明；下文 route/execute/probe 和一次性 `agent exec` 仍描述已交付任务路径。
+
+独立会话服务位于 `internal/conversation`，运行时适配器位于 `internal/executor/conversation*.go`。首个实现使用受管 OpenClaw Gateway，正文和上下文保存在其独立持久目录，agentd 只保存会话绑定及请求恢复元数据。首版当前节点/默认角色、文本多轮、流式回复、历史分页和停止；工具与管理命令关闭。模型就绪与任务工具 probe 分开，纯聊天不要求文件授权目录。
+
+UI 经受限 IPC 访问会话服务，不接触 Gateway 凭据或厂商协议。公共层显式区分节点、角色、会话与轮次，runtime 替换、任务执行、多节点、多角色和远程通信仅保留边界。锁定运行时的接入决策与验证边界见[功能计划](../development/features/local-node-chat/plan.md)；尚未完成的真实模型、实体 IME 与安装验收单独列出。
+
 ## 执行与路由
 
 统一 Web 的每次输入形成持久 route job，A 的 OpenClaw 负责理解意图。普通问题可直接回答；动作通过 `asterhand_submit(goal,target_id,project_id)` 保存 outbox。B 持久接收后创建独立 execute job，由 B 的 OpenClaw 执行；本机动作也经相同边界。

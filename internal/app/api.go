@@ -165,18 +165,21 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, err)
 		return
 	}
-	if !filepath.IsAbs(input.Root) {
+	if input.Root != "" && !filepath.IsAbs(input.Root) {
 		fail(w, 400, errors.New("授权目录必须为绝对路径"))
 		return
 	}
-	root, err := filepath.Abs(input.Root)
-	if err != nil {
-		fail(w, 400, err)
-		return
-	}
-	if err = executor.ValidateWorkspace(c, a.Config.Home, root); err != nil {
-		fail(w, 400, err)
-		return
+	root := ""
+	var err error
+	if input.Root != "" {
+		root, err = filepath.Abs(input.Root)
+		if err == nil {
+			err = executor.ValidateWorkspace(c, a.Config.Home, root)
+		}
+		if err != nil {
+			fail(w, 400, err)
+			return
+		}
 	}
 	var jobs []model.Job
 	if err = a.Store.List("job", &jobs); err != nil {
@@ -197,9 +200,20 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 		fail(w, 503, errors.New("节点正在退出"))
 		return
 	}
-	if err = os.MkdirAll(root, 0700); err != nil {
-		fail(w, 400, err)
-		return
+	chatChanged := input.Key != "" || input.DeleteKey || model.Hash(before.LLM) != model.Hash(c.LLM) || before.AgentRuntime != c.AgentRuntime
+	if chatChanged {
+		release, guardErr := a.Chat.BeginConfiguration()
+		if guardErr != nil {
+			fail(w, 409, guardErr)
+			return
+		}
+		defer release()
+	}
+	if root != "" {
+		if err = os.MkdirAll(root, 0700); err != nil {
+			fail(w, 400, err)
+			return
+		}
 	}
 	if input.Endpoint != "" {
 		u, parseErr := url.Parse(input.Endpoint)
@@ -211,7 +225,10 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 	c.Name = input.Name
 	c.Endpoint = input.Endpoint
 
-	c.Projects = []config.Project{{ID: "workspace", Name: "授权目录", Root: root}}
+	c.Projects = nil
+	if root != "" {
+		c.Projects = []config.Project{{ID: "workspace", Name: "授权目录", Root: root}}
+	}
 	c.Configured = true
 	if input.Key != "" || input.DeleteKey {
 		if input.DeleteKey {

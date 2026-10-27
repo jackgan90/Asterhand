@@ -1,0 +1,21 @@
+{
+  "id": "asterhand-chat-policy",
+  "name": "Asterhand chat policy",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "policyPath": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096
+      }
+    },
+    "required": [
+      "policyPath"
+    ],
+    "additionalProperties": false
+  }
+}

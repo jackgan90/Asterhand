@@ -66,6 +66,19 @@ func TestSettingsSelectionRejectsBeforeWritingAndInvalidatesProbe(t *testing.T) 
 	}
 }
 
+func TestChatSettingsAllowNoFileWorkspace(t *testing.T) {
+	n := newNode(t, &fakeExecutor{})
+	body, _ := json.Marshal(map[string]any{"name": "chat only", "root": "", "llm": n.cfg.Get().LLM, "key": "fixture-chat-key"})
+	response := httptest.NewRecorder()
+	n.app.settings(response, httptest.NewRequest(http.MethodPost, "/api/settings", bytes.NewReader(body)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("chat settings: %d %s", response.Code, response.Body.String())
+	}
+	if c := n.cfg.Get(); len(c.Projects) != 0 || c.ModelVerified {
+		t.Fatal("chat-only settings granted task readiness")
+	}
+}
+
 func TestSettingsProtectsAdapterDirectoriesBeforeWritingKey(t *testing.T) {
 	n := newNode(t, &fakeExecutor{})
 	c := n.cfg.Get()

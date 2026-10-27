@@ -9,3 +9,7 @@
 - [002-agent-exec-runtime — agent exec 与受限回调插件](002-agent-exec-runtime.md)
 - [003-provider-runtime-bundle-boundaries — 模型、agent 与安装 bundle 分层](003-provider-runtime-bundle-boundaries.md)
 - [004-provider-neutral-public-flows — 公共配置、目录保护和包描述收口](004-provider-neutral-public-flows.md)
+- [005-conversation-runtime-and-transport-boundaries — 持续会话的运行时、存储与通信边界](005-conversation-runtime-and-transport-boundaries.md)
+
+- [ADR-AST-006：可选的会话提示词策略](006-optional-conversation-prompt-policy.md)。
+- [ADR-AST-007：保留原生 Harness 设定，仅适配产品冲突](007-preserve-native-harness-prompts.md)。

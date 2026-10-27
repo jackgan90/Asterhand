@@ -78,6 +78,7 @@ type Controller struct {
 	operations        map[string]operation
 	record            *recording
 	draft             Draft
+	chat              *chatController
 	readyAt           time.Time
 	recoveryUsed      bool
 	pendingActivation activationIntent
@@ -468,6 +469,9 @@ func (c *Controller) Close() {
 	}
 	if c.surface != nil {
 		c.closeSurface()
+	}
+	if c.chat != nil {
+		c.chat.close()
 	}
 	c.draft.Clear()
 }

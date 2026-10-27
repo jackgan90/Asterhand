@@ -75,6 +75,9 @@ func serveInputHost(input io.Reader, output io.Writer, initial hostipc.Message) 
 		return err
 	}
 	defer surface.Close()
+	if err = surface.dispatch(ctx, func() { surface.chatSend = send }); err != nil {
+		return err
+	}
 	if err = surface.Update(initial.Theme); err != nil {
 		return err
 	}
@@ -109,6 +112,10 @@ func serveHostCommand(ctx context.Context, surface *nativeSurface, relay *editor
 	switch m.Kind {
 	case hostipc.Accepted:
 		return relay.accept(m)
+	case hostipc.ChatResult:
+		return surface.dispatch(ctx, func() {
+			_ = surface.postJSON(map[string]any{"kind": "chat_result", "id": m.ChatID, "reply": m.ChatReply})
+		})
 	case hostipc.Toggle:
 		surface.Toggle()
 		return surface.dispatch(ctx, func() { _ = send(hostipc.Message{Kind: hostipc.State, Request: m.Request}) })

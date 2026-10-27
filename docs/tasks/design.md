@@ -2,6 +2,12 @@
 
 下列语义由 internal/model、store、tasks、app 落实。当前数值与限制见文末实现契约，未实现扩展明确标注。
 
+## 会话与任务的关系
+
+[本机持续聊天](../development/features/local-node-chat/plan.md)使用独立会话路径。纯文本轮次不进入本任务队列，不分配文件工具 token；聊天生成槽与任务执行槽分开，文件任务等待问答或人工核对不会阻塞纯聊天。
+
+未来会话可显式关联 Task/Job，Conversation、Turn 和 Task 的身份及终态分别维护；显示任务卡片从真实事件读取，不从助手文本推断成功。停止聊天轮次不自动代表关联任务已取消，UI 关闭也不终止任务。权限、去重、产物证据和副作用恢复继续遵循本文；本功能不开放会话执行工具或跨节点任务新入口。扩展边界见[持续会话设计](../assistant/conversations.md)。
+
 ## 对象与事务
 
 | 对象 | 必要信息 |
@@ -86,7 +92,7 @@ SQLite 数据库存本地，不跨设备同步活跃文件。迁移应可诊断�
 ## 实现契约
 
 - SQLite WAL + synchronous=FULL；schema 1，拒绝较新 schema。Accept 原子写 job/dedup/event，Change 原子更新任务与事件。attempt 内嵌于 job；max_attempts=1，不提供自动 resume 或独立多 attempt 表。
-- 所有 Web 输入先形成 route job；execute job 才拥有文件工具。route 的 succeeded 表示提交已持久保存，UI 展示对应执行任务；执行 job 的 succeeded 要求文件回读证据，无文件证据的模型回复为 completed_unverified。
+- 当前 Web 任务入口输入先形成 route job；execute job 才拥有文件工具。route 的 succeeded 表示提交已持久保存，UI 展示对应执行任务；执行 job 的 succeeded 要求文件回读证据，无文件证据的模型回复为 completed_unverified。
 - 每节点一个全局执行槽；reconciliation_required 阻塞后续启动。重启时所有非 queued、非终态执行进入待核对；本机填写证据关闭后状态为 failed / unknown_manually_closed。
 - 一个同步 interaction；普通问题 10 分钟有效，回答事务保存后交给原回调。旧 attempt 和第二个不同回答拒绝；远端答案先存 A 的 answer-outbox。当前没有审批或并行交互 UI。
 - 启动期限前端默认 1 小时、服务端最大 24 小时；执行预算 10 分钟（不含问答等待），墙钟 2 小时。每秒轮询 outbox，失败保持原目标；尚无指数退避和自动容量清理，适用于个人低任务量候选。

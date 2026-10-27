@@ -12,3 +12,24 @@ test("paste evaluates replacement selection without truncation", () => {
   assert.equal(validDraft(insertedText("a".repeat(16000), 0, 2, "中")), false);
   assert.equal(validDraft(insertedText("a".repeat(16000), 0, 3, "中")), true);
 });
+
+import {inputKeyAction} from '../internal/quickinput/assets/input-model.mjs';
+
+test('Enter sends, Shift+Enter inserts a line, IME confirmation and held keys never send', () => {
+  const key = extra => ({key:'Enter', ...extra});
+  const action = (event, composing=false, end=-Infinity, now=1000) => inputKeyAction(event, composing, end, now);
+  assert.equal(action(key()), 'send');
+  assert.equal(action(key({ctrlKey:true})), 'send');
+  assert.equal(action(key({shiftKey:true})), '');
+  assert.equal(action(key({shiftKey:true,ctrlKey:true})), '');
+  assert.equal(action(key({altKey:true})), '');
+  assert.equal(action(key({metaKey:true})), '');
+  assert.equal(action(key(), true), '');
+  assert.equal(action(key({isComposing:true})), '');
+  assert.equal(action(key({keyCode:229})), '');
+  assert.equal(action(key(), false, 980), 'consume');
+  assert.equal(action(key(), false, 900), 'send');
+  assert.equal(action(key({repeat:true})), 'consume');
+  assert.equal(action({key:'Escape'}), 'hide');
+  assert.equal(action({key:'Escape'}, true), '');
+});

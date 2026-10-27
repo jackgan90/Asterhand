@@ -1,5 +1,16 @@
 # 安装与环境需求
 
+## 持续聊天生命周期
+
+以下要求属于[本机持续聊天](../development/features/local-node-chat/plan.md)，当前源码已接入；安装升级实测状态见功能验证说明。
+
+| ID | 要求 |
+|---|---|
+| INST-CHAT-01 | 按节点隔离并管理聊天 Gateway 的状态、端口和进程；按需启动、认证访问、有界退出，只清理归属可验证的自有进程；聊天和 UI 故障不终止原任务服务 |
+| INST-CHAT-02 | 升级保留会话目录、原生历史与稳定绑定；配置变化遵守在途保护和就绪失效，历史只读不依赖模型凭据或模型网络；较新数据格式拒绝被旧程序盲写 |
+
+## 已有安装要求
+
 范围：Windows 完整安装与升级，验证方法见 [数据与配置保留](../development/features/task-reliability/validation.md) 和 [安装路径解析](../development/features/installer-path-resolution/plan.md)。关联 C04、C05、C09。
 
 | ID | 要求 |

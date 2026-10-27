@@ -55,6 +55,7 @@ func (s *nativeSurface) Toggle() {
 }
 
 func (s *nativeSurface) hide(restore bool) {
+	_ = s.postJSON(map[string]any{"kind": "visibility", "visible": false})
 	foreground, _, _ := uiDLL.NewProc("GetForegroundWindow").Call()
 	uiDLL.NewProc("ShowWindow").Call(s.hwnd.Load(), 0)
 	s.suspend(nil)
@@ -92,7 +93,11 @@ func (s *nativeSurface) position() {
 	height = min(height, info.Work.Bottom-info.Work.Top-16)
 	x := info.Work.Left + (info.Work.Right-info.Work.Left-width)/2
 	y := info.Work.Top + (info.Work.Bottom-info.Work.Top-height)/3
-	uiDLL.NewProc("SetWindowPos").Call(s.hwnd.Load(), ^uintptr(0), uintptr(x), uintptr(y), uintptr(width), uintptr(height), 0x10)
+	order := ^uintptr(0)
+	if s.pinned {
+		order = ^uintptr(1) // HWND_NOTOPMOST: a pinned reader stays open, not above other apps.
+	}
+	uiDLL.NewProc("SetWindowPos").Call(s.hwnd.Load(), order, uintptr(x), uintptr(y), uintptr(width), uintptr(height), 0x10)
 }
 
 func (s *nativeSurface) windowEvent(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
@@ -106,7 +111,7 @@ func (s *nativeSurface) windowEvent(hwnd uintptr, message uint32, wParam, lParam
 	case 0x0006:
 		if wParam&0xffff == 0 {
 			owner, _, _ := uiDLL.NewProc("GetAncestor").Call(lParam, 3)
-			if owner != hwnd {
+			if owner != hwnd && !s.pinned {
 				s.hide(false)
 			}
 		}

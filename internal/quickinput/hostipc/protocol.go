@@ -9,6 +9,8 @@ import (
 	"errors"
 	"io"
 	"unicode/utf8"
+
+	"github.com/jackgan90/Asterhand/internal/conversation/wire"
 )
 
 const Version = 1
@@ -29,28 +31,33 @@ const (
 	State        Kind = "state"
 	Failure      Kind = "failure"
 	Quit         Kind = "quit"
+	ChatCall     Kind = "chat_call"
+	ChatResult   Kind = "chat_result"
 )
 
 // Message contains only input-surface capabilities. Request is a command ID;
 // Sequence is an editor revision within one Session. Revision belongs to the
 // parent draft, and Epoch invalidates edits after an explicit draft reset.
 type Message struct {
-	Version    int    `json:"version"`
-	Session    string `json:"session"`
-	Kind       Kind   `json:"kind"`
-	Request    uint64 `json:"request,omitempty"`
-	Sequence   uint64 `json:"sequence,omitempty"`
-	Epoch      uint64 `json:"epoch,omitempty"`
-	Revision   uint64 `json:"revision,omitempty"`
-	Text       string `json:"text,omitempty"`
-	Theme      string `json:"theme,omitempty"`
-	Home       string `json:"home,omitempty"`
-	AppVersion string `json:"app_version,omitempty"`
-	Source     string `json:"source,omitempty"`
-	Runtime    string `json:"runtime,omitempty"`
-	Code       string `json:"code,omitempty"`
-	Visible    bool   `json:"visible,omitempty"`
-	Recovered  bool   `json:"recovered,omitempty"`
+	Version    int           `json:"version"`
+	Session    string        `json:"session"`
+	Kind       Kind          `json:"kind"`
+	Request    uint64        `json:"request,omitempty"`
+	Sequence   uint64        `json:"sequence,omitempty"`
+	Epoch      uint64        `json:"epoch,omitempty"`
+	Revision   uint64        `json:"revision,omitempty"`
+	Text       string        `json:"text,omitempty"`
+	Theme      string        `json:"theme,omitempty"`
+	Home       string        `json:"home,omitempty"`
+	AppVersion string        `json:"app_version,omitempty"`
+	Source     string        `json:"source,omitempty"`
+	Runtime    string        `json:"runtime,omitempty"`
+	Code       string        `json:"code,omitempty"`
+	Visible    bool          `json:"visible,omitempty"`
+	Recovered  bool          `json:"recovered,omitempty"`
+	ChatID     string        `json:"chat_id,omitempty"`
+	Chat       *wire.Request `json:"chat,omitempty"`
+	ChatReply  *ChatReply    `json:"chat_reply,omitempty"`
 }
 
 var ErrProtocol = errors.New("invalid input host protocol")
@@ -73,6 +80,8 @@ func (m Message) Validate(fromHost bool) error {
 			allowed = m.Request != 0
 		case State, Failure:
 			allowed = true
+		case ChatCall:
+			allowed = wire.ValidID(m.ChatID) && m.Chat != nil && m.Chat.Validate() == nil && m.Epoch != 0
 		}
 	} else {
 		switch m.Kind {
@@ -86,9 +95,15 @@ func (m Message) Validate(fromHost bool) error {
 			allowed = m.Epoch != 0 && m.Sequence != 0
 		case Quit:
 			allowed = true
+		case ChatResult:
+			allowed = wire.ValidID(m.ChatID) && m.ChatReply != nil
 		}
 	}
 	if !allowed {
+		return ErrProtocol
+	}
+	if m.Kind != ChatCall && m.Chat != nil || m.Kind != ChatResult && m.ChatReply != nil ||
+		m.Kind != ChatCall && m.Kind != ChatResult && m.ChatID != "" {
 		return ErrProtocol
 	}
 	// Reject fields outside the capability that owns them; unused data must not

@@ -1,3 +1,22 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="input.css"><script type="module" src="input.js"></script><title>星伴快捷输入</title></head>
-<body><main><header><strong>Asterhand <span>/ 星伴</span></strong><span>本机快捷输入</span></header><textarea id="input" aria-label="快捷输入" placeholder="随时记下，接着完成。" spellcheck="false" autocomplete="off"></textarea><footer><span>Enter 换行 · Esc 收起</span><span id="status" role="status">草稿仅保留在本次运行中</span></footer></main></body></html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="input.css"><link rel="stylesheet" href="chat.css"><script type="module" src="input.js"></script><title>星伴快捷输入</title></head>
+<body><main>
+  <header><strong>Asterhand <span>/ 星伴</span></strong><nav aria-label="会话操作">
+    <button id="chat-history" type="button">历史</button><button id="chat-new" type="button">新对话</button>
+    <button id="chat-pin" type="button" aria-pressed="false" title="固定后失焦仍保持打开">固定</button>
+    <button id="chat-expand" type="button" aria-expanded="false" aria-controls="chat-panel">展开 ▴</button>
+  </nav></header>
+  <section id="chat-panel" hidden aria-label="持续聊天">
+    <div class="chat-session-bar"><span id="chat-conversation-name">本机默认助手</span><nav><button id="chat-latest" type="button">回到最新</button><button id="chat-refresh" type="button">刷新</button></nav></div>
+    <p id="chat-prompt-status" role="status" hidden></p>
+    <nav id="chat-conversations" hidden aria-label="历史会话"></nav>
+    <div id="chat-scroll" tabindex="0" aria-label="消息历史"><button id="chat-older" type="button" hidden>读取更早消息</button><div id="chat-messages"></div></div>
+  </section>
+  <section id="chat-draft-decision" hidden role="alertdialog" aria-label="切换会话确认">
+    <p>当前有未发送草稿。保留当前会话，还是丢弃草稿并切换？</p>
+    <button id="chat-draft-cancel" type="button">保留当前</button><button id="chat-draft-discard" type="button">丢弃草稿并切换</button>
+  </section>
+  <textarea id="input" aria-label="快捷输入" placeholder="随时记下，接着聊。" spellcheck="false" autocomplete="off"></textarea>
+  <div class="chat-actions"><span id="chat-status" role="status">Enter 发送 · Shift+Enter 换行</span><button id="chat-stop" type="button" hidden>停止</button><button id="chat-send" type="button" disabled>发送</button></div>
+  <footer><span>Esc 隐藏 · 回复在后台继续</span><span id="status" role="status">草稿仅保留在本次运行中</span></footer>
+</main></body></html>

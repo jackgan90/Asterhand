@@ -2,6 +2,12 @@
 
 状态：保留原始需求的设计线索，全部不是首版完成条件。具体实施前另建 feature 并重新验证。
 
+## 持续聊天及目标扩展
+
+[本机持续聊天计划](../development/features/local-node-chat/plan.md)已接入当前节点默认角色的第一阶段；产品验收和后续扩展分别记录。其[会话设计](../assistant/conversations.md)预留独立 harness adapter、Conversation / Turn / Task、稳定 node/role ID 和可替换通信；快捷输入保留多功能定位。
+
+后续可以增加工具/代码会话、多角色、单机多节点以及 `@节点/角色` 远程聊天。远程复用本地布局与操作，由目标节点授权并持有历史；网络差异通过连接和送达状态呈现。新 harness 只影响新会话默认选择，旧历史迁移需显式处理。以上扩展分别建立 feature，不提前增加远程端点、通用调度或全网历史同步。
+
 ## Coding harness 与项目工作区
 
 按实际需求选择 OpenCode、Claude Code、Codex、Antigravity 等适配器。使用正式 API / SDK / headless 接口，能力声明明确，避免解析易变终端文本。不假设各执行器支持等价取消或恢复。

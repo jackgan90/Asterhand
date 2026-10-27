@@ -44,7 +44,7 @@ func (a *App) RequestStop(confirmed bool) bool {
 		a.mu.Unlock()
 		return true
 	}
-	if (!confirmed && a.probeRunning) || !a.Engine.BeginStop(confirmed) {
+	if (!confirmed && a.probeRunning) || !a.Chat.BeginStop(confirmed, func() bool { return a.Engine.BeginStop(confirmed) }) {
 		a.mu.Unlock()
 		return false
 	}

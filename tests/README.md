@@ -1,5 +1,7 @@
 # 测试入口
 
+持续聊天新增提示词、即时气泡、快捷键和正文完整性测试，原生 Gateway/真实模型/WebView2 命令与人工边界见[提示词与交互验证](../docs/development/features/chat-prompt-interaction/validation.md)。
+
 独立宿主、主进程草稿、权限矩阵与退出清理的当前验证入口见[进程隔离验证](../docs/development/features/quick-input-process-isolation/validation.md)。
 
 Web 全部 Node 回归：`$uiTests = Get-ChildItem -LiteralPath tests -Filter '*.test.mjs' -File; node --test $uiTests.FullName`。包含同源会话/错误、生命周期、pending/回答 ID、输入保护、设置与桥消息交错，统一依赖验证自动发现这些测试。Go 从真实内嵌入口追踪全部静态 import；真实浏览器 fixture 的独立构建、登录/任务/配对/设置/重连与原生 WebView2 方法见[维护性验证](../docs/development/features/web-ui-maintainability/validation.md)。

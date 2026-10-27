@@ -16,6 +16,7 @@ import (
 	"unsafe"
 
 	"github.com/jackgan90/Asterhand/internal/model"
+	"github.com/jackgan90/Asterhand/internal/quickinput/hostipc"
 	"github.com/jackgan90/Asterhand/packaging"
 	"github.com/wailsapp/go-webview2/webviewloader"
 	"golang.org/x/sys/windows"
@@ -75,6 +76,8 @@ type nativeSurface struct {
 	waiters                       map[string]chan struct{}
 	previous                      uintptr
 	height                        int
+	pinned                        bool
+	chatSend                      func(hostipc.Message) error
 	onMessage                     func(string)
 	onFailure                     func(error)
 }

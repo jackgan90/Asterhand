@@ -102,7 +102,8 @@ export function nodeSettings({api, post, session, desktop, guarded, notice, refr
       });
       if (!scope?.active || generation !== openGeneration) return;
       event.target.elements.key.value = "";
-      const message = ["设置已保存。", result.ready ? "模型验证保持有效。" : "请验证模型与工具。", result.restart_required ? "监听地址已修改：请停止本机节点，再运行 start.ps1。" : ""].join(" ");
+      const readiness = f.get("root").trim() ? (result.ready ? "模型验证保持有效。" : "请验证模型与工具。") : "纯聊天无需运行文件工具检查。";
+      const message = ["设置已保存。", readiness, result.restart_required ? "监听地址已修改：请停止本机节点，再运行 start.ps1。" : ""].join(" ");
       $("#settings-status").textContent = message;
       notice(message);
       await updateProbe();

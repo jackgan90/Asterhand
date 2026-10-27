@@ -33,3 +33,17 @@ Go `os.OpenRoot` 约束路径解析，拒绝绝对路径、穿越、NTFS 流、�
 普通问题持久化 interaction，绑定 attempt 与 native tool-call ID；回答后才释放等待回调。取消时等已接收回调退出再释放执行槽，防止上一个写入尚未结束就开始下一个任务。
 
 工具层不提供权限审批工具或任意 shell。远端 peer 无本地人工处置权限。后续 Everything、VCS、coding harness 需单独实现并申明能力。
+
+## 会话能力接口
+
+持续会话使用与 `Executor.Execute` 并列的能力接口，产品语义由[会话设计](../assistant/conversations.md)维护，首版仅 OpenClaw 实现。原任务 mode、回调 token、文件工具与证据契约不变；纯聊天不伪造 job/attempt，也不取得任务工具 token。
+
+公共层依赖创建/打开/列举、发送、观察/核对、历史/完整消息读取、停止及能力描述。adapter 负责 native session/run/message/receipt 映射，保证公共稳定身份和事件合并。不同 runtime 的取消、流式、历史、重启恢复分别验证，未知能力明确拒绝；不把 `Runtime` 扩成所有方法必选的通用执行大接口。
+
+首个 adapter 使用受管 Gateway，生命周期、凭据注入、认证连接与状态目录由后端管理。UI 不知道 WebSocket RPC、配置路径或管理凭据。当前任务仍独立 `agent exec`；会话 state 与其 state 分开，禁止共享独占写入目录或接管用户已有 Gateway。
+
+验收覆盖原生持久收据而非仅 HTTP/WS ACK、重复与迟到响应、cancel 与完成竞争、状态查询、历史代次/超长消息、无工具/管理命令旁路。实现前验证门槛与范围见[计划](../development/features/local-node-chat/plan.md)。未来工具执行仍需目标节点授权与执行契约；类型化消息只能展示执行事件，不能授予能力。
+
+## 可选聊天提示词适配
+
+提示词组装独立于 harness；适配器声明 replace/append/unsupported，实际状态区分 pending/applied/degraded。应用失败继续原生聊天，状态只携带安全的枚举与版本。默认保留 harness 原生身份、语气与行为，只适配能力和入口冲突；append/applied 为正常成功。OpenClaw 私有 Gateway 加载应用自带的可信提示词插件，before_prompt_build 使用 appendSystemContext 保留原生组装，llm_input 核实补充规则与零工具输入。隔离工作区开启原生角色文件初始化并保留已有定制；不读取工程或个人 home 的设定。工具权限仍由有效运行配置约束。详见[会话设计](../assistant/conversations.md)与[功能计划](../development/features/chat-prompt-interaction/plan.md)。

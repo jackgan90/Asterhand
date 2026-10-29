@@ -5,7 +5,7 @@ function Get-SourceFingerprint([string]$Repository) {
     $files = @()
     foreach ($directory in @('cmd','internal','web','plugins','packaging','scripts','tests')) {
         $files += Get-ChildItem -LiteralPath (Join-Path $Repository $directory) -Recurse -File |
-            Where-Object { $_.Extension -in @('.go','.js','.mjs','.html','.css','.json','.ps1','.sh','.png','.ico') }
+            Where-Object { $_.Extension -in @('.go','.js','.mjs','.html','.css','.json','.ps1','.sh','.png','.ico','.woff','.woff2','.ttf') -or $_.Name -eq 'LICENSE' }
     }
     $files += Get-Item (Join-Path $Repository 'go.mod'),(Join-Path $Repository 'go.sum'),(Join-Path $Repository 'install.ps1'),(Join-Path $Repository 'install.sh')
     $files += Get-Item (Join-Path $Repository 'LICENSE'),(Join-Path $Repository 'docs\installation\quickstart.md')

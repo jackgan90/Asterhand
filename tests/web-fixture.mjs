@@ -34,6 +34,7 @@ export class Element extends EventTarget {
 export function domFixture() {
   const elements = new Map();
   const document = new EventTarget();
+  document.compatMode = 'CSS1Compat';
   const select = id => {
     if (!elements.has(id)) elements.set(id, new Element("div", document));
     return elements.get(id);

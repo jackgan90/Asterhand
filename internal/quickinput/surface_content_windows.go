@@ -3,21 +3,12 @@
 package quickinput
 
 import (
-	"embed"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
-
-//go:embed assets/*
-var inputAssets embed.FS
-
-const surfaceOrigin = "https://quick-input.asterhand.invalid"
-const surfaceURL = surfaceOrigin + "/quick-input/index.html"
-const inputCSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
 
 func (s *nativeSurface) configureContent() error {
 	settings, err := s.core.object(3)
@@ -39,6 +30,16 @@ func (s *nativeSurface) configureContent() error {
 		if err = s4.call(slot, 0); err != nil {
 			return err
 		}
+	}
+	// ICoreWebView2Settings9 inherits Settings1—8. The SDK 1.0.2792.45
+	// WebView2.h puts its BOOL setter at slot 38, not the binding's slot 4.
+	regions, err := settings.query("{0528a73b-e92d-49f4-927a-e547dddaa37d}")
+	if err != nil {
+		return fmt.Errorf("WebView2 不支持窗口拖动区域: %w", err)
+	}
+	defer regions.release()
+	if err = regions.call(38, 1); err != nil {
+		return err
 	}
 	if err = s.events(); err != nil {
 		return err
@@ -176,26 +177,4 @@ func (s *nativeSurface) postJSON(value any) error {
 		return err
 	}
 	return s.core.putText(32, string(data))
-}
-
-// inputResource is the same allowlist used by the native resource callback.
-func inputResource(method, uri string) ([]byte, string, int) {
-	file := strings.TrimPrefix(uri, surfaceOrigin+"/quick-input/")
-	if method == "GET" && strings.HasPrefix(uri, surfaceOrigin+"/quick-input/") {
-		allowed := map[string]string{
-			"index.html": "text/html; charset=utf-8", "input.css": "text/css; charset=utf-8",
-			"input.js": "application/javascript; charset=utf-8", "input-model.mjs": "application/javascript; charset=utf-8",
-			"webview2-bridge.mjs": "application/javascript; charset=utf-8",
-			"chat-client.mjs":     "application/javascript; charset=utf-8", "chat-model.mjs": "application/javascript; charset=utf-8",
-			"chat-renderer.mjs": "application/javascript; charset=utf-8", "chat-ui.mjs": "application/javascript; charset=utf-8",
-			"chat.css":        "text/css; charset=utf-8",
-			"chat-outbox.mjs": "application/javascript; charset=utf-8",
-		}
-		if contentType, ok := allowed[file]; ok {
-			if data, err := inputAssets.ReadFile("assets/" + file); err == nil {
-				return data, contentType, 200
-			}
-		}
-	}
-	return []byte("Blocked"), "text/plain", 403
 }

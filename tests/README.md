@@ -1,5 +1,7 @@
 # 测试入口
 
+聊天公式、动态回复状态、拖动和任务栏窗口的自动化与实体桌面边界见[聊天桌面体验验证](../docs/development/features/chat-desktop-experience/validation.md)。包含本地 KaTeX 完整性、公式安全/预算、位置/DPI 逻辑与真实 WebView2 双主题检查。
+
 持续聊天新增提示词、即时气泡、快捷键和正文完整性测试，原生 Gateway/真实模型/WebView2 命令与人工边界见[提示词与交互验证](../docs/development/features/chat-prompt-interaction/validation.md)。
 
 独立宿主、主进程草稿、权限矩阵与退出清理的当前验证入口见[进程隔离验证](../docs/development/features/quick-input-process-isolation/validation.md)。

@@ -29,7 +29,7 @@ var uiSequence atomic.Uint32
 var uiWindowProc = windows.NewCallback(surfaceWindowProc)
 
 type nativePoint struct{ X, Y int32 }
-type nativeRect struct{ Left, Top, Right, Bottom int32 }
+type nativeRect = windowBounds
 type nativeMessage struct {
 	Window         uintptr
 	Message        uint32
@@ -54,6 +54,7 @@ type nativeSurface struct {
 	commands                      chan func()
 	initialized                   bool
 	closing                       bool
+	attention                     bool
 	environment, controller, core *comRef
 	subscriptions                 []eventSubscription
 	class                         *uint16
@@ -76,7 +77,10 @@ type nativeSurface struct {
 	waiters                       map[string]chan struct{}
 	previous                      uintptr
 	height                        int
-	pinned                        bool
+	placements                    map[string]windowPlacement
+	placing                       bool
+	contentVisible                bool
+	icons                         [2]uintptr
 	chatSend                      func(hostipc.Message) error
 	onMessage                     func(string)
 	onFailure                     func(error)
@@ -117,6 +121,9 @@ func (s *nativeSurface) run() {
 	// locked makes Go terminate the OS thread, releasing WebView2's native TLS
 	// caches instead of returning a used COM/UI thread to the scheduler pool.
 	defer close(s.done)
+	// Production also sets PMv2 at process startup; set the dedicated UI thread
+	// explicitly so embedded/test hosts use the same device-coordinate contract.
+	uiDLL.NewProc("SetThreadDpiAwarenessContext").Call(^uintptr(3))
 	hr, _, _ := oleDLL.NewProc("CoInitializeEx").Call(0, 2)
 	if int32(hr) < 0 {
 		s.ready <- fmt.Errorf("初始化 STA 失败")
@@ -165,13 +172,16 @@ func (s *nativeSurface) createWindow() error {
 	if ok, _, err := uiDLL.NewProc("RegisterClassExW").Call(uintptr(unsafe.Pointer(&cls))); ok == 0 {
 		return err
 	}
-	title, _ := windows.UTF16PtrFromString("Asterhand · 快捷输入")
-	hwnd, _, err := uiDLL.NewProc("CreateWindowExW").Call(0x80, uintptr(unsafe.Pointer(s.class)), uintptr(unsafe.Pointer(title)), 0x80000000, 0, 0, 680, 240, 0, 0, instance, 0)
+	title, _ := windows.UTF16PtrFromString("Asterhand · 星伴")
+	const appWindow = 0x00040000                             // WS_EX_APPWINDOW; no owner or TOOLWINDOW suppression.
+	const windowStyle = 0x80000000 | 0x00080000 | 0x00020000 // POPUP | SYSMENU | MINIMIZEBOX
+	hwnd, _, err := uiDLL.NewProc("CreateWindowExW").Call(appWindow, uintptr(unsafe.Pointer(s.class)), uintptr(unsafe.Pointer(title)), windowStyle, 0, 0, 680, 240, 0, 0, instance, 0)
 	if hwnd == 0 {
 		return err
 	}
 	s.hwnd.Store(hwnd)
 	uiHosts.Store(hwnd, s)
+	s.setWindowIcons()
 	windows.NewLazySystemDLL("wtsapi32.dll").NewProc("WTSRegisterSessionNotification").Call(hwnd, 0)
 	return nil
 }
@@ -350,6 +360,7 @@ func (s *nativeSurface) finishClose() {
 
 func (s *nativeSurface) dispose() {
 	s.closing = true
+	s.stopAttention()
 	for i := len(s.subscriptions) - 1; i >= 0; i-- {
 		s.subscriptions[i].unsubscribe()
 	}
@@ -368,6 +379,7 @@ func (s *nativeSurface) dispose() {
 		uiDLL.NewProc("DestroyWindow").Call(hwnd)
 	}
 	uiDLL.NewProc("UnregisterClassW").Call(uintptr(unsafe.Pointer(s.class)), s.instance)
+	s.releaseWindowIcons()
 }
 
 func surfaceWindowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {

@@ -43,51 +43,59 @@ func TestNativeSurfaceVisualCapture(t *testing.T) {
 			t.Fatal(err)
 		}
 		evaluate(t, s, `document.querySelector('#input').value='在灵感出现的瞬间，记下来。\n下一步，从这里开始。';document.querySelector('#input').dispatchEvent(new Event('input'));true`)
-		// Wait on two animation frames in the real compositor, not a fixed sleep.
-		evaluate(t, s, `window.__painted=false;requestAnimationFrame(()=>requestAnimationFrame(()=>window.__painted=true));true`)
-		deadline := time.Now().Add(3 * time.Second)
-		for evaluate(t, s, `window.__painted`) != `true` {
-			if time.Now().After(deadline) {
-				t.Fatal("no compositor frame")
-			}
-		}
-		completed := make(chan error, 1)
-		path, _ := windows.UTF16PtrFromString(filepath.Join(directory, "quick-input-"+theme+".png"))
-		err = s.dispatch(context.Background(), func() {
-			var stream *comRef
-			hr, _, _ := windows.NewLazySystemDLL("shlwapi.dll").NewProc("SHCreateStreamOnFileEx").Call(uintptr(unsafe.Pointer(path)), 0x1012, 0, 1, 0, uintptr(unsafe.Pointer(&stream)))
-			if int32(hr) < 0 {
-				completed <- fmt.Errorf("capture stream HRESULT %x", hr)
-				return
-			}
-			h := newCallback[captureCallback](func(code uintptr, _ *comRef) uintptr {
-				stream.release()
-				if int32(code) < 0 {
-					completed <- fmt.Errorf("capture HRESULT %x", code)
-				} else {
-					completed <- nil
-				}
-				return 0
-			})
-			defer h.Close()
-			if err := s.core.call(30, 0, uintptr(unsafe.Pointer(stream)), h.Ref()); err != nil {
-				stream.release()
-				completed <- err
-			}
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		select {
-		case err = <-completed:
-			if err != nil {
-				t.Fatal(err)
-			}
-		case <-time.After(5 * time.Second):
-			t.Fatal("capture timed out")
-		}
+		captureExperience(t, s, filepath.Join(directory, "quick-input-"+theme+".png"))
 	}
 	if err = s.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func captureExperience(t *testing.T, s *nativeSurface, filename string) {
+	t.Helper()
+	// Wait on two animation frames in the real compositor, not a fixed sleep.
+	evaluate(t, s, `window.__painted=false;requestAnimationFrame(()=>requestAnimationFrame(()=>window.__painted=true));true`)
+	deadline := time.Now().Add(3 * time.Second)
+	for evaluate(t, s, `window.__painted`) != `true` {
+		if time.Now().After(deadline) {
+			t.Fatal("no compositor frame")
+		}
+	}
+	completed := make(chan error, 1)
+	path, err := windows.UTF16PtrFromString(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.dispatch(context.Background(), func() {
+		var stream *comRef
+		hr, _, _ := windows.NewLazySystemDLL("shlwapi.dll").NewProc("SHCreateStreamOnFileEx").Call(uintptr(unsafe.Pointer(path)), 0x1012, 0, 1, 0, uintptr(unsafe.Pointer(&stream)))
+		if int32(hr) < 0 {
+			completed <- fmt.Errorf("capture stream HRESULT %x", hr)
+			return
+		}
+		h := newCallback[captureCallback](func(code uintptr, _ *comRef) uintptr {
+			stream.release()
+			if int32(code) < 0 {
+				completed <- fmt.Errorf("capture HRESULT %x", code)
+			} else {
+				completed <- nil
+			}
+			return 0
+		})
+		defer h.Close()
+		if err := s.core.call(30, 0, uintptr(unsafe.Pointer(stream)), h.Ref()); err != nil {
+			stream.release()
+			completed <- err
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err = <-completed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("capture timed out")
 	}
 }

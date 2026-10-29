@@ -28,6 +28,15 @@ type Service struct {
 	start       sync.Once
 	close       sync.Once
 	closeErr    error
+	onCompleted func()
+}
+
+// SetCompletionHandler connects a best-effort desktop notification. The handler
+// runs outside mu and must only enqueue bounded work, never call back into Call.
+func (s *Service) SetCompletionHandler(handler func()) {
+	s.mu.Lock()
+	s.onCompleted = handler
+	s.mu.Unlock()
 }
 
 func New(node string, records *store.Store, runtime Runtime) *Service {

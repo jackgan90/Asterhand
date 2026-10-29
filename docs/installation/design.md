@@ -18,6 +18,16 @@ Windows 快捷输入使用同版本的独立 GUI 宿主 AsterhandInputHost.exe�
 
 范围：Windows 安装、启动、诊断与构建；使用 schema 2 包描述。验证方法见 [安装路径](../development/features/installer-path-resolution/plan.md) 与 [公共包契约](../development/features/provider-neutral-flows/validation.md)。
 
+## 聊天窗口的系统入口
+
+回复完成提醒由会话服务的完成转换回调经应用装配层发往当前输入宿主，仅父进程可发送无载荷的 `reply_completed` 命令。宿主 UI 线程为后台可见窗口（含最小化）调用 `FlashWindowEx(FLASHW_TRAY | FLASHW_TIMERNOFG)`；Windows 控制任务栏动画，前台激活、显式隐藏与销毁时停止。既不激活窗口，也不为提醒恢复 WebView；隐藏或重建期间不缓存重放提醒。宿主向父进程发送该命令会被协议拒绝，网页桥不增加此能力。
+
+聊天 UI 宿主拥有唯一的非置顶顶层应用窗口，失焦保持显示。Windows 显示窗口时提供任务栏按钮和 Asterhand 应用图标，隐藏时移除运行按钮，最小化保留并可从任务栏恢复；Esc、同键、Alt+F4 与任务栏关闭只隐藏聊天，不退出节点。系统激活与快捷键 toggle 分开，后台回复完成不抢焦点。窗口图标和所有原生资源随宿主释放；节点托盘保持原有独立生命周期。
+
+标题拖动交给原生移动机制，前端只声明区域；Windows WebView2 启用非客户区拖动，交互控件明确排除。位置记录仅在 UI 进程内按显示器保留，内容 resize 与首次定位分开，DPI/屏幕变化按工作区修正。图标、激活、工作区等 Windows 细节不进入会话或 IPC 公共协议；macOS Dock 和 Linux 桌面入口留给各平台宿主实现。决策及验证见[桌面入口 ADR](adr/008-chat-window-desktop-presence.md)与[聊天体验计划](../development/features/chat-desktop-experience/plan.md)。
+
+数学排版资源作为固定版本静态文件随程序内嵌，包含字体和第三方许可；安装后无需 npm 或联网下载。新静态依赖不混入 OpenClaw 的运行时组件集合，完整性检查、许可证分发及源码指纹覆盖其清单与资源。
+
 ## 发布与安装边界
 
 仓库根目录 install.ps1 是独立固定引导入口，默认解析 GitHub Latest 稳定 Release；Version 指定应用版本，ReleaseTag 指定精确标签。解析只执行一次，随后从固定标签下载 release-manifest.json 和完整平台包，检查摘要、大小、版本及 bundle-check，补齐 Microsoft VC++ x64 运行库并加载声明的原生模块，再安装缺失的 Tailscale。成功后激活固定 AsterhandLauncher.exe、start.ps1 和 installation.json，并按用户选择处理快捷方式；默认不启动节点，不登录 Tailscale、不读取模型凭据。setup/start 属于安装后的节点配置入口。doctor/repair 继续由 Go 实现。

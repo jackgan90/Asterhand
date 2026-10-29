@@ -7,6 +7,28 @@ import (
 	"testing"
 )
 
+func TestReplyCompletionIsParentOnlyAndHasNoPayload(t *testing.T) {
+	m := Message{Version: Version, Session: "session-123456789", Kind: ReplyCompleted}
+	var frame bytes.Buffer
+	if err := Write(&frame, m, false); err != nil {
+		t.Fatal(err)
+	}
+	if decoded, err := Read(&frame, false); err != nil || decoded.Kind != ReplyCompleted {
+		t.Fatal(decoded, err)
+	}
+	if m.Validate(true) == nil {
+		t.Fatal("host can forge reply completion")
+	}
+	m.Text = "unexpected body"
+	if m.Validate(false) == nil {
+		t.Fatal("completion accepts message body")
+	}
+	m.Text, m.Request = "", 1
+	if m.Validate(false) == nil {
+		t.Fatal("completion accepts a command payload")
+	}
+}
+
 func TestFramesRejectOversizeInvalidUnicodeAndUnknownCapability(t *testing.T) {
 	var frame bytes.Buffer
 	text := strings.Repeat("\x00", MaxTextBytes)

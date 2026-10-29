@@ -53,7 +53,7 @@ func (s *nativeSurface) bridgeMessage(raw string) {
 	case "resize":
 		if m.Height >= 240 && m.Height <= 800 {
 			s.height = m.Height
-			s.position()
+			s.positionCurrent(nil)
 		}
 	case "draft_updated", "snapshot":
 		if err := s.draft.Update(m.Text, m.Revision); err != nil {
@@ -76,9 +76,6 @@ func (s *nativeSurface) bridgeMessage(raw string) {
 		}
 	case "hide":
 		s.hide(true)
-	case "pin":
-		s.pinned = m.Pinned
-		s.position()
 	case "copy":
 		if len(m.Text) <= 64*1024 {
 			if err := writeChatClipboard(s.hwnd.Load(), m.Text); err != nil {

@@ -24,6 +24,8 @@ header, footer {
   gap: 12px; padding: 15px 20px; position: relative;
 }
 header strong { color: var(--accent); font-weight: 600; letter-spacing: .06em; }
+header { app-region: drag; user-select: none; }
+header nav, header nav * { app-region: no-drag; }
 header strong::before { content: "◈"; margin-right: 9px; text-shadow: 0 0 14px #76e1ff99; }
 header span, footer { color: var(--muted); font-size: 12px; }
 textarea {

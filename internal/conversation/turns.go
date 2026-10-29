@@ -182,19 +182,24 @@ func (s *Service) reconcile(ctx context.Context, operation string) (*Turn, *Mess
 	if err != nil {
 		return &record.Turn, nil, err
 	}
+	wasCompleted := record.Turn.Run == "completed"
 	applyObservation(&record, observation)
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.active != nil && s.active.Turn.Operation == operation {
 		*s.active = record
 	}
-	if err = s.catalog.saveTurn(record); err != nil {
-		return &record.Turn, observation.Live, err
-	}
-	if !record.Unsettled && s.active != nil && s.active.Turn.Operation == operation {
+	err = s.catalog.saveTurn(record)
+	if err == nil && !record.Unsettled && s.active != nil && s.active.Turn.Operation == operation {
 		s.active = nil
 	}
-	return &record.Turn, observation.Live, nil
+	handler := s.onCompleted
+	s.mu.Unlock()
+	// Completion and persistence are separate facts. A catalog write failure must
+	// not hide a confirmed completion or trigger a second notification on retry.
+	if !wasCompleted && record.Turn.Delivery == "accepted" && record.Turn.Run == "completed" && handler != nil {
+		handler()
+	}
+	return &record.Turn, observation.Live, err
 }
 
 func applyObservation(record *turnRecord, observation Observation) {

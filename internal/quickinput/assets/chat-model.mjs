@@ -70,20 +70,17 @@ export function newerTurn(current, incoming) {
   return incoming;
 }
 
-export function turnStatus(turn) {
+export const awaitingReply = turn => Boolean(turn && (turn.delivery === 'pending' ||
+  turn.delivery === 'accepted' && ['pending', 'running'].includes(turn.run)));
+
+export function turnStatus(turn, submitting = false) {
+  if (submitting) return '正在回复';
   if (!turn) return 'Enter 发送 · Shift+Enter 换行';
-  if (turn.delivery === 'pending' || turn.delivery === 'unknown') return '送达待确认，正在核对；草稿已保留';
+  if (turn.delivery === 'unknown') return '送达待确认，正在核对；草稿已保留';
   if (turn.delivery === 'rejected') return '发送未被接受，草稿已保留';
-  const states = {pending: '正在准备', running: '正在回复', completed: '回复完成', cancelled: '已停止', failed: '回复失败', interrupted: '运行已中断', unknown: '运行状态待核对'};
-  const state = states[turn.run] ?? '正在核对';
-  return state + (turn.persistence === 'unknown' ? ' · 回复保存状态待确认' : '');
+  const states = {completed: '', cancelled: '已停止', failed: '回复失败', interrupted: '运行已中断', unknown: '运行状态待核对'};
+  const state = awaitingReply(turn) ? '正在回复' : states[turn.run] ?? '正在核对';
+  return [state, turn.persistence === 'unknown' ? '回复保存状态待确认' : ''].filter(Boolean).join(' · ');
 }
 
 export const unsettled = turn => Boolean(turn && ['pending', 'running', 'unknown'].includes(turn.run));
-
-export function promptWarning(application) {
-  if (!application) return '';
-  if (application.mode === 'unsupported') return '当前运行时不支持提示词适配，聊天仍可使用';
-  if (application.state === 'degraded') return '提示词适配未确认，聊天仍可使用';
-  return '';
-}

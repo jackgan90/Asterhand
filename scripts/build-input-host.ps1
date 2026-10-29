@@ -8,6 +8,8 @@ $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 $versionSource = Get-Content (Join-Path $repo 'internal/config/config.go') -Raw
 if ($versionSource -notmatch 'const Version = "([^"]+)"') { throw 'Cannot resolve version.' }
 $version = $Matches[1]
+& node (Join-Path $PSScriptRoot 'verify-frontend-assets.mjs')
+if ($LASTEXITCODE -ne 0) { throw 'Frontend vendor assets failed integrity checks.' }
 if ($SourceDigest -ne 'development' -and $SourceDigest -notmatch '^[0-9a-f]{64}$') { throw 'Invalid source digest.' }
 $savedOS=$env:GOOS; $savedArch=$env:GOARCH; $savedCGO=$env:CGO_ENABLED
 try {

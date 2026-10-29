@@ -1,7 +1,8 @@
 import {conversationClient} from './chat-client.mjs';
-import {ChatWindow, turnStatus, unsettled, promptWarning, newerTurn} from './chat-model.mjs';
+import {ChatWindow, unsettled, newerTurn} from './chat-model.mjs';
 import {messageRenderer} from './chat-renderer.mjs';
 import {ChatOutbox} from './chat-outbox.mjs';
+import {replyStatusView} from './chat-status.mjs';
 
 export function chatPanel(bridge, editor) {
   const query = id => document.getElementById(id);
@@ -11,7 +12,6 @@ export function chatPanel(bridge, editor) {
   const outbox = new ChatOutbox();
   let sendingOperation = '';
   let connecting = null;
-  let runtimePrompt = null;
   const list = query('chat-conversations');
   const sendButton = query('chat-send'), stopButton = query('chat-stop'), olderButton = query('chat-older');
   let selected = '', turn = null, pending = null, expanded = false, visible = false, ready = false;
@@ -20,7 +20,10 @@ export function chatPanel(bridge, editor) {
   let draftDecision = null, historyLoaded = false, historyLoading = -1, readingOlder = false, refreshHistory = false;
   const cleanup = [];
   const listen = (node, name, fn) => { node.addEventListener(name, fn); cleanup.push(() => node.removeEventListener(name, fn)); };
-  const say = message => { status.textContent = message; };
+  const statusView = replyStatusView(status);
+  const say = message => statusView.message(message);
+  const sayTurn = (suffix = '') => statusView.turn(turn, suffix,
+    sending && turn?.operation_id !== sendingOperation);
   const updateButtons = () => {
     sendButton.disabled = !ready || sending || nodeBusy || unsettled(turn) || Boolean(outbox.pending(selected)) || Boolean(draftDecision);
     stopButton.hidden = !unsettled(turn);
@@ -34,7 +37,6 @@ export function chatPanel(bridge, editor) {
       newerTurn(turn, response.turn) !== response.turn;
     if (!stale) {
       pending = value.pending ?? null;
-      runtimePrompt = response.prompt ?? runtimePrompt;
       nodeBusy = response.busy === true;
     }
     outbox.observe(response.turn);
@@ -51,11 +53,6 @@ export function chatPanel(bridge, editor) {
 
   function paint(older = false) {
     if (!visible || !expanded) return;
-    const promptStatus = query('chat-prompt-status');
-    if (promptStatus) {
-      promptStatus.textContent = promptWarning(turn?.prompt ?? runtimePrompt);
-      promptStatus.hidden = !promptStatus.textContent;
-    }
     const top = scroll.scrollTop, follow = !older && followsLatest();
     const edge = scroll.getBoundingClientRect().top;
     const nodes = [...query('chat-messages').children];
@@ -77,8 +74,8 @@ export function chatPanel(bridge, editor) {
     query('chat-expand').textContent = value ? '收起 ▾' : '展开 ▴';
     query('chat-expand').setAttribute('aria-expanded', String(value));
     editor.setExpanded(value);
-    if (value) { paint(); if (selected && !historyLoaded) void safely(() => history()); schedule(); }
-    else { clearTimeout(timer); timer = null; }
+    if (value) { paint(); if (selected && !historyLoaded) void safely(() => history()); }
+    schedule();
   }
 
   function connect() {
@@ -88,7 +85,7 @@ export function chatPanel(bridge, editor) {
 
   async function connectOnce() {
     loading = true;
-    say('正在连接本机助手…');
+    if (sending) sayTurn(); else say('正在连接本机助手…');
     try {
       const hello = await client.call('hello');
       ready = true;
@@ -96,6 +93,7 @@ export function chatPanel(bridge, editor) {
       const restored = hello.envelope.pending?.conversation_id || hello.envelope.selected || conversations.conversations?.[0]?.id;
       if (restored && restored !== selected) await select(restored);
       else if (selected && expanded) await history();
+      else if (sending) sayTurn();
       else say(hello.can_send ? '输入内容，开始新对话' : '请先在本机设置配置模型；已有历史可继续查看');
     } catch (error) { say(error.message); }
     finally { loading = false; updateButtons(); schedule(); }
@@ -134,14 +132,15 @@ export function chatPanel(bridge, editor) {
       // Preserve its visible page and fetch fresh content once this read releases.
       if (stale && !older) {
         refreshHistory = followsLatest();
-        say(turnStatus(turn)); paint();
+        sayTurn(); paint();
         return;
       }
       historyLoaded = true;
       refreshHistory = false;
       readingOlder = older && !response.page?.reset;
       windowState.apply(response.page ?? {messages: []}, older);
-      say(response.page?.reset ? '历史已变化，已重新读取最新消息' : turnStatus(turn));
+      if (response.page?.reset && !sending) say('历史已变化，已重新读取最新消息');
+      else sayTurn();
       paint(readingOlder);
       updateButtons();
     } finally {
@@ -172,7 +171,7 @@ export function chatPanel(bridge, editor) {
     setExpanded(true);
     paint();
     scroll.scrollTop = scroll.scrollHeight;
-    say('正在发送，等待持久接收确认…');
+    sayTurn();
     try {
       if (!ready) await connect();
       if (!selected) await create();
@@ -186,7 +185,7 @@ export function chatPanel(bridge, editor) {
       outbox.observe(response.turn);
       if (selected === id && selection === version) {
         turn = newerTurn(turn, response.turn);
-        say(turnStatus(turn));
+        sayTurn();
         paint();
         await history();
       }
@@ -202,13 +201,13 @@ export function chatPanel(bridge, editor) {
   function schedule() {
     clearTimeout(timer);
     timer = null;
-    if (visible && expanded && selected && (refreshHistory || nodeBusy || unsettled(turn) || outbox.pending(selected) || pending?.conversation_id === selected)) {
+    if (visible && selected && (expanded && (refreshHistory || nodeBusy) || unsettled(turn) || outbox.pending(selected) || pending?.conversation_id === selected)) {
       timer = setTimeout(poll, 500);
     }
   }
 
   async function poll() {
-    if (polling || !visible || !expanded) return;
+    if (polling || !visible) return;
     polling = true;
     const id = selected, version = selection;
     try {
@@ -218,12 +217,13 @@ export function chatPanel(bridge, editor) {
       if (id !== selected || version !== selection) return;
       const previous = turn;
       turn = newerTurn(turn, response.turn);
-      say(turnStatus(turn));
-      const follow = followsLatest();
+      sayTurn();
+      const follow = expanded && followsLatest();
       if (response.live && follow) { windowState.live(response.live); paint(); }
       if (refreshHistory || turn && (turn.assistant_message_id !== previous?.assistant_message_id || !unsettled(turn) && unsettled(previous))) {
-        if (follow) await history();
-        else say(turnStatus(turn) + ' · 点击“回到最新”查看回复');
+        if (!expanded) { historyLoaded = false; refreshHistory = true; }
+        else if (follow) await history();
+        else sayTurn('点击“回到最新”查看回复');
       }
       if (turn && !unsettled(turn)) pending = null;
     } catch (error) { say(error.message); }
@@ -277,7 +277,8 @@ export function chatPanel(bridge, editor) {
       }
       windowState.replace(messageID, text, more, start, more ? offset : 0);
       paint();
-      say(more ? '已达到当前窗口文本上限，可继续读取后续片段；原始消息保留在运行时' : turnStatus(turn));
+      if (more) say('已达到当前窗口文本上限，可继续读取后续片段；原始消息保留在运行时');
+      else sayTurn();
     } catch (error) { say(error.message); }
   }
 
@@ -327,28 +328,23 @@ export function chatPanel(bridge, editor) {
     if (!selected || !turn) return;
     say('正在请求停止…');
     const response = await client.call('cancel', {conversation_id: selected, operation_id: turn.operation_id});
-    turn = newerTurn(turn, response.turn); say(turnStatus(turn)); schedule();
+    turn = newerTurn(turn, response.turn); sayTurn(); schedule();
   }));
-  listen(query('chat-pin'), 'click', () => {
-    const button = query('chat-pin');
-    const pinned = button.getAttribute('aria-pressed') !== 'true';
-    button.setAttribute('aria-pressed', String(pinned));
-    button.textContent = pinned ? '已固定' : '固定';
-    editor.post('pin', {pinned});
-  });
   editor.onSubmit(submit);
   const unsubscribe = bridge.subscribe(message => {
     if (message.kind === 'focus' || message.kind === 'visibility' && message.visible) {
       visible = true;
+      statusView.visible(true);
       if (!ready) void connect(); else { paint(); schedule(); }
     } else if (message.kind === 'visibility' && !message.visible) {
       visible = false;
+      statusView.visible(false);
       clearTimeout(timer);
       timer = null;
     }
   });
   updateButtons();
-  function dispose() { clearTimeout(timer); unsubscribe(); client.dispose(); cleanup.forEach(remove => remove()); }
+  function dispose() { clearTimeout(timer); statusView.dispose(); render.dispose(); unsubscribe(); client.dispose(); cleanup.forEach(remove => remove()); }
   listen(window, 'pagehide', dispose);
   return {dispose};
 }

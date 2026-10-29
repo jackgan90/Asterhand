@@ -1,5 +1,7 @@
 # 构建脚本
 
+聊天数学资源由 `verify-frontend-assets.mjs` 验证固定版本及逐文件 SHA-256，正式构建与开发宿主构建都会执行。开发宿主构建需要 Node.js；完整包使用已验证的 NodeDistribution。聊天宿主同样嵌入应用图标，KaTeX 许可证与来源清单随完整包放入 `licenses/katex`，验证方法见[聊天桌面体验验证](../docs/development/features/chat-desktop-experience/validation.md)。
+
 独立宿主、主进程草稿、权限矩阵与退出清理的当前验证入口见[进程隔离验证](../docs/development/features/quick-input-process-isolation/validation.md)。
 
 Windows 构建同时生成 `AsterhandInputHost.exe` 和 `input-host.json`，`bundle-check` 校验版本、源码指纹及最终可执行文件摘要。直接开发构建节点时，在其可执行文件同目录运行 `build-input-host.ps1 -Go <go-executable> -OutputDirectory <node-directory>`；默认使用 development 指纹，若节点指定 SourceDigest，宿主须传入相同值。`test-quick-input.ps1 -Desktop` 自动构建隔离测试宿主；100 次生命周期允许 30 分钟超时，原性能预算保持不变。

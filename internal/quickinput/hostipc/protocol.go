@@ -20,19 +20,20 @@ const MaxTextBytes = 16000
 type Kind string
 
 const (
-	Initialize   Kind = "initialize"
-	Ready        Kind = "ready"
-	Toggle       Kind = "toggle"
-	Theme        Kind = "theme"
-	Snapshot     Kind = "snapshot"
-	SnapshotDone Kind = "snapshot_done"
-	Edit         Kind = "edit"
-	Accepted     Kind = "accepted"
-	State        Kind = "state"
-	Failure      Kind = "failure"
-	Quit         Kind = "quit"
-	ChatCall     Kind = "chat_call"
-	ChatResult   Kind = "chat_result"
+	Initialize     Kind = "initialize"
+	Ready          Kind = "ready"
+	Toggle         Kind = "toggle"
+	Theme          Kind = "theme"
+	Snapshot       Kind = "snapshot"
+	SnapshotDone   Kind = "snapshot_done"
+	Edit           Kind = "edit"
+	Accepted       Kind = "accepted"
+	State          Kind = "state"
+	Failure        Kind = "failure"
+	Quit           Kind = "quit"
+	ChatCall       Kind = "chat_call"
+	ChatResult     Kind = "chat_result"
+	ReplyCompleted Kind = "reply_completed"
 )
 
 // Message contains only input-surface capabilities. Request is a command ID;
@@ -93,13 +94,16 @@ func (m Message) Validate(fromHost bool) error {
 			allowed = m.Request != 0 && validTheme(m.Theme)
 		case Accepted:
 			allowed = m.Epoch != 0 && m.Sequence != 0
-		case Quit:
+		case Quit, ReplyCompleted:
 			allowed = true
 		case ChatResult:
 			allowed = wire.ValidID(m.ChatID) && m.ChatReply != nil
 		}
 	}
 	if !allowed {
+		return ErrProtocol
+	}
+	if m.Kind == ReplyCompleted && m != (Message{Version: m.Version, Session: m.Session, Kind: ReplyCompleted}) {
 		return ErrProtocol
 	}
 	if m.Kind != ChatCall && m.Chat != nil || m.Kind != ChatResult && m.ChatReply != nil ||

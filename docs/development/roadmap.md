@@ -21,6 +21,8 @@
 | 原生 Web 同源客户端、生命周期、任务/节点/设置职责与独立 WebView2 桥；保持现有功能和平台范围 | [Web 与快捷输入维护性重构](features/web-ui-maintainability/plan.md) |
 | 本机持续聊天：真实消息发送、历史查询、新对话、展开/收起（用户验收通过） | [持续聊天](features/local-node-chat/plan.md) |
 | 聊天发送反馈、快捷键与正文展示；提示词保留原生身份和角色设定，局部补充能力约束 | [聊天交互](features/chat-prompt-interaction/plan.md)、[原生提示词保留](features/native-harness-prompt-preservation/plan.md) |
+| 精简提示、动态回复、本地数学公式、标题拖动和任务栏入口（本机日常交互用户验收通过） | [聊天展示与桌面窗口体验](features/chat-desktop-experience/plan.md) |
+| 正常发送状态与气泡稳定、提示词诊断退出聊天展示、后台完成任务栏提醒（本机用户验收通过） | [聊天发送稳定性与后台完成提醒](features/chat-completion-attention/plan.md) |
 
 ## 后续验证与功能
 

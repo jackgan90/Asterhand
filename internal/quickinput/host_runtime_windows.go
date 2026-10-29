@@ -112,6 +112,11 @@ func serveHostCommand(ctx context.Context, surface *nativeSurface, relay *editor
 	switch m.Kind {
 	case hostipc.Accepted:
 		return relay.accept(m)
+	case hostipc.ReplyCompleted:
+		// Attention is optional: a saturated/closing UI queue must not terminate
+		// the host command loop or discard the user's in-memory draft.
+		_ = surface.dispatch(ctx, surface.replyCompleted)
+		return nil
 	case hostipc.ChatResult:
 		return surface.dispatch(ctx, func() {
 			_ = surface.postJSON(map[string]any{"kind": "chat_result", "id": m.ChatID, "reply": m.ChatReply})

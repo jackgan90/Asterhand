@@ -94,7 +94,24 @@ test('closed client preserves operation identity and processes a late durable re
 });
 
 import {ChatOutbox} from '../internal/quickinput/assets/chat-outbox.mjs';
-import {visibleHistory, visibleBodyState} from '../internal/executor/chatbridge/projection.mjs';
+import {visibleHistory, visibleBodyState, inputReceipt} from '../internal/executor/chatbridge/projection.mjs';
+
+test('durable input receipts confirm custody before visible history without guessing by run activity or text', () => {
+  for (const receipt of [{runId: 'current', state: 'pending'}, {idempotencyKey: 'current', state: 'consumed'}]) {
+    const history = {messages: [], inputReceipts: [receipt]};
+    assert.deepEqual(inputReceipt(history, 'current'), {accepted: true, user_message: ''});
+    assert.equal(observation(history, 'current', 200, 100, null).accepted, true);
+  }
+  for (const identity of [{idempotencyKey: 'current:user'}, {__openclaw: {id: 'native', idempotencyKey: 'current:user'}}]) {
+    const native = {role: 'user', content: 'same text', __openclaw: {id: 'native'}, ...identity};
+    assert.deepEqual(inputReceipt({messages: [native]}, 'current'), {accepted: true, user_message: 'native'});
+  }
+  for (const history of [{}, {inputReceipts: [{runId: 'previous'}]},
+    {sessionInfo: {hasActiveRun: true, activeRunIds: ['current']}},
+    {messages: [{role: 'user', content: 'same text', __openclaw: {id: 'previous', runId: 'current'}}]}]) {
+    assert.deepEqual(inputReceipt(history, 'current'), {accepted: false, user_message: ''});
+  }
+});
 
 test('outbox merges by identity, preserves distinct equal text, and separates delivery from generation', () => {
   const box = new ChatOutbox();

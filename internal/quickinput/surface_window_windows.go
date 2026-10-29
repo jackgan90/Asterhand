@@ -38,26 +38,54 @@ func (s *nativeSurface) Toggle() {
 			return
 		}
 		s.previous, _, _ = uiDLL.NewProc("GetForegroundWindow").Call()
-		s.position()
-		s.resume()
-		_ = s.controller.call(4, 1)
-		uiDLL.NewProc("ShowWindow").Call(s.hwnd.Load(), 5)
-		ok, _, _ := uiDLL.NewProc("SetForegroundWindow").Call(s.hwnd.Load())
-		if ok == 0 {
-			if s.onFailure != nil {
-				s.onFailure(&RegistrationError{"focus_denied", "系统拒绝激活输入框，请从托盘重试"})
-			}
-			return
+		if minimized, _, _ := uiDLL.NewProc("IsIconic").Call(s.hwnd.Load()); minimized != 0 {
+			uiDLL.NewProc("ShowWindow").Call(s.hwnd.Load(), 4) // Restore without activating before placement.
 		}
-		_ = s.controller.call(12, 0)
-		_ = s.postJSON(map[string]string{"kind": "focus"})
+		s.positionForShow()
+		s.activate()
 	})
 }
 
+// Explicit activation is separate from Toggle. Shell activation/restoration
+// never invokes the shortcut's hide action.
+func (s *nativeSurface) activate() {
+	if s.closing || !s.pageInitialized {
+		return
+	}
+	s.showContent(true)
+	uiDLL.NewProc("ShowWindow").Call(s.hwnd.Load(), 9) // SW_RESTORE also clears a hidden minimized state.
+	ok, _, _ := uiDLL.NewProc("SetForegroundWindow").Call(s.hwnd.Load())
+	if ok == 0 {
+		if s.onFailure != nil {
+			s.onFailure(&RegistrationError{"focus_denied", "系统拒绝激活输入框，请从任务栏重试"})
+		}
+		return
+	}
+	_ = s.controller.call(12, 0)
+	_ = s.postJSON(map[string]string{"kind": "focus"})
+}
+
+func (s *nativeSurface) showContent(visible bool) {
+	if s.core == nil || !s.pageInitialized || s.contentVisible == visible {
+		return
+	}
+	s.contentVisible = visible
+	if visible {
+		s.resume()
+		_ = s.controller.call(4, 1)
+		_ = s.postJSON(map[string]any{"kind": "visibility", "visible": true})
+	} else {
+		_ = s.postJSON(map[string]any{"kind": "visibility", "visible": false})
+		s.suspend(nil)
+	}
+}
+
 func (s *nativeSurface) hide(restore bool) {
-	_ = s.postJSON(map[string]any{"kind": "visibility", "visible": false})
+	s.stopAttention()
+	s.showContent(false)
 	foreground, _, _ := uiDLL.NewProc("GetForegroundWindow").Call()
 	uiDLL.NewProc("ShowWindow").Call(s.hwnd.Load(), 0)
+	// Snapshot/initialization may have resumed an already hidden WebView.
 	s.suspend(nil)
 	if restore && foreground == s.hwnd.Load() && s.previous != 0 {
 		if valid, _, _ := uiDLL.NewProc("IsWindow").Call(s.previous); valid != 0 {
@@ -66,64 +94,75 @@ func (s *nativeSurface) hide(restore bool) {
 	}
 }
 
-func (s *nativeSurface) position() {
-	foreground, _, _ := uiDLL.NewProc("GetForegroundWindow").Call()
-	monitor, _, _ := uiDLL.NewProc("MonitorFromWindow").Call(foreground, 0)
-	if monitor == 0 {
-		var cursor nativePoint
-		uiDLL.NewProc("GetCursorPos").Call(uintptr(unsafe.Pointer(&cursor)))
-		pointValue := uint64(uint32(cursor.X)) | uint64(uint32(cursor.Y))<<32
-		monitor, _, _ = uiDLL.NewProc("MonitorFromPoint").Call(uintptr(pointValue), 2)
-	}
-	var info struct {
-		Size          uint32
-		Monitor, Work nativeRect
-		Flags         uint32
-	}
-	info.Size = uint32(unsafe.Sizeof(info))
-	if ok, _, _ := uiDLL.NewProc("GetMonitorInfoW").Call(monitor, uintptr(unsafe.Pointer(&info))); ok == 0 {
+func (s *nativeSurface) windowSizeChanged(hwnd, kind uintptr) {
+	if s.controller == nil || s.closing {
 		return
 	}
-	dpi, _, _ := uiDLL.NewProc("GetDpiForWindow").Call(foreground)
-	if dpi == 0 {
-		dpi = 96
+	if kind == 1 { // SIZE_MINIMIZED is not an explicit Hide: keep the taskbar entry.
+		s.showContent(false)
+		return
 	}
-	width, height := int32(680*dpi/96), int32(max(240, s.height)*int(dpi)/96)
-	width = min(width, info.Work.Right-info.Work.Left-16)
-	height = min(height, info.Work.Bottom-info.Work.Top-16)
-	x := info.Work.Left + (info.Work.Right-info.Work.Left-width)/2
-	y := info.Work.Top + (info.Work.Bottom-info.Work.Top-height)/3
-	order := ^uintptr(0)
-	if s.pinned {
-		order = ^uintptr(1) // HWND_NOTOPMOST: a pinned reader stays open, not above other apps.
+	var rect nativeRect
+	uiDLL.NewProc("GetClientRect").Call(hwnd, uintptr(unsafe.Pointer(&rect)))
+	_ = s.controller.call(6, uintptr(unsafe.Pointer(&rect)))
+	if visible, _, _ := uiDLL.NewProc("IsWindowVisible").Call(hwnd); visible != 0 {
+		s.showContent(true)
+		if !s.placing {
+			s.positionCurrent(nil)
+		}
 	}
-	uiDLL.NewProc("SetWindowPos").Call(s.hwnd.Load(), order, uintptr(x), uintptr(y), uintptr(width), uintptr(height), 0x10)
 }
 
 func (s *nativeSurface) windowEvent(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 	switch message {
-	case 0x0005:
-		if s.controller != nil {
-			var rect nativeRect
-			uiDLL.NewProc("GetClientRect").Call(hwnd, uintptr(unsafe.Pointer(&rect)))
-			_ = s.controller.call(6, uintptr(unsafe.Pointer(&rect)))
+	case 0x0005: // WM_SIZE
+		s.windowSizeChanged(hwnd, wParam)
+	case 0x0006: // WM_ACTIVATE: losing focus no longer hides the window.
+		if wParam&0xffff != 0 && wParam>>16 == 0 {
+			s.stopAttention()
+			s.showContent(true)
 		}
-	case 0x0006:
-		if wParam&0xffff == 0 {
-			owner, _, _ := uiDLL.NewProc("GetAncestor").Call(lParam, 3)
-			if owner != hwnd && !s.pinned {
-				s.hide(false)
-			}
+		return defaultWindowEvent(hwnd, message, wParam, lParam)
+	case 0x0007: // WM_SETFOCUS restores WebView keyboard navigation from the taskbar.
+		if s.controller != nil && s.contentVisible && !s.closing {
+			_ = s.controller.call(12, 0)
 		}
-	case 0x007e, 0x02e0:
-		s.position()
+	case 0x0232: // WM_EXITSIZEMOVE: only user movement records a new preferred position.
+		s.rememberPlacement()
+		s.positionCurrent(nil)
+	case 0x007e: // WM_DISPLAYCHANGE
+		s.positionCurrent(nil)
+	case 0x02e0: // WM_DPICHANGED, use the OS-proposed anchor, never the foreground app.
+		if lParam != 0 {
+			// lParam points to an OS-owned RECT valid for this callback only.
+			var suggested *nativeRect
+			*(*uintptr)(unsafe.Pointer(&suggested)) = lParam
+			s.positionCurrent(suggested)
+		}
+		s.setWindowIcons()
+	case 0x001a: // WM_SETTINGCHANGE, including taskbar/work-area changes.
+		if wParam == 0x002f {
+			s.positionCurrent(nil)
+		} // SPI_SETWORKAREA
+		return defaultWindowEvent(hwnd, message, wParam, lParam)
+	case 0x0112: // WM_SYSCOMMAND
+		if wParam&0xfff0 == 0xf030 || wParam&0xfff0 == 0xf000 {
+			return 0
+		} // No maximize/free resize.
+		return defaultWindowEvent(hwnd, message, wParam, lParam)
+	case 0x00a3: // WM_NCLBUTTONDBLCLK: title dragging must not add a maximize mode.
+		return 0
 	case 0x02b1:
 		if wParam == 7 || wParam == 4 || wParam == 2 || wParam == 6 {
 			s.hide(false)
 		}
 	default:
-		r, _, _ := uiDLL.NewProc("DefWindowProcW").Call(hwnd, uintptr(message), wParam, lParam)
-		return r
+		return defaultWindowEvent(hwnd, message, wParam, lParam)
 	}
 	return 0
+}
+
+func defaultWindowEvent(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
+	result, _, _ := uiDLL.NewProc("DefWindowProcW").Call(hwnd, uintptr(message), wParam, lParam)
+	return result
 }

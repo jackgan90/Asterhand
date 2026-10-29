@@ -6,7 +6,6 @@ import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
 import {PromptMonitor} from '../internal/executor/chatbridge/prompt-state.mjs';
-import {promptWarning} from '../internal/quickinput/assets/chat-model.mjs';
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'asterhand-prompt-'));
@@ -43,7 +42,7 @@ test('native-preserving supplement is confirmed from effective model input, with
   const record=await f.readStatus({instance:f.plan.instance,run:f.input.runId,session:f.input.sessionId});
   assert.equal(record.run,f.input.runId);
   const status=await monitor.status(f.input.runId,f.input.sessionId);
-  assert.equal(status.state,'applied');assert.equal(promptWarning(status),'');
+  assert.equal(status.state,'applied');
   const raw=JSON.stringify(record);
   assert.ok(!raw.includes(f.plan.text));assert.ok(!raw.includes('systemPrompt'));
   assert.ok(!(await readdir(f.root)).some(name=>name.startsWith('prompt-status')));
@@ -64,7 +63,7 @@ test('append remains explicit and unsupported, invalid, or rejected hooks never 
   f.hooks.get('llm_input')({...f.input,systemPrompt:'Native policy\n'+f.plan.text},f.context);
   const monitor=f.monitor();monitor.begin(f.input.runId,f.input.sessionId);
   const status=await monitor.status(f.input.runId,f.input.sessionId);
-  assert.equal(status.state,'applied');assert.equal(promptWarning(status),'');
+  assert.equal(status.state,'applied');
   f.plan.application.mode='replace';await f.save();
   assert.equal(f.hooks.get('before_prompt_build')({},f.context).systemPrompt,f.plan.text);
   f.plan.application.revision=f.plan.application.revision.replace('-v2-','-v1-');await f.save();
@@ -76,7 +75,6 @@ test('append remains explicit and unsupported, invalid, or rejected hooks never 
   await rm(join(f.root,'prompt-policy.json'));
   assert.doesNotThrow(()=>f.hooks.get('before_prompt_build')({},f.context));
   assert.doesNotThrow(()=>f.hooks.get('llm_input')(f.input,f.context));
-  assert.match(promptWarning({mode:'unsupported',state:'degraded'}),/聊天仍可使用/);
 });
 
 test('stale and mismatched policy observations cannot claim success',async t=>{

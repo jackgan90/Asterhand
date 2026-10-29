@@ -19,7 +19,6 @@ type bridgeMessage struct {
 	Text     string        `json:"text"`
 	ID       string        `json:"id"`
 	Height   int           `json:"height,omitempty"`
-	Pinned   bool          `json:"pinned,omitempty"`
 	Chat     *wire.Request `json:"chat,omitempty"`
 }
 

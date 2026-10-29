@@ -13,3 +13,4 @@
 
 - [ADR-AST-006：可选的会话提示词策略](006-optional-conversation-prompt-policy.md)。
 - [ADR-AST-007：保留原生 Harness 设定，仅适配产品冲突](007-preserve-native-harness-prompts.md)。
+- [ADR-AST-008：提示词诊断与聊天展示分离](008-keep-prompt-diagnostics-out-of-chat.md)。

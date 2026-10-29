@@ -31,7 +31,7 @@ export function inputEditor(bridge) {
     if (!staged && (changedAfterSend || text !== previous)) {
       previous = text; revision++; send("draft_updated",{text,revision});
     }
-    status.textContent = "草稿仅保留在本次运行中";
+    status.textContent = "";
     const height = expanded ? 760 : Math.max(240, Math.min(480, 164 + Math.min(12, input.value.split("\n").length) * 30));
     if (height !== lastHeight) { lastHeight = height; send("resize",{height}); }
     if (pendingSnapshot) { send("snapshot",{id:pendingSnapshot,text:previous,revision}); pendingSnapshot = ""; }

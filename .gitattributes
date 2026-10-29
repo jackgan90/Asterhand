@@ -9,3 +9,7 @@
 *.png binary
 *.jpg binary
 *.zip binary
+# Preserve the exact upstream bytes recorded by the vendor checksum manifests.
+internal/quickinput/assets/vendor/** -text
+# The generated inventory is repository metadata, not a pinned upstream asset.
+internal/quickinput/assets/vendor/**/manifest.json text eol=lf

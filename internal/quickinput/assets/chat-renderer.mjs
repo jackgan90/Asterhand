@@ -1,4 +1,6 @@
 import {messageText} from './chat-model.mjs';
+import {markupTokens} from './chat-markup.mjs';
+import {mathRenderer, MAX_WINDOW_MATH_NODES} from './chat-math.mjs';
 
 function element(tag, text, className) {
   const node = document.createElement(tag);
@@ -7,15 +9,15 @@ function element(tag, text, className) {
   return node;
 }
 
-// All content is text or created DOM nodes. Raw HTML, media, external navigation,
-// style attributes, and embedded widgets are never interpreted.
+// Message HTML is never interpreted. Only the local math engine may create
+// mathematical DOM/style nodes; its input and output have independent budgets.
 function inline(parent, text) {
-  const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*)/g;
+  const pattern = /(\*\*[^*\n]+\*\*|\*[^*\n]+\*)/g;
   let start = 0;
   for (const match of text.matchAll(pattern)) {
     parent.append(document.createTextNode(text.slice(start, match.index)));
     const value = match[0];
-    const tag = value.startsWith('`') ? 'code' : value.startsWith('**') ? 'strong' : 'em';
+    const tag = value.startsWith('**') ? 'strong' : 'em';
     const count = tag === 'strong' ? 2 : 1;
     parent.append(element(tag, value.slice(count, -count)));
     start = match.index + value.length;
@@ -23,7 +25,72 @@ function inline(parent, text) {
   parent.append(document.createTextNode(text.slice(start)));
 }
 
-export function markdown(text, copy) {
+function codeBlock(token, copy) {
+  const wrapper = element('div', undefined, 'chat-code');
+  const bar = element('div', undefined, 'chat-code-bar');
+  const button = element('button', '复制代码');
+  button.type = 'button';
+  button.addEventListener('click', () => copy(token.text));
+  bar.append(element('span', token.language || '代码'), button);
+  const pre = element('pre');
+  pre.append(element('code', token.text));
+  wrapper.append(bar, pre);
+  return wrapper;
+}
+
+function formattedBlocks(tokens, fragment, copy, math) {
+  let paragraph = [], line = [];
+  function append(parent, parts) {
+    for (const token of parts) {
+      if (token.kind === 'text') inline(parent, token.text);
+      else if (token.kind === 'math') parent.append(math.render(token));
+      else parent.append(element(token.kind === 'code' ? 'code' : 'span', token.text,
+        token.kind === 'source' ? 'chat-math-source' : undefined));
+    }
+  }
+  function flushParagraph() {
+    if (!paragraph.length) return;
+    const p = element('p');
+    append(p, paragraph); fragment.append(p); paragraph = [];
+  }
+  function flushLine() {
+    if (line.every(token => token.kind === 'text' && !token.text.trim())) flushParagraph();
+    else {
+      const first = line[0]?.kind === 'text' ? line[0].text : '';
+      const heading = /^(#{1,6})\s+/.exec(first);
+      const quote = /^>\s?/.exec(first);
+      const bullet = /^(?:[-*+]\s+|\d+\.\s+)/.exec(first);
+      const prefix = heading || quote || bullet;
+      if (prefix) {
+        flushParagraph();
+        const node = element(heading ? 'h' + Math.min(heading[1].length + 1, 6) : quote ? 'blockquote' : 'p',
+          undefined, bullet ? 'chat-bullet' : undefined);
+        line[0] = {kind: 'text', text: (bullet ? '• ' : '') + first.slice(prefix[0].length)};
+        append(node, line); fragment.append(node);
+      } else {
+        if (paragraph.length) paragraph.push({kind: 'text', text: '\n'});
+        paragraph.push(...line);
+      }
+    }
+    line = [];
+  }
+  for (const token of tokens) {
+    if (token.kind === 'code-block' || token.display) {
+      flushLine(); flushParagraph();
+      fragment.append(token.kind === 'code-block' ? codeBlock(token, copy) : token.kind === 'math' ?
+        math.render(token) : element('div', token.text, 'chat-math-source'));
+    } else if (token.kind === 'text') {
+      const lines = token.text.split('\n');
+      lines.forEach((text, index) => {
+        if (text) line.push({kind: 'text', text});
+        if (index < lines.length - 1) flushLine();
+      });
+    } else line.push(token);
+  }
+  flushLine(); flushParagraph();
+}
+
+export function markdown(text, copy, math = mathRenderer().message()) {
   const fragment = document.createDocumentFragment();
   // Dense markup and very long bodies remain selectable/copyable text without
   // turning a bounded byte payload into hundreds of thousands of DOM nodes.
@@ -36,56 +103,25 @@ export function markdown(text, copy) {
     fragment.append(pre, button);
     return fragment;
   }
-  const lines = text.split('\n');
-  let paragraph = [];
-  const flush = () => {
-    if (!paragraph.length) return;
-    const p = element('p');
-    inline(p, paragraph.join('\n'));
-    fragment.append(p);
-    paragraph = [];
-  };
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index];
-    const fence = /^\s*```([\w+-]*)\s*$/.exec(line);
-    if (fence) {
-      flush();
-      const content = [];
-      while (++index < lines.length && !/^\s*```\s*$/.test(lines[index])) content.push(lines[index]);
-      const code = content.join('\n');
-      const wrapper = element('div', undefined, 'chat-code');
-      const bar = element('div', undefined, 'chat-code-bar');
-      const button = element('button', '复制代码');
-      button.type = 'button';
-      button.addEventListener('click', () => copy(code));
-      bar.append(element('span', fence[1] || '代码'), button);
-      const pre = element('pre');
-      pre.append(element('code', code));
-      wrapper.append(bar, pre);
-      fragment.append(wrapper);
-      continue;
-    }
-    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
-    const quote = /^>\s?(.*)$/.exec(line);
-    const bullet = /^(?:[-*+]\s+|\d+\.\s+)(.*)$/.exec(line);
-    if (heading || quote || bullet) {
-      flush();
-      const node = element(heading ? 'h' + Math.min(heading[1].length + 1, 6) : quote ? 'blockquote' : 'p', undefined, bullet ? 'chat-bullet' : undefined);
-      inline(node, heading ? heading[2] : quote ? quote[1] : '• ' + bullet[1]);
-      fragment.append(node);
-    } else if (!line.trim()) flush();
-    else paragraph.push(line);
+  const tokens = markupTokens(text);
+  formattedBlocks(tokens, fragment, copy, math);
+  if (tokens.some(token => token.kind === 'math' || token.kind === 'source')) {
+    const button = element('button', '复制原文', 'chat-copy-source');
+    button.type = 'button'; button.addEventListener('click', () => copy(text));
+    fragment.append(button);
   }
-  flush();
   return fragment;
 }
 
 export function messageRenderer(container, {copy, expand}) {
   const cache = new Map();
-  return messages => {
+  const math = mathRenderer();
+  let mathNodes = 0;
+  const render = messages => {
+    math.beginRender();
     const identities = new Set(messages.map(message => message.ui_id ?? message.id));
     for (const [id, entry] of cache) {
-      if (!identities.has(id)) { entry.node.remove(); cache.delete(id); }
+      if (!identities.has(id)) { mathNodes -= entry.mathNodes; entry.node.remove(); cache.delete(id); }
     }
     messages.forEach((message, index) => {
       const text = messageText(message);
@@ -93,7 +129,7 @@ export function messageRenderer(container, {copy, expand}) {
       const signature = message.id + ':' + message.delivery_status + ':' + message.role + ':' + message.timestamp + ':' + message.truncated + ':' + message.transient + ':' + message.fragmentStart + ':' + text;
       let entry = cache.get(key);
       if (!entry) {
-        entry = {node: element('article', undefined, 'chat-message')};
+        entry = {node: element('article', undefined, 'chat-message'), mathNodes: 0};
         entry.node.dataset.messageId = key;
         cache.set(key, entry);
       }
@@ -101,7 +137,11 @@ export function messageRenderer(container, {copy, expand}) {
         entry.signature = signature;
         entry.node.classList.toggle('chat-user', message.role === 'user');
         const body = element('div', undefined, 'chat-message-body');
-        body.append(markdown(text, copy));
+        mathNodes -= entry.mathNodes;
+        const formulaBudget = math.message(MAX_WINDOW_MATH_NODES - mathNodes);
+        body.append(markdown(text, copy, formulaBudget));
+        entry.mathNodes = formulaBudget.nodes;
+        mathNodes += entry.mathNodes;
         const label = message.role === 'user' ? '你' : message.transient ? '助手 · 生成中' : '助手';
         const author = element('div', label, 'chat-author');
         if (message.timestamp && Number.isFinite(Date.parse(message.timestamp))) {
@@ -127,4 +167,6 @@ export function messageRenderer(container, {copy, expand}) {
       if (current !== entry.node) container.insertBefore(entry.node, current ?? null);
     });
   };
+  render.dispose = () => { cache.clear(); math.clear(); mathNodes = 0; };
+  return render;
 }

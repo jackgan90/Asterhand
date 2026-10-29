@@ -11,7 +11,11 @@ import (
 )
 
 var scripts = regexp.MustCompile(`<script\s+type="module"\s+src="([^"]+)"`)
-var imports = regexp.MustCompile(`(?:\bfrom\s*|\bimport\s*)["']([^"']+)["']`)
+
+// Match declarations, not prose such as `from "extension"` in vendor comments.
+// Static declarations in our modules begin on their own line; dynamic imports
+// are exercised by native runtime tests rather than this static closure check.
+var imports = regexp.MustCompile(`(?m)^[\t ]*(?:import\s+(?:[^;"']*?\bfrom\s*)?|export\s+(?:\*|\{[^}]*\})\s*from\s*)["']([^"']+)["']`)
 
 // Closure starts at the actual HTML entry and follows every static import.
 // The project uses native static imports only, with no bundler or bare imports.

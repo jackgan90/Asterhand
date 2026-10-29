@@ -1,6 +1,6 @@
 import {Gateway, failure, submissionError} from './gateway.mjs';
 import {PromptMonitor} from './prompt-state.mjs';
-import {StreamState, byteSize, historyPage, messageBytes, fragmentBytes, observation, visibleHistory, visibleBodyState, HISTORY_MAX_CHARS, FULL_MESSAGE_MAX_CHARS} from './projection.mjs';
+import {StreamState, byteSize, historyPage, messageBytes, fragmentBytes, inputReceipt, observation, visibleHistory, visibleBodyState, HISTORY_MAX_CHARS, FULL_MESSAGE_MAX_CHARS} from './projection.mjs';
 
 const streams = new StreamState();
 const gateway = new Gateway(event => streams.event(event), () => process.exit(2));
@@ -43,7 +43,14 @@ async function submit(command) {
     idempotencyKey: command.run, deliver: false, timeoutMs: 600000,
     expectedLeafEntryId: history.sessionInfo?.activeLeafEntryId ?? null,
   }, 30000).catch(error => { throw submissionError(error); });
-  return {accepted: Number.isInteger(result.messageSeq) && result.messageSeq > 0, user_message: '',
+  let receipt = {accepted: Number.isInteger(result.messageSeq) && result.messageSeq > 0, user_message: ''};
+  if (!receipt.accepted) {
+    try { receipt = inputReceipt(await readHistory(command.binding, {inputRunIds: [command.run]}), command.run); }
+    // The send already crossed admission. Read failure leaves delivery unknown;
+    // it must never be translated into a pre-send rejection or a second send.
+    catch { /* Existing reconciliation will query the original identity again. */ }
+  }
+  return {...receipt,
     prompt: await promptMonitor.status(command.run, command.binding.session)};
 }
 

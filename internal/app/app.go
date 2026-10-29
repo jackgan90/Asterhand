@@ -93,6 +93,7 @@ func New(c *config.Manager, x executor.Executor) (*App, error) {
 	a.Input = quickinput.New(c.Home)
 	a.Chat = conversation.New(c.Get().NodeID, s, executor.NewConversationRuntime(c))
 	a.Input.SetConversationClient(conversation.Client{Target: a.Chat.Target(), Transport: a.Chat})
+	a.Chat.SetCompletionHandler(a.Input.ReplyCompleted)
 	a.desktopRequests = make(chan struct{}, 8)
 	return a, nil
 }

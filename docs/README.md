@@ -22,6 +22,10 @@
 
 ## 其他入口
 
+- [聊天发送稳定性与后台完成提醒](development/features/chat-completion-attention/plan.md)：固定状态区与任务栏高亮闪烁。
+
+- [聊天展示与桌面窗口体验](development/features/chat-desktop-experience/plan.md)、[验收标准与验证](development/features/chat-desktop-experience/validation.md)：精简提示、动态回复、数学公式、拖动与任务栏入口。
+
 - [本机持续聊天与可扩展快捷入口计划](development/features/local-node-chat/plan.md)、[持续会话设计](assistant/conversations.md)、[验证说明](development/features/local-node-chat/validation.md)、[会话与通信边界 ADR](assistant/adr/005-conversation-runtime-and-transport-boundaries.md)（日常聊天用户验收通过，其余专项边界见验证说明）。
 
 - [原始需求来源](overview/origin.md)、[原始场景](overview/scenarios.md)、[迁移对照](overview/migration.md)。

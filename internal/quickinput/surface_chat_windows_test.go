@@ -168,7 +168,7 @@ func TestNativeChatPanelWorkflow(t *testing.T) {
 	evaluate(t, surface, `window.__pendingBubble=[...document.querySelectorAll('.chat-user')].find(node=>node.textContent.includes('first 中文'));true`)
 	evaluate(t, surface, `document.querySelector('#input').value='newer draft';document.querySelector('#input').dispatchEvent(new Event('input'));true`)
 	close(fixture.release)
-	waitChatScript(t, surface, `document.querySelector('#chat-status').textContent.includes('回复完成')`)
+	waitChatScript(t, surface, `document.querySelector('#chat-status').textContent==='' && document.querySelector('#chat-stop').hidden`)
 	waitChatScript(t, surface, `document.querySelectorAll('.chat-user').length===1 && document.querySelector('.chat-user')===window.__pendingBubble`)
 	if result := evaluate(t, surface, `document.querySelectorAll('.chat-delivery-status').length===0`); result != "true" {
 		t.Fatal("successful receipt added an error label", result)
@@ -190,21 +190,14 @@ func TestNativeChatPanelWorkflow(t *testing.T) {
 		t.Fatal("IME composition submitted")
 	case <-time.After(150 * time.Millisecond):
 	}
-	evaluate(t, surface, `document.querySelector('#input').dispatchEvent(new CompositionEvent('compositionend'));document.querySelector('#input').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',cancelable:true,bubbles:true}));document.querySelector('#chat-pin').click();true`)
+	evaluate(t, surface, `document.querySelector('#input').dispatchEvent(new CompositionEvent('compositionend'));document.querySelector('#input').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',cancelable:true,bubbles:true}));true`)
 	select {
 	case <-fixture.submitted:
 		t.Fatal("composition-ending Enter submitted")
 	case <-time.After(100 * time.Millisecond):
 	}
-	var pinned bool
-	for deadline := time.Now().Add(time.Second); !pinned && time.Now().Before(deadline); {
-		_ = surface.dispatch(ctx, func() { pinned = surface.pinned })
-		if !pinned {
-			time.Sleep(10 * time.Millisecond)
-		}
-	}
-	if !pinned {
-		t.Fatal("pin did not reach native host")
+	if result := evaluate(t, surface, `document.querySelector('#chat-pin')===null`); result != "true" {
+		t.Fatal("obsolete pin control remains")
 	}
 	fixture.mu.Lock()
 	fixture.reject = true

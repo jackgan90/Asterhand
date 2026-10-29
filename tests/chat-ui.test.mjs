@@ -100,6 +100,25 @@ test('new conversation requires a decision before carrying an unsent draft to it
   } finally {h.close();}
 });
 
+test('collapsed active replies reconcile completion without reading history and resume after hiding', async () => {
+  const h = harness();
+  try {
+    await h.open();
+    await h.elements.get('chat-expand').fire('click'); await flush();
+    const historyReads = h.requests.filter(request => request.action === 'history').length;
+    h.bridge.emit({kind:'visibility', visible:false});
+    await assert.rejects(h.tick(), /expected scheduled reconciliation/);
+    h.setRunning(false);
+    h.bridge.emit({kind:'visibility', visible:true});
+    await h.tick();
+    assert.equal(h.elements.get('chat-status').textContent, '');
+    assert.equal(h.elements.get('chat-send').disabled, false);
+    assert.equal(h.requests.filter(request => request.action === 'history').length, historyReads);
+    await h.elements.get('chat-expand').fire('click'); await flush();
+    assert.equal(h.requests.filter(request => request.action === 'history').length, historyReads + 1);
+  } finally { h.close(); }
+});
+
 test('finishing a reply preserves the old page currently being read',async()=>{
   const h=harness();
   try {
@@ -194,6 +213,86 @@ test('pre-send bubble appears before receipt and merges with native history with
   } finally {h.close();}
 });
 
+test('sending keeps one reply status across old history, receipt, preparation and generation', async () => {
+  const h = harness();
+  try {
+    h.setRunning(false); await h.open(); h.setDraft('one stable wait');
+    h.hold('submit'); h.hold('history');
+    const submitted = h.editor.submit(); await flush();
+    const status = h.elements.get('chat-status');
+    assert.equal(status.textContent, '正在回复...');
+    const refreshing = h.elements.get('chat-refresh').fire('click'); await flush();
+    h.reply('history'); await refreshing; await flush(); // Previous completed turn arrives during this send.
+    assert.equal(status.textContent, '正在回复...');
+    const operation = h.requests.find(request => request.action === 'submit').operation_id;
+    const next = {id: 'next-turn', operation_id: operation, conversation_id: A,
+      delivery: 'accepted', run: 'pending', persistence: 'pending'};
+    h.reply('submit', {turn: next}); await flush();
+    assert.equal(status.textContent, '正在回复...');
+    h.reply('history', {turn: next}); await submitted;
+    assert.equal(status.textContent, '正在回复...');
+    h.override('reconcile', () => ({turn: {...next, run: 'running'}}));
+    await h.tick(); assert.equal(status.textContent, '正在回复...');
+    h.override('reconcile', () => ({turn: {...next, run: 'completed', persistence: 'saved'}}));
+    const finished = h.tick(); await flush();
+    h.reply('history', {turn: {...next, run: 'completed', persistence: 'saved'}});
+    await finished; assert.equal(status.textContent, '');
+  } finally { h.close(); }
+});
+
+test('durable receipt before transcript insertion keeps the same bubble without a delivery warning', async () => {
+  const h = harness();
+  try {
+    h.setRunning(false); await h.open(); h.setDraft('pending native transcript'); h.hold('submit');
+    const submitted = h.editor.submit(); await flush();
+    const rows = h.elements.get('chat-messages'), status = h.elements.get('chat-status');
+    const preview = rows.children.at(-1);
+    const operation = h.requests.find(request => request.action === 'submit').operation_id;
+    const accepted = {id: 'queued-turn', operation_id: operation, conversation_id: A,
+      delivery: 'accepted', run: 'running', persistence: 'pending'};
+    h.override('history', () => ({turn: accepted, page: {messages: []}}));
+    h.reply('submit', {turn: accepted}); await submitted;
+    assert.equal(status.textContent, '正在回复...');
+    assert.deepEqual(rows.children, [preview]);
+    assert.equal(preview.children.length, 2, 'receipt inserted a temporary delivery-status row');
+    assert.doesNotMatch(rows.textContent, /核对|待确认|失败/);
+    const confirmed = {...accepted, user_message_id: 'native-user'};
+    h.override('history', () => ({turn: confirmed, page: {messages: [{id: 'native-user', role: 'user',
+      turn_id: accepted.id, blocks: [{type: 'text', text: 'pending native transcript'}]}]}}));
+    await h.elements.get('chat-refresh').fire('click');
+    assert.equal(status.textContent, '正在回复...');
+    assert.deepEqual(rows.children, [preview]);
+    assert.equal(preview.children.length, 2);
+  } finally { h.close(); }
+});
+
+test('cold connection and new conversation never flash internal stages after send', async () => {
+  const h = harness();
+  try {
+    h.setRunning(false); h.setDraft('first send');
+    h.override('list', () => ({conversations: []}));
+    h.hold('hello'); h.hold('create'); h.hold('submit');
+    h.bridge.emit({kind: 'focus'}); await flush();
+    const status = h.elements.get('chat-status'), label = status.children[0], changes = [];
+    Object.defineProperty(label, 'textContent', {
+      get() { return this._text; },
+      set(value) { this._text = String(value); this.children = []; changes.push(this._text); },
+    });
+    const submitted = h.editor.submit(); await flush();
+    h.reply('hello'); await flush();
+    assert.equal(status.textContent, '正在回复...');
+    h.reply('create'); await flush();
+    assert.equal(status.textContent, '正在回复...');
+    const operation = h.requests.find(request => request.action === 'submit').operation_id;
+    const completed = {id: 'new-turn', operation_id: operation, conversation_id: B,
+      delivery: 'accepted', run: 'completed', persistence: 'saved'};
+    h.override('history', () => ({turn: completed, page: {messages: []}}));
+    h.reply('submit', {turn: completed}); await submitted;
+    assert.deepEqual(changes, ['正在回复', '']);
+    assert.equal(status.textContent, '');
+  } finally { h.close(); }
+});
+
 test('rejected sends attach an error to the local bubble and keep the draft',async()=>{
   const h=harness();
   try {
@@ -250,9 +349,9 @@ test('delayed history cannot undo completion or replace its page, and refreshes 
     await h.open(); h.hold('history');
     const refresh=h.elements.get('chat-refresh').fire('click');await flush();
     h.setRunning(false);await h.tick();
-    assert.match(h.elements.get('chat-status').textContent,/回复完成/);
+    assert.equal(h.elements.get('chat-status').textContent,'');
     h.reply('history');await refresh;await flush();
-    assert.match(h.elements.get('chat-status').textContent,/回复完成/);
+    assert.equal(h.elements.get('chat-status').textContent,'');
     assert.equal(h.elements.get('chat-stop').hidden,true);
     assert.equal(h.elements.get('chat-send').disabled,false);
     const next=h.tick();await flush();

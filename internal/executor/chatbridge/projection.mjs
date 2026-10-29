@@ -138,12 +138,20 @@ export class StreamState {
   }
 }
 
-export function observation(history, runID, startedAt, processStarted, stream) {
+// Durable input custody may precede the visible transcript row. Submit and
+// Observe must use the same run identity evidence, never the acknowledgement's
+// started status or matching text alone.
+export function inputReceipt(history, runID) {
   const messages = history.messages ?? [];
   const user = messages.find(message => message.role === 'user' &&
     (message.idempotencyKey === runID + ':user' || message.__openclaw?.idempotencyKey === runID + ':user'));
-  const assistant = messages.findLast(message => message.role === 'assistant' && message.__openclaw?.runId === runID);
   const receipt = (history.inputReceipts ?? []).find(item => item.runId === runID || item.idempotencyKey === runID);
+  return {accepted: Boolean(user || receipt), user_message: user?.__openclaw?.id ?? ''};
+}
+
+export function observation(history, runID, startedAt, processStarted, stream) {
+  const messages = history.messages ?? [];
+  const assistant = messages.findLast(message => message.role === 'assistant' && message.__openclaw?.runId === runID);
   const info = history.sessionInfo ?? {};
   const active = info.hasActiveRun === true || (info.activeRunIds ?? []).includes(runID) || (history.pendingInputs?.total ?? 0) > 0;
   const terminal = stream?.terminal;
@@ -160,7 +168,7 @@ export function observation(history, runID, startedAt, processStarted, stream) {
     id: 'live-' + runID, role: 'assistant', turn_id: runID, blocks: [{type: 'text', text: stream.text}],
     transient: true, truncated: stream.truncated,
   } : null;
-  return {accepted: Boolean(user || receipt), user_message: user?.__openclaw?.id ?? '',
+  return {...inputReceipt(history, runID),
     assistant_message: assistant?.__openclaw?.id ?? '', stopped, run, saved: Boolean(assistant), live};
 }
 

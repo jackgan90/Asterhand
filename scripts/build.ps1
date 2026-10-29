@@ -70,6 +70,8 @@ function Copy-GoLicenses([string]$Stage) {
 
 . (Join-Path $PSScriptRoot 'dependency-tools.ps1')
 $catalog = Assert-PreparedDependencies $repo $NodeDistribution $RuntimeRoot $Go
+& (Join-Path $NodeDistribution 'node.exe') (Join-Path $PSScriptRoot 'verify-frontend-assets.mjs')
+if ($LASTEXITCODE -ne 0) { throw 'Frontend vendor assets failed integrity checks.' }
 $sourceDigest = Get-SourceFingerprint $repo
 Build-Binary 'windows' (Join-Path $windows 'asterhand.exe')
 Build-Binary 'windows' (Join-Path $windows 'AsterhandLauncher.exe') 'asterhand-launcher' -GUI
@@ -84,6 +86,9 @@ Copy-Item -LiteralPath (Join-Path $RuntimeRoot 'node_modules') -Destination (Joi
 Copy-Item -LiteralPath (Join-Path $RuntimeRoot 'package.json'),(Join-Path $RuntimeRoot 'package-lock.json') -Destination (Join-Path $windows 'runtime')
 foreach ($stage in @($windows)) {
     Copy-GoLicenses $stage
+    $mathLicense = Join-Path $stage 'licenses\katex'
+    New-Item -ItemType Directory -Path $mathLicense -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repo 'internal/quickinput/assets/vendor/katex/LICENSE'),(Join-Path $repo 'internal/quickinput/assets/vendor/katex/manifest.json') -Destination $mathLicense
     Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination $stage
     New-Item -ItemType Directory -Path (Join-Path $stage 'packaging') -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $repo 'packaging\dependencies.json') -Destination (Join-Path $stage 'packaging')

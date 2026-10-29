@@ -9,6 +9,11 @@ param(
     [string]$ReleaseTag,
     [string]$PackagePath,
     [string]$ManifestPath,
+    [string]$LocalBuildPath,
+    [string]$LocalRuntimePath,
+    [switch]$InitializeLocalCache,
+    [scriptblock]$BeforeLocalActivation,
+    [ValidatePattern('^[a-f0-9]{64}$')][string]$ExpectedSourceDigest,
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'Programs\Asterhand'),
     [string]$DataDir = (Join-Path $env:APPDATA 'Asterhand'),
     [switch]$SkipTailscale,
@@ -24,6 +29,13 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
 if ($NoStart -and $StartAfterInstall) { throw 'NoStart and StartAfterInstall cannot be combined.' }
+if ($LocalBuildPath -or $InitializeLocalCache) {
+    foreach ($name in @('Version','Repository','ReleaseTag','PackagePath','ManifestPath')) {
+        if ($PSBoundParameters.ContainsKey($name)) { throw 'Local directory mode cannot select a release or ZIP.' }
+    }
+} elseif ($LocalRuntimePath -or $BeforeLocalActivation) { throw 'Local runtime and source guard require a local directory candidate.' }
+if ($LocalBuildPath -and (-not $LocalRuntimePath -or $InitializeLocalCache)) { throw 'Choose local initialization or a candidate with its runtime.' }
+if ($InitializeLocalCache -and ($StopRunning -or $StartAfterInstall -or $BeforeLocalActivation -or $LocalRuntimePath)) { throw 'Local cache initialization cannot activate a node.' }
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
     throw 'This release supports Windows x64. Windows ARM64 is not yet validated.'
@@ -132,8 +144,16 @@ function Get-VerifiedFile([string]$Url, [string]$Destination, [string]$SHA256) {
 function Expand-SafePackage([string]$Archive, [string]$Destination) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = [IO.Compression.ZipFile]::OpenRead($Archive)
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    $processed = 0
+    $nextProgress = 5
     try {
         foreach ($entry in $zip.Entries) {
+            $processed++
+            if ($watch.Elapsed.TotalSeconds -ge $nextProgress) {
+                Write-Host ("Extracting: {0}/{1} entries, {2:n1}s elapsed" -f $processed, $zip.Entries.Count, $watch.Elapsed.TotalSeconds)
+                $nextProgress = $watch.Elapsed.TotalSeconds + 5
+            }
             if ($entry.FullName.Contains(':') -or [IO.Path]::IsPathRooted($entry.FullName)) {
                 throw 'Unsafe path in release archive.'
             }
@@ -480,7 +500,17 @@ function Stop-InstallNode([string]$Data, [string]$Program) {
             Start-Sleep -Milliseconds 200
         }
     }
-    $runtime = Get-Content -LiteralPath $runtimePath -Raw | ConvertFrom-Json
+    $context = Get-InstallNodeContext $Data $Program
+    if ($null -eq $context) { return }
+    try {
+        Write-Host 'Stopping this installation node; local in-flight work will require reconciliation after restart.'
+        $null = Invoke-InstallNodeAPI $context.origin '/api/stop' 'POST' $context.cookies @{} $context.csrf
+        if (-not $context.process.WaitForExit(30000)) { throw 'The node did not stop within 30 seconds. Inspect its logs and retry.' }
+    } finally { $context.process.Dispose() }
+}
+
+function Get-InstallNodeContext([string]$Data, [string]$Program) {
+    $runtime = Get-Content -LiteralPath (Join-Path $Data 'runtime.json') -Raw | ConvertFrom-Json
     if ($runtime.pid -le 0) { throw 'Invalid node process ID; inspect runtime.json.' }
     $process = Get-Process -Id $runtime.pid -ErrorAction SilentlyContinue
     if ($null -eq $process) { return }
@@ -511,10 +541,8 @@ function Stop-InstallNode([string]$Data, [string]$Program) {
         $token = [IO.File]::ReadAllText((Join-Path $Data 'web-login.token'))
         $login = Invoke-InstallNodeAPI $origin '/api/login' 'POST' $cookies @{token=$token} ''
         $token = $null
-        Write-Host 'Stopping this installation node; local in-flight work will require reconciliation after restart.'
-        $null = Invoke-InstallNodeAPI $origin '/api/stop' 'POST' $cookies @{} $login.csrf
-        if (-not $process.WaitForExit(30000)) { throw 'The node did not stop within 30 seconds. Inspect its logs and retry.' }
-    } finally { $process.Dispose() }
+        return @{process=$process;origin=$origin;cookies=$cookies;csrf=$login.csrf;executable=$executable}
+    } catch { $process.Dispose(); throw }
 }
 
 function Enter-InstallActivation([string[]]$DataDirectories, [string]$Program, [switch]$StopRunning) {
@@ -570,8 +598,124 @@ function Write-InstallRecord($Record, [string]$Destination) {
     } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
 }
 
+function Resolve-InstallCanonicalPath([string]$Path) {
+    Initialize-InstallNative
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($null -ne $item) { return [Asterhand.InstallNative]::CanonicalDirectory($Path) }
+    $parent = Split-Path -Parent $Path
+    if (-not $parent -or $parent -eq $Path) { throw 'Cannot resolve installation path.' }
+    return Join-Path (Resolve-InstallCanonicalPath $parent) (Split-Path -Leaf $Path)
+}
+
+function Assert-LocalInstallFile([string]$Root, [string]$Relative) {
+    if ($Relative -notmatch '^[^:\\]+$' -or $Relative -match '(^/|(^|/)\.{1,2}(/|$)|//|[. ](/|$))') { throw 'Invalid local receipt path.' }
+    $path = $Root
+    foreach ($part in @('') + @($Relative.Split('/'))) {
+        if ($part) { $path = Join-Path $path $part }
+        $item = Get-Item -LiteralPath $path -Force
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Unexpected local candidate reparse point.' }
+    }
+    if ($item.PSIsContainer) { throw 'Local receipt requires a regular file.' }
+    return $item
+}
+
+function Assert-LocalInstallFiles([string]$Root, $Files) {
+    $seen = @{}
+    if (@($Files).Count -eq 0) { throw 'Empty local file receipt.' }
+    foreach ($file in $Files) {
+        if ($seen.ContainsKey($file.path) -or $file.sha256 -notmatch '^[a-f0-9]{64}$' -or $file.size -lt 0) { throw 'Invalid or duplicate local receipt.' }
+        $seen[$file.path] = $true
+        $item = Assert-LocalInstallFile $Root $file.path
+        if ($item.Length -ne $file.size -or (Get-FileHash -LiteralPath $item.FullName).Hash -ne $file.sha256) { throw "Local checksum mismatch: $($file.path)" }
+    }
+}
+
+function Assert-LocalApplicationInventory([string]$Root, $Files) {
+    $expected = @{'local-build.json'=$true}
+    foreach ($file in $Files) { $expected[$file.path] = $true }
+    $pending = New-Object 'Collections.Generic.Stack[string]'
+    $pending.Push($Root)
+    $count = 0
+    while ($pending.Count) {
+        foreach ($item in Get-ChildItem -LiteralPath $pending.Pop() -Force) {
+            if ($item.FullName -eq (Join-Path $Root 'runtime')) { continue }
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Unexpected application reparse point.' }
+            if ($item.PSIsContainer) { $pending.Push($item.FullName); continue }
+            $relative = $item.FullName.Substring($Root.TrimEnd('\').Length+1).Replace('\','/')
+            if (-not $expected.ContainsKey($relative)) { throw "Unexpected application file: $relative" }
+            $count++
+        }
+    }
+    if ($count -ne $expected.Count) { throw 'Application file inventory mismatch.' }
+}
+
+function Read-LocalInstallCandidate([string]$Application, [string]$Runtime, [string]$Program) {
+    $manifestFile = Assert-LocalInstallFile $Application 'local-build.json'
+    $app = Get-Content -LiteralPath $manifestFile.FullName -Raw | ConvertFrom-Json
+    if ($app.schema -ne 1 -or $app.kind -ne 'local-application' -or $app.source_sha256 -notmatch '^[a-f0-9]{64}$' -or
+        $app.dependency_key -notmatch '^[a-f0-9]{64}$' -or $app.version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$') { throw 'Invalid local application identity.' }
+    Assert-LocalInstallFiles $Application $app.files
+    Assert-LocalApplicationInventory $Application $app.files
+    if (Test-Path -LiteralPath (Join-Path $Application 'runtime')) { throw 'Application input must not supply a runtime directory.' }
+    foreach ($required in @('asterhand.exe','AsterhandLauncher.exe','AsterhandInputHost.exe','input-host.json','packaging/dependencies.json','packaging/runtime-lock.json','packaging/start.ps1','packaging/configure-firewall.ps1')) {
+        if ($required -notin @($app.files.path)) { throw "Missing local application entry: $required" }
+    }
+    $hostIdentity = Get-Content -LiteralPath (Join-Path $Application 'input-host.json') -Raw | ConvertFrom-Json
+    if ($hostIdentity.schema -ne 1 -or $hostIdentity.version -ne $app.version -or $hostIdentity.source_sha256 -ne $app.source_sha256) {
+        throw 'Local application identity does not match the input host manifest.'
+    }
+    $generation = Split-Path -Leaf $Runtime
+    $runtimeRoot = Join-Path $Program 'local-runtimes'
+    if ($generation -notmatch ('^'+$app.dependency_key+'-[a-f0-9]{32}$') -or
+        $Runtime -ne (Join-Path $runtimeRoot $generation)) { throw 'Runtime generation is outside this installation.' }
+    $receiptFile = Assert-LocalInstallFile $runtimeRoot ($generation+'/runtime-receipt.json')
+    $runtimeReceipt = Get-Content -LiteralPath $receiptFile.FullName -Raw | ConvertFrom-Json
+    if ($runtimeReceipt.schema -ne 1 -or $runtimeReceipt.key -ne $app.dependency_key -or $runtimeReceipt.generation -ne $generation -or
+        $runtimeReceipt.catalog_sha256 -ne (Get-FileHash -LiteralPath (Join-Path $Application 'packaging/dependencies.json')).Hash) { throw 'Runtime receipt identity mismatch.' }
+    Assert-LocalInstallFiles $Runtime $runtimeReceipt.files
+    if ((Get-FileHash -LiteralPath (Join-Path $Runtime 'package-lock.json')).Hash -ne (Get-FileHash -LiteralPath (Join-Path $Application 'packaging/runtime-lock.json')).Hash) { throw 'Runtime lock mismatch.' }
+    $requiredPaths = @('node/node.exe','package.json','package-lock.json')
+    $catalog = Get-Content -LiteralPath (Join-Path $Application 'packaging/dependencies.json') -Raw | ConvertFrom-Json
+    foreach ($component in $catalog.components) {
+        $prefix = 'node_modules/' + $component.package + '/'
+        $requiredPaths += $prefix + 'package.json'
+        $metadataFile = Assert-LocalInstallFile $Runtime ($prefix+'package.json')
+        $metadata = Get-Content -LiteralPath $metadataFile.FullName -Raw | ConvertFrom-Json
+        foreach ($name in @('main','module','bin')) {
+            $property = $metadata.PSObject.Properties[$name]
+            if (-not $property) { continue }
+            $entries = if ($property.Value -is [string]) { @($property.Value) } else { @($property.Value.PSObject.Properties.Value) }
+            foreach ($entry in $entries) { $requiredPaths += $prefix + ($entry -replace '^\./','') }
+        }
+    }
+    foreach ($module in $catalog.windows_native_modules) {
+        if (-not $module.StartsWith('runtime/')) { throw 'Invalid native module path.' }
+        $requiredPaths += $module.Substring(8)
+    }
+    foreach ($required in $requiredPaths) {
+        if ($required -notin @($runtimeReceipt.files.path)) { throw 'Missing critical runtime receipt entry.' }
+    }
+    $appHash = (Get-FileHash -LiteralPath $manifestFile.FullName).Hash.ToLowerInvariant()
+    $runtimeHash = (Get-FileHash -LiteralPath $receiptFile.FullName).Hash.ToLowerInvariant()
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $id = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($appHash+':'+$generation+':'+$runtimeHash)))).Replace('-','').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+    return @{app=$app;id=$id;runtime=$Runtime;generation=$generation;runtime_sha256=$runtimeHash;application_sha256=$appHash}
+}
+
+function Assert-LocalVersion([string]$Directory, $Local) {
+    Assert-LocalInstallFiles $Directory $Local.app.files
+    Assert-LocalApplicationInventory $Directory $Local.app.files
+    if ((Get-FileHash -LiteralPath (Join-Path $Directory 'local-build.json')).Hash -ne $Local.application_sha256) { throw 'Installed application receipt mismatch.' }
+    $link = Get-Item -LiteralPath (Join-Path $Directory 'runtime') -Force
+    if (-not ($link.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $link.LinkType -ne 'Junction' -or
+        [Asterhand.InstallNative]::CanonicalDirectory($link.FullName) -ne [Asterhand.InstallNative]::CanonicalDirectory($Local.runtime)) { throw 'Installed runtime junction mismatch.' }
+}
+
 if ($PackagePath) { $PackagePath = Resolve-FileSystemPath $PackagePath }
 if ($ManifestPath) { $ManifestPath = Resolve-FileSystemPath $ManifestPath }
+if ($LocalBuildPath) { $LocalBuildPath = Resolve-FileSystemPath $LocalBuildPath }
+if ($LocalRuntimePath) { $LocalRuntimePath = Resolve-FileSystemPath $LocalRuntimePath }
 $InstallDir = Resolve-AppDirectory $InstallDir
 if (-not $PSBoundParameters.ContainsKey('DataDir')) {
     $previousPath = Join-Path $InstallDir 'installation.json'
@@ -583,6 +727,9 @@ if (-not $PSBoundParameters.ContainsKey('DataDir')) {
 }
 $DataDir = Resolve-AppDirectory $DataDir
 Assert-SeparateDirectories $InstallDir $DataDir
+$InstallDir = Resolve-AppDirectory (Resolve-InstallCanonicalPath $InstallDir)
+$DataDir = Resolve-AppDirectory (Resolve-InstallCanonicalPath $DataDir)
+Assert-SeparateDirectories $InstallDir $DataDir
 if (Test-Path -LiteralPath $InstallDir) {
     $existing = @(Get-ChildItem -LiteralPath $InstallDir -Force)
     if ($existing.Count -gt 0 -and -not (Test-Path -LiteralPath (Join-Path $InstallDir '.asterhand-install'))) {
@@ -590,9 +737,30 @@ if (Test-Path -LiteralPath $InstallDir) {
     }
 }
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-Set-Content -LiteralPath (Join-Path $InstallDir '.asterhand-install') -Value 'Asterhand installer schema 1' -Encoding ASCII
+$activation = $null
+$installationGuard = $null
+$staging = $null
+try {
+$guardPath = Join-Path $InstallDir '.activation.lock'
+try { $installationGuard = New-Object IO.FileStream($guardPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None, 1, [IO.FileOptions]::DeleteOnClose) }
+catch { throw 'Another installation is preparing or activating this directory. Wait for it to finish, then retry.' }
+$marker = Join-Path $InstallDir '.asterhand-install'
+if (-not (Test-Path -LiteralPath $marker)) {
+    if (@(Get-ChildItem -LiteralPath $InstallDir -Force | Where-Object Name -ne '.activation.lock').Count) { throw 'Installation directory became nonempty and is not owned by Asterhand.' }
+    Set-Content -LiteralPath $marker -Value 'Asterhand installer schema 1' -Encoding ASCII
+} elseif ((Get-Item -LiteralPath $marker -Force).Attributes -band [IO.FileAttributes]::ReparsePoint -or
+    (Get-Content -LiteralPath $marker -Raw).Trim() -ne 'Asterhand installer schema 1') { throw 'Invalid installation ownership marker.' }
+if ($InitializeLocalCache) { return $InstallDir }
 $cache = Join-Path $InstallDir 'downloads'
 New-Item -ItemType Directory -Path $cache -Force | Out-Null
+if ($LocalBuildPath) {
+    $local = Read-LocalInstallCandidate $LocalBuildPath $LocalRuntimePath $InstallDir
+    $Version = $local.app.version
+    if ($ExpectedSourceDigest -and $ExpectedSourceDigest -ne $local.app.source_sha256) { throw 'Local source identity mismatch.' }
+    $ExpectedSourceDigest = $local.app.source_sha256
+    $versionName = 'local-' + $local.id
+    Write-Host "Installing local application $Version ($($local.app.source_sha256.Substring(0,12)))."
+} else {
 $release = Get-InstallRelease $Repository $Version $ReleaseTag $PackagePath $ManifestPath $cache
 $Version = $release.version
 $ReleaseTag = $release.tag
@@ -611,22 +779,34 @@ if ((Get-FileHash -LiteralPath $PackagePath -Algorithm SHA256).Hash -ne $package
 if ((Get-Item -LiteralPath $PackagePath).Length -ne $package.size) { throw 'Release package size mismatch.' }
 
 $versionName = $Version + '-' + $package.sha256.Substring(0, 12)
+}
 $versions = Join-Path $InstallDir 'versions'
+if ((Test-Path -LiteralPath $versions) -and ((Get-Item -LiteralPath $versions -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Versions directory must not be a reparse point.' }
 New-Item -ItemType Directory -Path $versions -Force | Out-Null
 $versionDir = Assert-ChildPath (Join-Path $versions $versionName) $versions
 $staging = Assert-ChildPath (Join-Path $InstallDir ('.staging-' + [guid]::NewGuid().ToString('N'))) $InstallDir
-$activation = $null
-$installationGuard = $null
-try {
     if (-not (Test-Path -LiteralPath $versionDir)) {
+        if ($LocalBuildPath) {
+            New-Item -ItemType Directory -Path $staging | Out-Null
+            foreach ($file in $local.app.files) {
+                $target = Assert-ChildPath (Join-Path $staging $file.path) $staging
+                [IO.Directory]::CreateDirectory((Split-Path -Parent $target)) | Out-Null
+                Copy-Item -LiteralPath (Join-Path $LocalBuildPath $file.path) -Destination $target
+            }
+            Copy-Item -LiteralPath (Join-Path $LocalBuildPath 'local-build.json') -Destination $staging
+            New-Item -ItemType Junction -Path (Join-Path $staging 'runtime') -Target $local.runtime | Out-Null
+            Assert-LocalVersion $staging $local
+        } else {
         Write-Host 'Extracting the verified runtime bundle. This may take several minutes.'
         Expand-SafePackage $PackagePath $staging
+        }
         $candidate = Join-Path $staging 'asterhand.exe'
         if ((& $candidate version) -ne $Version -or $LASTEXITCODE -ne 0) { throw 'Asterhand version check failed.' }
         & $candidate bundle-check --directory $staging
         if ($LASTEXITCODE -ne 0) { throw 'Bundled dependency check failed.' }
         Move-Item -LiteralPath $staging -Destination $versionDir
     }
+    if ($LocalBuildPath) { Assert-LocalVersion $versionDir $local }
     $candidate = Join-Path $versionDir 'asterhand.exe'
     if ((& $candidate version) -ne $Version -or $LASTEXITCODE -ne 0) { throw 'Installed Asterhand version check failed.' }
     & $candidate bundle-check --directory $versionDir
@@ -636,13 +816,12 @@ try {
     if ($dependencies.PSObject.Properties['webview2']) { Initialize-WebView2 $cache $dependencies.webview2 }
     Test-WindowsNativeModules $versionDir $dependencies
     if (-not $SkipTailscale) { Initialize-Tailscale $cache $dependencies.tailscale }
-    $guardPath = Join-Path $InstallDir '.activation.lock'
-    try { $installationGuard = New-Object IO.FileStream($guardPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None, 1, [IO.FileOptions]::DeleteOnClose) }
-    catch { throw 'Another installation is activating this directory. Wait for it to finish, then retry.' }
     $recordPath = Join-Path $InstallDir 'installation.json'
     $previous = if (Test-Path -LiteralPath $recordPath) { Get-Content -LiteralPath $recordPath -Raw | ConvertFrom-Json } else { $null }
     $directories = @($DataDir)
     if ($null -ne $previous) { $directories += Resolve-AppDirectory ([string]$previous.data) }
+    if ($BeforeLocalActivation) { $null = & $BeforeLocalActivation }
+    Write-Host 'Candidate verified; activating the installation.'
     $activation = Enter-InstallActivation $directories $InstallDir -StopRunning:$StopRunning
     Assert-SeparateDirectories ([Asterhand.InstallNative]::CanonicalDirectory($InstallDir)) ([Asterhand.InstallNative]::CanonicalDirectory($DataDir))
     $hasLauncher = Test-Path -LiteralPath (Join-Path $versionDir 'AsterhandLauncher.exe') -PathType Leaf
@@ -652,7 +831,12 @@ try {
     Publish-InstallFile (Join-Path $versionDir 'packaging\start.ps1') (Join-Path $InstallDir 'start.ps1')
     Publish-InstallFile (Join-Path $versionDir 'packaging\configure-firewall.ps1') (Join-Path $InstallDir 'configure-firewall.ps1')
     Update-InstallShortcuts $InstallDir $desktopEnabled $hasLauncher ([bool]$LoginAtStartup)
-    $launch = @{ schema = 1; version = $Version; executable = (Join-Path $versionDir 'asterhand.exe'); data = $DataDir; package_sha256 = $package.sha256; desktop_shortcut = $desktopEnabled }
+    $launch = @{ schema = 1; version = $Version; executable = (Join-Path $versionDir 'asterhand.exe'); data = $DataDir; desktop_shortcut = $desktopEnabled }
+    if ($LocalBuildPath) {
+        $launch.local_build_sha256 = $local.application_sha256
+        $launch.runtime_generation = $local.generation
+        $launch.source_sha256 = $local.app.source_sha256
+    } else { $launch.package_sha256 = $package.sha256 }
     Write-InstallRecord $launch $recordPath
     Write-Host "Installed Asterhand $Version. Data and credentials are preserved in $DataDir."
     Write-Host "Startup entry: $InstallDir\start.ps1"
@@ -665,12 +849,25 @@ try {
 } finally {
     Exit-InstallActivation $activation
     if ($null -ne $installationGuard) { $installationGuard.Dispose() }
-    if (Test-Path -LiteralPath $staging) {
+    if ($staging -and (Test-Path -LiteralPath $staging)) {
         $safeStaging = Assert-ChildPath $staging $InstallDir
         if ((Split-Path -Leaf $safeStaging) -notlike '.staging-*') { throw 'Refusing unexpected cleanup target.' }
+        $runtimeLink = Get-Item -LiteralPath (Join-Path $safeStaging 'runtime') -Force -ErrorAction SilentlyContinue
+        if ($null -ne $runtimeLink -and ($runtimeLink.Attributes -band [IO.FileAttributes]::ReparsePoint)) { [IO.Directory]::Delete($runtimeLink.FullName) }
         Remove-Item -LiteralPath $safeStaging -Recurse -Force
     }
 }
 if ($StartAfterInstall) {
+    Write-Host 'Starting the installed node and waiting for its health check.'
     & (Join-Path $InstallDir 'start.ps1')
+    if ($ExpectedSourceDigest) {
+        $context = Get-InstallNodeContext $DataDir $InstallDir
+        if ($null -eq $context) { throw 'Installed node exited before source verification.' }
+        try {
+            if ($context.executable -ne (Join-Path $versionDir 'asterhand.exe')) { throw 'Startup reused a different installation version.' }
+            $info = Invoke-InstallNodeAPI $context.origin '/api/info' 'GET' $context.cookies $null ''
+            if ($info.source_sha256 -ne $ExpectedSourceDigest) { throw 'Running node source digest does not match the intended build.' }
+            Write-Host "Verified running source: $ExpectedSourceDigest"
+        } finally { $context.process.Dispose() }
+    }
 }

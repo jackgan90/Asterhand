@@ -10,5 +10,6 @@
 - [006-global-hotkey-input-surface — 全局快捷键与独立输入宿主](006-global-hotkey-input-surface.md)
 - [007-quick-input-process-isolation — 独立非提权宿主与主进程草稿](007-quick-input-process-isolation.md)（替代 006 的进程内宿主及权限处理）
 - [008-chat-window-desktop-presence — 聊天窗口的桌面入口与原生移动](008-chat-window-desktop-presence.md)（失焦保持显示，系统入口和显式隐藏）
+- [009-fast-local-install — 本地目录候选与固定运行时复用](009-fast-local-install.md)（替代 005 的本地完整 ZIP 要求，保留安全激活）
 
 新增决策使用 [ADR 模板](../../development/templates/adr.md)。历史决定通过新 ADR 替代，不改写历史理由。

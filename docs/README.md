@@ -42,6 +42,7 @@
 - [固定安装入口与版本选择](development/features/stable-installer-entry/plan.md)。
 - [Windows 桌面启动与托盘生命周期](development/features/windows-desktop-lifecycle/plan.md)、[桌面启动验证](development/features/windows-desktop-lifecycle/validation.md)。
 - [本地一键安装与在线引导](development/features/local-install-entry/plan.md)。
+- [快速本地安装](development/features/fast-local-install/plan.md)、[验证说明](development/features/fast-local-install/validation.md)：应用增量构建、固定运行时复用、源码核对与持续进度。
 - [本机全局快捷键与快捷输入面板](development/features/global-hotkey-quick-input/plan.md)、[快捷输入验证](development/features/global-hotkey-quick-input/validation.md)（Windows 首版已完成用户验收，默认 Ctrl+Alt+J）。
 - [快捷输入进程隔离计划](development/features/quick-input-process-isolation/plan.md)与[隔离验证](development/features/quick-input-process-isolation/validation.md)（独立非提权宿主、主进程草稿、有限恢复与真实可用状态；本机用户验收完成，其余权限与桌面专项待验证）。
 - [Web 与快捷输入的维护性重构](development/features/web-ui-maintainability/plan.md)、[维护性验证](development/features/web-ui-maintainability/validation.md)（保留现有功能、原生 ES module 和 Windows 宿主）。

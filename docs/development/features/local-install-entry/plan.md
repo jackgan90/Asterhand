@@ -2,14 +2,14 @@
 
 ## 范围与需求
 
-关联 C04、INST-05、INST-15、INST-19、INST-25、INST-26。仓库根目录提供可双击的 Windows 本地安装入口，构建当前源码并调用正式安装器；README 提供复制到 PowerShell 即可下载并执行安装器的命令。
+关联 C04、INST-05、INST-15、INST-19、INST-25、INST-26。仓库根目录提供可双击的 Windows 本地安装入口，构建当前源码并调用正式安装器；README 提供复制到 PowerShell 即可下载并执行安装器的命令。当前入口的 Fast/Full 构建与依赖缓存行为由[快速本地安装](../fast-local-install/plan.md)维护，以下生命周期契约继续有效。
 
 权威文档：[安装需求](../../../installation/requirements.md)、[安装设计](../../../installation/design.md)、[安装指南](../../../installation/quickstart.md)。决策见 [显式停止与安装后启动](../../../installation/adr/005-explicit-install-lifecycle.md)。
 
 ## 设计与验收
 
-- install-local.cmd 调用 PowerShell 7 开发脚本。正式 build.ps1 成功后登记源码指纹和清单路径；当前源码一致且 ZIP 大小/摘要有效时直接复用包，否则按清单与锁准备、校验、缓存依赖并构建，不发布 Release。指纹包含入包指南和许可证，构建中源码变化时拒绝登记可复用包。
-- 开发脚本调用仓库根目录 install.ps1 的本地包模式，显式启用 StopRunning 和 StartAfterInstall；包校验、系统依赖、版本激活、快捷方式和配置保留与正式安装一致。
+- install-local.cmd 调用 PowerShell 7 开发脚本，默认使用经完整输入指纹核对的应用目录候选和固定运行时缓存；Full 保留正式 ZIP 构建及摘要复用。新缓存、修复和进度契约见快速本地安装计划，不发布 Release。
+- 开发脚本调用仓库根目录 install.ps1 的对应本地候选或本地包模式，显式启用 StopRunning 和 StartAfterInstall；系统依赖、版本激活、快捷方式和配置保留共享实现。
 - 首次安装使用标准程序与数据目录，询问是否创建桌面入口并启动节点；重复安装默认沿用 installation.json 的数据目录，包括自定义目录。桌面使用 Auto，保留实际存在或缺省的图标状态；参数可显式覆盖目录、桌面选择或指定已有 prepared.json。
 - 停止动作位于包和依赖检查之后、激活之前；持有数据目录启动互斥量，核对本安装程序路径、进程身份和 loopback health 后才认证调用现有停止 API。等待正常退出与服务锁释放，未知状态或超时终止安装，不强杀进程。
 - 默认正式安装仍只安装；StartAfterInstall 为显式选择，NoStart 与其互斥。自动启动发生在全部激活锁释放之后，复用 start.ps1 和原生启动器；启动脚本只等待启动器进程，后台节点继续运行，避免安装窗口等待整个进程树。

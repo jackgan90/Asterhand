@@ -26,82 +26,24 @@ if (-not (Test-Path -LiteralPath $outputModule)) {
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 $stageRoot = Join-Path $repo ('out\packages-' + [guid]::NewGuid().ToString('N'))
 $windows = Join-Path $stageRoot 'windows'
-New-Item -ItemType Directory -Path $windows -Force | Out-Null
 
-function Build-Binary([string]$Platform, [string]$Destination, [string]$Command = 'asterhand', [switch]$GUI) {
-    $savedGOOS = $env:GOOS
-    $savedGOARCH = $env:GOARCH
-    $savedCGO = $env:CGO_ENABLED
-    try {
-        $env:GOOS = $Platform
-        $env:GOARCH = 'amd64'
-        $env:CGO_ENABLED = '0'
-        $linkFlags = "-s -w -X github.com/jackgan90/Asterhand/internal/config.SourceDigest=$sourceDigest"
-        if ($GUI) { $linkFlags += ' -H=windowsgui' }
-        & $Go -C $repo build -trimpath -ldflags $linkFlags -o $Destination ("./cmd/" + $Command)
-        if ($LASTEXITCODE -ne 0) { throw "$Platform build failed" }
-    } finally {
-        $env:GOOS = $savedGOOS
-        $env:GOARCH = $savedGOARCH
-        $env:CGO_ENABLED = $savedCGO
-    }
-}
-
-function Copy-GoLicenses([string]$Stage) {
-    $licenseRoot = Join-Path $Stage 'licenses\go-modules'
-    New-Item -ItemType Directory -Path $licenseRoot -Force | Out-Null
-    $modules = & $Go -C $repo list -m -f '{{.Path}}|{{.Version}}|{{.Dir}}' all
-    if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect Go module licenses.' }
-    foreach ($line in $modules) {
-        $parts = $line -split '\|',3
-        if (-not $parts[1] -or -not $parts[2]) { continue }
-        $destination = Join-Path $licenseRoot (($parts[0] -replace '[/\\]','_') + '@' + $parts[1])
-        New-Item -ItemType Directory -Path $destination -Force | Out-Null
-        $notices = @(Get-ChildItem -LiteralPath $parts[2] -File | Where-Object { $_.Name -match '^(LICENSE|COPYING|NOTICE)' })
-        if ($notices.Count -eq 0) { throw "Missing license notice for $($parts[0])" }
-        $notices | Copy-Item -Destination $destination
-        if ($parts[0] -eq 'github.com/wailsapp/go-webview2') {
-            Copy-Item -LiteralPath (Join-Path $parts[2] 'webviewloader\LICENSE') -Destination (Join-Path $destination 'webviewloader-LICENSE')
-        }
-    }
-    $goRoot = & $Go env GOROOT
-    Copy-Item -LiteralPath (Join-Path $goRoot 'LICENSE') -Destination (Join-Path $licenseRoot 'Go-LICENSE')
-}
 
 . (Join-Path $PSScriptRoot 'dependency-tools.ps1')
 $catalog = Assert-PreparedDependencies $repo $NodeDistribution $RuntimeRoot $Go
-& (Join-Path $NodeDistribution 'node.exe') (Join-Path $PSScriptRoot 'verify-frontend-assets.mjs')
-if ($LASTEXITCODE -ne 0) { throw 'Frontend vendor assets failed integrity checks.' }
+. (Join-Path $PSScriptRoot 'build-progress.ps1')
 $sourceDigest = Get-SourceFingerprint $repo
-Build-Binary 'windows' (Join-Path $windows 'asterhand.exe')
-Build-Binary 'windows' (Join-Path $windows 'AsterhandLauncher.exe') 'asterhand-launcher' -GUI
-Build-Binary 'windows' (Join-Path $windows 'AsterhandInputHost.exe') 'asterhand-input-host' -GUI
-foreach ($binary in @('asterhand.exe', 'AsterhandLauncher.exe', 'AsterhandInputHost.exe')) {
-    & (Join-Path $PSScriptRoot 'set-executable-icon.ps1') -Executable (Join-Path $windows $binary) -Icon (Join-Path $repo 'internal\desktop\assets\application.ico')
-}
-@{schema=1;version=$version;source_sha256=$sourceDigest;sha256=(Get-FileHash -LiteralPath (Join-Path $windows 'AsterhandInputHost.exe')).Hash.ToLowerInvariant()} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $windows 'input-host.json') -Encoding utf8NoBOM
-New-Item -ItemType Directory -Path (Join-Path $windows 'runtime') -Force | Out-Null
-Copy-Item -LiteralPath $NodeDistribution -Destination (Join-Path $windows 'runtime\node') -Recurse -Force
-Copy-Item -LiteralPath (Join-Path $RuntimeRoot 'node_modules') -Destination (Join-Path $windows 'runtime\node_modules') -Recurse -Force
+# Application assembly is identical for local directory candidates and release ZIPs.
+& (Join-Path $PSScriptRoot 'build-application.ps1') -Go $Go -Node (Join-Path $NodeDistribution 'node.exe') -OutputDirectory $windows -SourceDigest $sourceDigest
+[IO.Directory]::CreateDirectory((Join-Path $windows 'runtime')) | Out-Null
+Copy-BuildTree $NodeDistribution (Join-Path $windows 'runtime/node')
+Copy-BuildTree (Join-Path $RuntimeRoot 'node_modules') (Join-Path $windows 'runtime/node_modules')
 Copy-Item -LiteralPath (Join-Path $RuntimeRoot 'package.json'),(Join-Path $RuntimeRoot 'package-lock.json') -Destination (Join-Path $windows 'runtime')
-foreach ($stage in @($windows)) {
-    Copy-GoLicenses $stage
-    $mathLicense = Join-Path $stage 'licenses\katex'
-    New-Item -ItemType Directory -Path $mathLicense -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $repo 'internal/quickinput/assets/vendor/katex/LICENSE'),(Join-Path $repo 'internal/quickinput/assets/vendor/katex/manifest.json') -Destination $mathLicense
-    Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination $stage
-    New-Item -ItemType Directory -Path (Join-Path $stage 'packaging') -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $repo 'packaging\dependencies.json') -Destination (Join-Path $stage 'packaging')
-    Copy-Item -LiteralPath (Join-Path $repo 'docs\installation\quickstart.md') -Destination (Join-Path $stage 'INSTALL.md')
-}
-Copy-Item -LiteralPath (Join-Path $repo 'plugins') -Destination (Join-Path $windows 'plugins') -Recurse -Force
-Copy-Item -LiteralPath (Join-Path $repo 'packaging\start.ps1'),(Join-Path $repo 'packaging\configure-firewall.ps1'),(Join-Path $repo 'packaging\runtime-lock.json') -Destination (Join-Path $windows 'packaging')
 & (Join-Path $windows 'asterhand.exe') bundle-check --directory $windows
 if ($LASTEXITCODE -ne 0) { throw 'Staged runtime bundle failed diagnostics.' }
 $windowsName = "asterhand-$version-windows-amd64.zip"
 $windowsArchive = Join-Path $OutputDir $windowsName
 if (Test-Path -LiteralPath $windowsArchive) { Remove-Item -LiteralPath $windowsArchive -Force }
-[IO.Compression.ZipFile]::CreateFromDirectory($windows, $windowsArchive, [IO.Compression.CompressionLevel]::Optimal, $false)
+Invoke-BuildProcess 'Compress complete release package' (Join-Path $PSHOME 'pwsh.exe') @('-NoProfile','-File',(Join-Path $PSScriptRoot 'compress-package.ps1'),'-Directory',$windows,'-Archive',$windowsArchive)
 $packages = @()
 foreach ($entry in @(@{os='windows';file=$windowsName;profile='assistant'})) {
     $file = Get-Item -LiteralPath (Join-Path $OutputDir $entry.file)

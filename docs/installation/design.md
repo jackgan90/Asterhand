@@ -32,7 +32,15 @@ Windows 快捷输入使用同版本的独立 GUI 宿主 AsterhandInputHost.exe�
 
 仓库根目录 install.ps1 是独立固定引导入口，默认解析 GitHub Latest 稳定 Release；Version 指定应用版本，ReleaseTag 指定精确标签。解析只执行一次，随后从固定标签下载 release-manifest.json 和完整平台包，检查摘要、大小、版本及 bundle-check，补齐 Microsoft VC++ x64 运行库并加载声明的原生模块，再安装缺失的 Tailscale。成功后激活固定 AsterhandLauncher.exe、start.ps1 和 installation.json，并按用户选择处理快捷方式；默认不启动节点，不登录 Tailscale、不读取模型凭据。setup/start 属于安装后的节点配置入口。doctor/repair 继续由 Go 实现。
 
-README 提供 `irm <官方固定入口> -ErrorAction Stop | iex` 一行命令，下载失败立即停止，成功后在内存执行同一 install.ps1，不创建临时脚本文件或改变执行策略。指定版本等参数时用 ScriptBlock.Create 编译同一下载内容，再通过调用运算符传参，保留交互提示与安装契约。本地 install-local.cmd 通过 PowerShell 7 比对标准 build.ps1 登记的源码指纹、清单和包摘要/大小；一致则复用已构建包，否则准备并缓存清单锁定的工具与依赖并构建。指纹包含源码、脚本、依赖描述/锁、图标及入包指南与许可证；构建中变更时拒绝登记。构建记录原子写入忽略的 out/latest-build.json。安装调用同一 install.ps1 的本地包模式，启用 StopRunning 和 StartAfterInstall；没有独立解压、拷贝或激活流程。开发入口和正式入口均使用 DesktopShortcut Auto；首次询问，升级保留实际图标状态。见 [本地安装计划](../development/features/local-install-entry/plan.md)。
+README 提供 `irm <官方固定入口> -ErrorAction Stop | iex` 一行命令，下载失败立即停止，成功后在内存执行同一 install.ps1，不创建临时脚本文件或改变执行策略。指定版本等参数时用 ScriptBlock.Create 编译同一下载内容，再通过调用运算符传参，保留交互提示与安装契约。
+
+本地 install-local.cmd 通过 PowerShell 7 默认执行 Fast，Full 显式选择完整 ZIP。两者共享三个 EXE、图标、宿主清单、插件及许可证的应用组装；Fast 输出应用目录收据，Full 输出 release manifest、ZIP 与 latest-build 记录，二者不能互作完成证据。输入指纹遍历仓库第一方文件，按实际内容与路径覆盖根文件、新增顶层包、全部内嵌资源、脚本、文档及依赖描述/锁，包含未提交、新增、删除与重命名，不依赖目录或扩展名白名单、Git HEAD。仅跳过明确保留的生成目录、仓库/编辑器状态与本地数据目录（例如 out、dist、node_modules、.git、data），这些位置不得存放应用构建输入；第一方文档改动也使缓存失效。固定编译环境，拒绝外部覆盖；构建期间变更时拒绝登记。
+
+Fast 的运行时位于安装目录 local-runtimes 中，以依赖 key 和独立 generation 识别；由正式安装器先检查目录归属与程序/数据实际路径分离，再由开发 helper 在目标缓存锁内准备。第一次导入检查锁、全部已安装包 metadata 和重解析点，保留完整运行时及许可证；热命中只核对收据、Node/根锁/直接组件 metadata 与入口/原生模块摘要，安装时继续 bundle-check 和真实原生模块加载。热命中不遍历全部传递依赖。显式修复或关键缓存损坏时绕过旧 prepared 目录，重新按锁准备新 generation；RepairDependencies 与 PreparedPath 互斥。
+
+应用版本通过 runtime junction 复用本安装内的 generation，不依赖仓库 out。安装身份绑定应用收据、generation 和运行时收据；同源码修复生成新的安装版本，旧版本不改链接。独立 install.ps1 验证目录候选、完整应用文件清单、摘要、链接目标和依赖；应用收据的版本和源码摘要必须与文件清单保护的 input-host.json 一致，不符时在停止旧节点前拒绝。之后复用原有停止、锁、激活与启动逻辑。开发入口在安装锁内、停止前再次核对源码；启动后验证进程/loopback 身份并认证读取源码摘要。构建或校验失败保留旧节点；不自动回退用户数据。首次桌面询问及升级 Auto 保留实际图标状态不变。
+
+长步骤显示阶段/耗时、缓存命中原因与心跳；进度同时进入重定向日志。没有自动旧版本或依赖垃圾回收，失败候选清理先移除自身 junction，禁止递归进入共享目标。详细字段、锁顺序和验收见[快速本地安装计划](../development/features/fast-local-install/plan.md)及[ADR-009](adr/009-fast-local-install.md)。
 
 默认入口不含应用版本常量，未来 Linux/macOS 固定脚本遵循相同版本选择契约。没有稳定版时明确失败并提示指定版本，不自动使用预发布版。Version 支持带或不带 v 前缀；自定义 ReleaseTag 从清单推导应用版本，同时指定 Version 时检查二者一致。本地包或本地清单优先按其内容推导版本，不查询 Latest；只提供清单时从清单标签或 v<version> 获取包。清单包含仓库/标签元数据时必须与所选坐标一致。决策见 [固定安装入口](adr/003-stable-installer-entry.md)。
 

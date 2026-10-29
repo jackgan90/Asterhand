@@ -36,7 +36,7 @@ irm https://raw.githubusercontent.com/jackgan90/Asterhand/main/install.ps1 -Erro
 
 统一发布入口为 `scripts/release.ps1`，自动准备依赖、构建验证并上传 GitHub 草稿。公开测试版或正式版使用显式发布模式；命令、恢复方式与平台扩展契约见 [发布指南](docs/installation/releases.md)。
 
-本机验收改动时，双击根目录 [install-local.cmd](install-local.cmd)：源码未变且已有完整、校验通过的构建包时直接复用，否则准备锁定依赖并构建，随后通过正式安装器安装。首次安装询问桌面图标；覆盖安装保留实际图标状态和原数据目录。包检查成功后自动正常退出在线节点，安装成功后启动并打开 Web。需要 PowerShell 7；首次准备需要联网，详见 [本地安装](scripts/README.md#本地一键安装)。
+本机验收改动时，双击根目录 [install-local.cmd](install-local.cmd)：默认快速构建当前应用并复用安装目录内的固定运行时，省去重复复制依赖、打 ZIP 和解压；源码未变且应用产物有效时复用构建。检查成功后正常退出在线节点，安装后启动并核对源码摘要、打开 Web。覆盖保留原数据目录和实际桌面图标状态。完整安装验收使用 `install-local.cmd -Mode Full`，依赖损坏使用 `-RepairDependencies` 重新准备。需要 PowerShell 7；首次准备需要联网，详见[本地安装](scripts/README.md#本地一键安装)。
 
 [开发规范](AGENTS.md) · [文档导航](docs/README.md) · [需求](docs/overview/requirements.md) · [架构](docs/overview/design.md) · [路线图](docs/development/roadmap.md)
 

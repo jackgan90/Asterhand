@@ -2,13 +2,28 @@
 Set-StrictMode -Version Latest
 
 function Get-SourceFingerprint([string]$Repository) {
-    $files = @()
-    foreach ($directory in @('cmd','internal','web','plugins','packaging','scripts','tests')) {
-        $files += Get-ChildItem -LiteralPath (Join-Path $Repository $directory) -Recurse -File |
-            Where-Object { $_.Extension -in @('.go','.js','.mjs','.html','.css','.json','.ps1','.sh','.png','.ico','.woff','.woff2','.ttf') -or $_.Name -eq 'LICENSE' }
+    $files = [Collections.Generic.List[IO.FileInfo]]::new()
+    # Reserve generated/local-state directories, but include every first-party
+    # directory and root file so newly imported packages and embeds invalidate it.
+    $excluded = @('.git','.codex','.agents','.aws','.idea','.vscode','.playwright-cli',
+        'bin','dist','out','work','coverage','test-results','playwright-report','output/playwright',
+        'node_modules','web/node_modules','web/dist','local','data','artifacts','secrets')
+    $pending = [Collections.Generic.Stack[IO.DirectoryInfo]]::new()
+    $pending.Push([IO.DirectoryInfo]::new($Repository))
+    while ($pending.Count) {
+        foreach ($entry in $pending.Pop().EnumerateFileSystemInfos()) {
+            $relative = [IO.Path]::GetRelativePath($Repository, $entry.FullName).Replace('\','/')
+            if ($relative -in $excluded -or ($relative -match '^\.env(?:\..*)?$' -and $relative -ne '.env.example')) { continue }
+            if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Build input cannot be a reparse point: $relative" }
+            if ($entry -is [IO.DirectoryInfo]) { $pending.Push($entry) }
+            else { $files.Add($entry) }
+        }
     }
-    $files += Get-Item (Join-Path $Repository 'go.mod'),(Join-Path $Repository 'go.sum'),(Join-Path $Repository 'install.ps1'),(Join-Path $Repository 'install.sh')
-    $files += Get-Item (Join-Path $Repository 'LICENSE'),(Join-Path $Repository 'docs\installation\quickstart.md')
+    # Local replacements can change outside this input tree. Release/local builds
+    # use the module's pinned dependencies rather than external source workspaces.
+    if ((Get-Content -LiteralPath (Join-Path $Repository 'go.mod') -Raw) -match '=>\s*(?:["'']?(?:\.{1,2}[/\\]|[/\\]|[A-Za-z]:))') {
+        throw 'Local Go replacements are not supported by reproducible application builds.'
+    }
     $lines = foreach ($file in ($files | Sort-Object FullName)) {
         [IO.Path]::GetRelativePath($Repository,$file.FullName).Replace('\','/') + ':' + (Get-FileHash -LiteralPath $file.FullName).Hash.ToLowerInvariant()
     }

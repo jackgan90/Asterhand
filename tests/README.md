@@ -1,5 +1,7 @@
 # 测试入口
 
+快速本地安装的指纹、缓存、目录候选与完整包互操作验证见[快速本地安装验证](../docs/development/features/fast-local-install/validation.md)。隔离基本节点测试不调用模型、不修改活跃安装或真实桌面。
+
 聊天公式、动态回复状态、拖动和任务栏窗口的自动化与实体桌面边界见[聊天桌面体验验证](../docs/development/features/chat-desktop-experience/validation.md)。包含本地 KaTeX 完整性、公式安全/预算、位置/DPI 逻辑与真实 WebView2 双主题检查。
 
 持续聊天新增提示词、即时气泡、快捷键和正文完整性测试，原生 Gateway/真实模型/WebView2 命令与人工边界见[提示词与交互验证](../docs/development/features/chat-prompt-interaction/validation.md)。

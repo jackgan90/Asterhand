@@ -23,8 +23,11 @@
 | 聊天发送反馈、快捷键与正文展示；提示词保留原生身份和角色设定，局部补充能力约束 | [聊天交互](features/chat-prompt-interaction/plan.md)、[原生提示词保留](features/native-harness-prompt-preservation/plan.md) |
 | 精简提示、动态回复、本地数学公式、标题拖动和任务栏入口（本机日常交互用户验收通过） | [聊天展示与桌面窗口体验](features/chat-desktop-experience/plan.md) |
 | 正常发送状态与气泡稳定、提示词诊断退出聊天展示、后台完成任务栏提醒（本机用户验收通过） | [聊天发送稳定性与后台完成提醒](features/chat-completion-attention/plan.md) |
+| 快速本地安装：应用与运行时分开更新、目录候选、源码核对及持续进度（工程验证、独立复审和本地提速效果用户验收完成） | [快速本地安装](features/fast-local-install/plan.md)、[验证说明](features/fast-local-install/validation.md) |
 
 ## 后续验证与功能
+
+- 快速本地安装的真实联网依赖修复与干净环境安装继续按[验证说明](features/fast-local-install/validation.md)完成专项验证。
 
 - 持续聊天的实体 IME、多屏/DPI/RDP、跨应用交互、实际升级、并行真实文件任务与成本专项继续按[验证说明](features/local-node-chat/validation.md)记录；日常聊天用户验收已完成。
 

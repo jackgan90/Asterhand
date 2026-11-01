@@ -39,12 +39,14 @@ test("local execution uses its current state instead of an older outbox snapshot
 test("submission explains disabled prerequisites and remains busy across refresh", () => {
   const ready={ready:true}, project={id:"workspace"};
   assert.equal(submissionState(ready,ready,project,"goal",false).disabled,false);
-  for (const args of [[{},ready,project,"goal"],[ready,{},project,"goal"],[ready,ready,null,"goal"],[ready,ready,project," "]]) {
+  for (const args of [[{},ready,project,"goal"],[ready,{},project,"goal"],[ready,ready,null,"goal"]]) {
     const state=submissionState(...args,false);
     assert.equal(state.disabled,true);
     assert.equal(state.busy,false);
     assert.ok(state.reason);
   }
+  // An empty goal disables sending without an extra hint line.
+  assert.deepEqual(submissionState(ready,ready,project," ",false),{disabled:true,busy:false,reason:""});
   const busy=submissionState(ready,ready,project,"goal",true);
   assert.equal(busy.busy,true);
   assert.equal(busy.disabled,true);

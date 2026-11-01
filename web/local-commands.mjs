@@ -41,8 +41,8 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
       button.addEventListener('click', () => {if (!busy && canDiscard()) {populate(command); message('');}});
       list.append(button);
     }
-    if (!list.children.length) list.append(node('p', catalog.commands.length ? '未找到命令' : '尚未注册命令'));
-    $('#command-count').textContent = `${catalog.commands.length} 个本地命令`;
+    if (!list.children.length) list.append(node('p', catalog.commands.length ? '未找到命令' : '还没有命令'));
+    $('#command-count').textContent = `共 ${catalog.commands.length} 个命令`;
   }
   async function refresh(id = selected) {
     const scope = session(), version = ++generation;
@@ -51,12 +51,12 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
     catalog = result;
     const command = result.commands.find(value => value.id === id);
     populate(command);
-    message(id && !command ? '该命令已删除，可以新建命令。' : '');
+    message(id && !command ? '该命令已被删除。' : '');
   }
   async function open(id = '') {
     if (busy || panel.open && !canDiscard()) return;
     dialog('#local-commands');
-    message('正在读取本机命令…');
+    message('正在加载…');
     try { await refresh(id); } catch (error) { message(error.message); }
   }
   function readForm() {
@@ -73,7 +73,7 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
   }
   async function mutate(remove = false) {
     if (busy || !catalog.revision) return;
-    if (remove && !actions.confirm('删除此命令及其所有别名？磁盘上的脚本文件会保留。')) return;
+    if (remove && !actions.confirm('删除这个命令？脚本文件本身不会被删除。')) return;
     const scope = session(), version = generation, command = readForm();
     setBusy(true); message('正在保存…');
     try {
@@ -82,9 +82,9 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
       if (!scope?.active || version !== generation) return;
       catalog = remove ? result : result.catalog;
       populate(remove ? undefined : catalog.commands.find(value => value.id === result.id));
-      message(remove ? '已删除注册，脚本文件保留。' : result.merged ? `启动配置相同，已合并为 ${field('name').value} 的别名。` : '已保存，快捷输入中立即可用。');
+      message(remove ? '已删除（脚本文件保留）。' : result.merged ? `与已有命令配置相同，已合并为 ${field('name').value} 的别名。` : '已保存，快捷面板中立即可用。');
     } catch (error) {
-      if (scope?.active && version === generation) message(error.message + (error.status === 409 ? ' 请先复制需要保留的修改，再点击刷新。' : ''));
+      if (scope?.active && version === generation) message(error.message + (error.status === 409 ? ' 请复制需要保留的内容后点击刷新。' : ''));
     } finally { if (version === generation) setBusy(false); }
   }
   async function browse() {

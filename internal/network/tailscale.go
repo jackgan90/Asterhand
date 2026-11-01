@@ -67,15 +67,15 @@ func Inspect(ctx context.Context, port string) Status {
 		}
 	}
 	if err != nil || raw.BackendState != "Running" {
-		s.Detail = "请在 Tailscale 中登录，并将 A、B 加入同一个 Tailnet。"
+		s.Detail = "请在 Tailscale 中登录，并让两台设备加入同一网络。"
 		return s
 	}
 	if s.IPv4 == "" {
-		s.Detail = "Tailscale 已启动，但尚未取得节点 IPv4 地址。"
+		s.Detail = "Tailscale 已启动，但尚未获得地址。"
 		return s
 	}
 	s.Listen = net.JoinHostPort(s.IPv4, strings.TrimPrefix(port, ":"))
 	s.Endpoint = "https://" + s.Listen
-	s.Detail = "Tailscale 已连接。配对时仍会校验目标节点的独立 TLS 身份。"
+	s.Detail = "Tailscale 已连接"
 	return s
 }

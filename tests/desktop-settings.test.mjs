@@ -86,7 +86,7 @@ test("a new recording waits until the previous cancellation finishes", async t =
   assert.equal(starts, 1);
   resolveCancel({}); await starting; await tick();
   assert.equal(starts, 2);
-  assert.equal(ui.elements.get("#desktop-record-status").textContent, "请按组合键，30 秒内有效。Esc 取消。");
+  assert.equal(ui.elements.get("#desktop-record-status").textContent, "请按下新的组合键…（Esc 取消）");
 });
 
 for (const confirmed of [false,true]) test(`page resume reconciles a pending desktop save (confirmed=${confirmed})`, async () => {

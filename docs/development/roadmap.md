@@ -31,6 +31,7 @@
 | 精简提示、动态回复、本地数学公式、标题拖动和任务栏入口（本机日常交互用户验收通过） | [聊天展示与桌面窗口体验](features/chat-desktop-experience/plan.md) |
 | 正常发送状态与气泡稳定、提示词诊断退出聊天展示、后台完成任务栏提醒（本机用户验收通过） | [聊天发送稳定性与后台完成提醒](features/chat-completion-attention/plan.md) |
 | 快速本地安装：应用与运行时分开更新、目录候选、源码核对及持续进度（工程验证、独立复审和本地提速效果用户验收完成） | [快速本地安装](features/fast-local-install/plan.md)、[验证说明](features/fast-local-install/validation.md) |
+| Web 管理页与快捷面板统一视觉、随面板主题切换、面向普通用户精简文案（用户验收通过） | [Web 管理页视觉升级](features/web-console-visual-refresh/plan.md) |
 
 ## 后续验证与功能
 

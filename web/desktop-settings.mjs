@@ -1,3 +1,4 @@
+import {applyTheme} from "./ui.mjs";
 export function desktopSettings(api, post, {listen = (target, event, callback) => target.addEventListener(event, callback), session = () => ({active:true})} = {}) {
   const form = document.querySelector("#desktop-form"), fields = form.elements;
   const state = document.querySelector("#desktop-state");
@@ -27,9 +28,23 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
   }
   function render(value, fill = false) {
     current = value;
-    const registration = {registered:"已注册", disabled:"已禁用", initializing:"准备中", recovering:"正在恢复", conflict:"组合已被占用", unavailable:"快捷输入不可用", unsupported:"当前平台暂不支持", config_invalid:"本机配置无效"};
+    const registration = {initializing:"正在准备", recovering:"正在恢复", conflict:"该组合已被其他程序占用", unavailable:"快捷输入暂不可用", unsupported:"当前系统暂不支持", config_invalid:"配置无效，请恢复默认"};
     const usable = value.registration === "registered" && value.surface === "ready" && value.effective_binding;
-    state.textContent = `${registration[value.registration] || value.registration} · 面板 ${value.surface === "ready" ? "就绪" : value.surface === "failed" ? "准备失败" : "未就绪"} · 已设置 ${label(value.desired.binding)}${usable ? " · 生效 "+label(value.effective_binding) : " · 尚未生效"}${value.cleanup_pending ? " · 旧注册待清理，请重试；持续失败时从托盘退出并重启" : ""}${value.error ? " · "+value.error : ""}`;
+    const desired = label(value.desired.binding);
+    let text, tone = "warn";
+    if (!value.supported) [text, tone] = ["当前系统暂不支持快捷输入", "muted"];
+    else if (usable && label(value.effective_binding) === desired) [text, tone] = [`已生效 · ${desired}`, "ok"];
+    else if (usable) text = `当前生效 ${label(value.effective_binding)} · 新组合 ${desired} 尚未生效`;
+    else if (value.registration === "disabled") [text, tone] = ["快捷输入已关闭", "muted"];
+    else if (value.surface === "failed") [text, tone] = ["面板加载失败，请点击重试", "error"];
+    else [text, tone] = [`${registration[value.registration] || "尚未生效"} · ${desired}`, value.registration === "conflict" ? "error" : "warn"];
+    if (value.cleanup_pending) text += " · 旧快捷键未释放，请重试；仍失败时从托盘退出后重新启动";
+    if (value.error) text += ` · ${value.error}`;
+    state.textContent = text;
+    if (state.dataset) state.dataset.tone = tone;
+    // Retry is only meaningful when an enabled binding is not in effect.
+    document.querySelector("#desktop-retry").hidden = !value.supported || (!value.cleanup_pending && (usable || !value.desired.enabled));
+    applyTheme(value.desired.theme_id);
     document.querySelector("#desktop-fields").disabled = !value.supported;
     if (fill) {
       fields.enabled.checked = value.desired.enabled; fields.theme.value = value.desired.theme_id;
@@ -60,7 +75,7 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
     if (!scope?.active) return;
     const transaction = busy = {generation};
     try { await fn(); }
-    catch (error) { if (isCurrent(generation, scope)) state.textContent = error.message; }
+    catch (error) { if (isCurrent(generation, scope)) { state.textContent = error.message; if (state.dataset) state.dataset.tone = "error"; } }
     finally { if (busy === transaction) busy = undefined; }
   }
   async function recordPoll() {
@@ -74,7 +89,7 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
         setBinding(value.binding);
         pending = null;
         const ended = endRecording();
-        recordStatus.textContent = "已录制，点击保存并应用。";
+        recordStatus.textContent = "已录制，点击“保存并应用”生效。";
         await ended;
         return;
       }
@@ -101,7 +116,7 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
     }
     recording = lease;
     recordCancel.hidden = false;
-    recordStatus.textContent = "请按组合键，30 秒内有效。Esc 取消。";
+    recordStatus.textContent = "请按下新的组合键…（Esc 取消）";
     recordInput.focus();
     void recordPoll();
   }));
@@ -110,10 +125,10 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
     event.preventDefault(); event.stopPropagation();
     if (event.key === "Escape") { void endRecording(); recordStatus.textContent = "录制已取消"; return; }
     const identity = /^[a-z]$/i.test(event.key) ? "Key"+event.key.toUpperCase() : /^[0-9]$/.test(event.key) ? "Digit"+event.key : event.code;
-    if (/^(Key|Digit)/.test(identity) && !/^[a-z0-9]$/i.test(event.key)) { recordStatus.textContent = "请切换到可输入英文字母的布局，或使用按键选择器。"; return; }
+    if (/^(Key|Digit)/.test(identity) && !/^[a-z0-9]$/i.test(event.key)) { recordStatus.textContent = "请切换到英文输入法，或使用手动选择。"; return; }
     if (event.metaKey || (!event.ctrlKey && !event.altKey) || ![...key.options].some(o => o.value === identity)) return;
     setBinding({modifiers:[event.ctrlKey && "ctrl", event.altKey && "alt", event.shiftKey && "shift"].filter(Boolean), key:identity});
-    pending = null; void endRecording(); recordStatus.textContent = "已录制，点击保存并应用。";
+    pending = null; void endRecording(); recordStatus.textContent = "已录制，点击“保存并应用”生效。";
   });
   listen(recordInput, "blur", () => { void endRecording(); });
   listen(recordCancel, "click", () => { void endRecording(); recordStatus.textContent = "录制已取消"; });
@@ -154,7 +169,7 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
     if (!isCurrent(generation, scope)) return;
     await post("/api/desktop/check", {binding:binding()});
     if (!isCurrent(generation, scope)) return;
-    state.textContent = "该组合此刻可用。保存时会再次注册确认。";
+    state.textContent = "该组合当前可用。"; if (state.dataset) state.dataset.tone = "ok";
   }));
   listen(document.querySelector("#desktop-retry"), "click", () => run(async () => {
     const generation = pageGeneration, scope = session();

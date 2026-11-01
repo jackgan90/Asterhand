@@ -124,17 +124,17 @@ test("an unconfigured node opens the main page without a settings or model reque
   assert.equal(ui.select("#workspace").hidden,false);
   assert.equal(ui.requests.some(r => ["/api/settings","/api/probe","/api/network"].includes(r.path)),false);
   assert.match(ui.select("#submit-status").textContent,/API key/);
-  assert.match(ui.select("#nodes").children[0].children[1].textContent,/节点运行中/);
+  assert.match(ui.select("#nodes").children[0].children[1].textContent,/在线/);
 });
 
 test("definite task rejection is distinct from unknown delivery and has no cancel action", async t => {
   const out = {id:"route",peer_id:"remote",state:"rejected",error:"请配置 API key",request:{goal:"file"},updated:new Date().toISOString()};
   const ui = await page(t, path => path === "/api/outbox" ? [out] : undefined);
   const elements = descendants(ui.select("#tasks"));
-  assert.ok(elements.some(el => el.textContent?.includes("目标节点未接收")));
-  assert.ok(elements.some(el => el.textContent?.includes("已停止投递")));
+  assert.ok(elements.some(el => el.textContent?.includes("对方未接收")));
+  assert.ok(elements.some(el => el.textContent?.includes("已停止发送")));
   assert.equal(elements.some(el => el.textContent === "取消任务"),false);
-  assert.equal(elements.some(el => el.textContent?.includes("送达待确认")),false);
+  assert.equal(elements.some(el => el.textContent?.includes("正在送达")),false);
 });
 
 test("pagehide invalidates in-flight task reads; persisted pageshow restores one subscription", async t => {

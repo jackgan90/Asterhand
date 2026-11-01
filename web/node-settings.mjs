@@ -61,10 +61,10 @@ export function nodeSettings({api, post, session, desktop, guarded, notice, refr
     form.elements.key.value = "";
     form.elements.delete_key.checked = false;
     $("#key-status").textContent = data.has_key
-      ? "已保存本机 key，页面不会读回密钥。"
-      : "尚未配置 key。";
+      ? "已保存密钥，出于安全不会显示原文。"
+      : "尚未设置密钥。";
     $("#runtime-status").textContent =
-      `节点 ${c.node_id} · 本机数据 ${data.home}`;
+      `设备 ID：${c.node_id}\n数据目录：${data.home}`;
     dialog("#settings");
     $("#settings").scrollTop = 0;
     await updateProbe();
@@ -72,12 +72,12 @@ export function nodeSettings({api, post, session, desktop, guarded, notice, refr
     const network = await api("/api/network");
     if (!scope.active || generation !== openGeneration) return;
     $("#network-status").textContent =
-      `${network.detail}${network.ipv4 ? " 地址：" + network.ipv4 : ""}`;
+      `${network.detail}${network.ipv4 ? " · " + network.ipv4 : ""}`;
     $("#use-tailnet").hidden = !network.endpoint;
     $("#use-tailnet").onclick = () => {
       form.elements.endpoint.value = network.endpoint;
       form.elements.peer_listen.value = network.listen;
-      $("#settings-status").textContent = "已填写 Tailscale 连接配置。保存后按提示重启节点，使监听地址生效。";
+      $("#settings-status").textContent = "已填入 Tailscale 地址，保存后重启服务即可生效。";
     };
   }
   listen($("#settings-open"), "click", () => guarded(openSettings));
@@ -103,8 +103,8 @@ export function nodeSettings({api, post, session, desktop, guarded, notice, refr
       if (!scope?.active || generation !== openGeneration) return;
       event.target.elements.key.value = "";
       const chat = result.capabilities?.chat;
-      const configuration = chat?.available ? "模型配置已保存，可直接聊天；模型与工具测试为可选诊断。" : "需要使用模型功能时，再配置 API key 和运行环境；无需提前测试。";
-      const message = ["设置已保存。", configuration, result.restart_required ? "监听地址已修改：请停止本机节点，再运行 start.ps1。" : ""].join(" ");
+      const configuration = chat?.available ? "模型已就绪，可以直接聊天。" : "需要模型功能时再填写 API Key 即可，无需提前测试。";
+      const message = ["设置已保存。", configuration, result.restart_required ? "监听地址已修改，请停止本机服务后重新启动。" : ""].join(" ").trim();
       $("#settings-status").textContent = message;
       notice(message);
       await updateProbe();
@@ -118,12 +118,13 @@ export function nodeSettings({api, post, session, desktop, guarded, notice, refr
     if (!scope?.active || generation !== probeGeneration) return;
     $("#probe-status").textContent =
       {
-        not_run: "尚未测试，不影响已配置功能的使用。",
-        running: "正在调用所选模型并检查受限工具…",
-        passed: "本次模型与工具测试通过。",
-        failed: "上次测试失败。",
-        stale: "配置或程序版本已变化，旧测试结果已过期；可直接使用已配置功能。",
+        not_run: "尚未测试",
+        running: "正在测试…",
+        passed: "连接正常",
+        failed: "测试未通过",
+        stale: "配置已变化，可重新测试",
       }[result.state] + (result.error ? ` ${result.error}` : "");
+    $("#probe-status").dataset.tone = {passed:"ok", failed:"error", running:"warn"}[result.state] || "muted";
     $("#probe").disabled = result.state === "running";
     if (result.state === "running") probeTimer = setTimeout(() => guarded(updateProbe), 1500);
   }

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="star">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -8,230 +8,268 @@
     <script type="module" src="/app.js"></script>
   </head>
   <body>
-    <header>
-      <a class="brand" href="/"
-        >✳ <strong>Asterhand</strong><span>星伴</span></a
-      >
-      <div id="connection">正在连接本机节点</div>
-      <button id="settings-open" class="quiet">节点设置</button>
-      <button id="commands-open" class="quiet">本地命令</button>
+    <div class="backdrop" aria-hidden="true"></div>
+    <header class="topbar">
+      <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">◈</span><strong>Asterhand</strong><span class="brand-sub">星伴</span></a>
+      <div id="connection" class="connection" role="status">连接中…</div>
+      <nav class="top-actions" aria-label="页面操作">
+        <button id="commands-open" class="quiet" type="button">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 8 4 4-4 4M12 16h7" /></svg>命令
+        </button>
+        <button id="settings-open" class="quiet" type="button">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M12 2.5v3M12 18.5v3M4.2 6.5l2.6 1.5M17.2 16l2.6 1.5M4.2 17.5l2.6-1.5M17.2 8l2.6-1.5" /></svg>设置
+        </button>
+      </nav>
     </header>
     <div id="notice" class="notice" role="status" hidden></div>
-    <section id="login" class="panel narrow" hidden>
-      <p class="eyebrow">欢迎回来</p>
-      <h1>连接你的节点</h1>
-      <p>使用节点启动时显示的登录链接，或在这里输入登录码。</p>
+
+    <section id="login" class="login-card glass" hidden>
+      <span class="brand-mark large" aria-hidden="true">◈</span>
+      <h1>欢迎回来</h1>
+      <p>输入启动时显示的登录码，或直接使用登录链接打开。</p>
       <form id="login-form">
-        <label
-          >本机登录码<input
-            name="token"
-            type="password"
-            required
-            autocomplete="off" /></label
-        ><button>登录</button>
+        <label class="field"><span>登录码</span><input name="token" type="password" required autocomplete="off" /></label>
+        <button>登录</button>
       </form>
     </section>
+
     <main id="workspace" hidden>
-      <aside>
-        <p class="eyebrow">执行节点</p>
+      <aside class="sidebar">
+        <p class="eyebrow">我的设备</p>
         <div id="nodes"></div>
-        <button id="pair-open" class="secondary full">＋ 配对另一台设备</button>
-        <div class="aside-note">
-          任务由执行节点独立保存。页面关闭后，已接收的任务继续执行。
-        </div>
+        <button id="pair-open" class="secondary full" type="button">＋ 配对新设备</button>
+        <p class="aside-note">关闭页面不影响正在执行的任务</p>
       </aside>
       <section class="work-area">
-        <div class="page-title">
-          <div>
-            <p class="eyebrow">你的设备，协同工作</p>
-            <h1>今天想完成什么？</h1>
-          </div>
-          <span class="tag">FIRST EDITION</span>
+        <div class="hero">
+          <p class="eyebrow">你的设备，协同工作</p>
+          <h1>今天想完成什么？</h1>
         </div>
-        <p id="node-warning" class="status-box" role="status" hidden></p>
-        <form id="task-form" class="composer">
-          <div class="composer-target">
-            <label>执行节点<select id="target" name="target"></select></label
-            ><label
-              >授权位置<select id="project" name="project"></select
-            ></label>
+        <p id="node-warning" class="status-box warn" role="status" hidden></p>
+        <form id="task-form" class="composer glass">
+          <textarea name="goal" id="goal" rows="4" required maxlength="16000" placeholder="描述你想完成的事…" aria-label="任务内容"></textarea>
+          <div class="composer-bar">
+            <div class="composer-target">
+              <label class="chip"><span>设备</span><select id="target" name="target"></select></label>
+              <label class="chip"><span>目录</span><select id="project" name="project"></select></label>
+            </div>
+            <button id="submit-task">发送</button>
           </div>
-          <textarea
-            name="goal"
-            id="goal"
-            rows="4"
-            required
-            maxlength="16000"
-            placeholder="在授权目录下新建 hello-world.txt，内容为 hello world。"
-          ></textarea>
-          <div class="composer-footer">
-            <div><span id="target-hint">文件会保存在所选执行节点</span><div id="submit-status" role="status"></div></div
-            ><button id="submit-task">发送任务 ↗</button>
-          </div>
+          <div class="composer-hint"><span id="target-hint"></span><span id="submit-status" role="status"></span></div>
         </form>
         <div class="section-title">
-          <h2>任务与结果</h2>
+          <h2>任务</h2>
           <span id="last-refresh"></span>
         </div>
         <div id="tasks">
-          <div class="empty">
-            还没有任务。先完成节点配置，再从一个文件任务开始。
-          </div>
+          <div class="empty">还没有任务</div>
         </div>
       </section>
     </main>
-    <dialog id="settings">
-      <div class="dialog-title settings-header"><h2>节点设置</h2><button type="button" data-close="settings" class="quiet">关闭</button></div>
-      <section id="desktop-settings" class="desktop-settings" aria-labelledby="desktop-title">
-        <p class="eyebrow">仅本机 · Windows</p>
-        <h2 id="desktop-title">快捷输入</h2>
-        <p>随时呼出一个文本面板。Enter 换行，Esc 收起，草稿保留到本次运行结束。</p>
-        <div id="desktop-state" class="status-box" role="status">正在读取桌面状态…</div>
-        <form id="desktop-form">
-          <fieldset id="desktop-fields">
-            <label class="checkbox"><input type="checkbox" name="enabled">启用全局快捷输入</label>
-            <label>快捷键<input id="desktop-record" readonly aria-label="录制快捷键" placeholder="点击录制后按下组合"></label>
-            <div class="actions"><button type="button" id="desktop-record-start" class="secondary">录制快捷键</button><button type="button" id="desktop-record-cancel" class="quiet" hidden>取消录制</button></div>
-            <small id="desktop-record-status" role="status">也可使用下面的选择器。至少选择 Ctrl 或 Alt。</small>
-            <div class="desktop-modifiers">
-              <label class="checkbox"><input name="ctrl" type="checkbox">Ctrl</label>
-              <label class="checkbox"><input name="alt" type="checkbox">Alt</label>
-              <label class="checkbox"><input name="shift" type="checkbox">Shift</label>
+
+    <dialog id="settings" class="settings-dialog" data-tab="general">
+      <div class="dialog-head">
+        <h2>设置</h2>
+        <button type="button" data-close="settings" class="icon-btn" aria-label="关闭">×</button>
+      </div>
+      <div class="settings-layout">
+        <nav class="settings-tabs" aria-label="设置分类">
+          <button type="button" class="settings-tab" data-tab-target="general">常规</button>
+          <button type="button" class="settings-tab" data-tab-target="model">模型</button>
+          <button type="button" class="settings-tab" data-tab-target="hotkey">快捷输入</button>
+          <button type="button" class="settings-tab" data-tab-target="network">网络与高级</button>
+        </nav>
+        <div class="settings-panes">
+          <section id="desktop-settings" class="desktop-settings" aria-labelledby="desktop-title">
+            <div class="pane-head">
+              <h3 id="desktop-title">快捷输入</h3>
+              <p>随时按下快捷键，呼出星伴对话面板。</p>
             </div>
-            <label>按键<select name="key" id="desktop-key"></select></label>
-            <label>面板主题<select name="theme"><option value="star">星核 · 深空霓光</option><option value="frost">霜蓝 · 明亮科技</option></select></label>
-            <div class="actions"><button type="submit" id="desktop-save">保存并应用</button><button type="button" id="desktop-check" class="secondary">检查占用</button><button type="button" id="desktop-retry" class="quiet">重试生效</button><button type="button" id="desktop-reset" class="quiet">恢复默认</button></div>
-          </fieldset>
-        </form>
-        <small>设置只保存在当前节点；系统占用以实际注册结果为准。检查成功表示此刻可用。</small>
-        <hr>
-      </section>
-      <form id="settings-form">
-        <div class="dialog-title">
-          <div>
-            <p class="eyebrow">本机配置</p>
-            <h2>准备好你的节点</h2>
-          </div>
+            <div id="desktop-state" class="status-line" role="status">正在读取…</div>
+            <form id="desktop-form">
+              <fieldset id="desktop-fields">
+                <label class="toggle-row"><span>启用快捷输入</span><input type="checkbox" name="enabled" class="switch" /></label>
+                <div class="field">
+                  <span>快捷键</span>
+                  <div class="hotkey-row">
+                    <input id="desktop-record" class="keycap" readonly aria-label="当前快捷键" placeholder="未设置" />
+                    <button type="button" id="desktop-record-start" class="secondary">录制</button>
+                    <button type="button" id="desktop-record-cancel" class="quiet" hidden>取消</button>
+                  </div>
+                  <small id="desktop-record-status" role="status">点击“录制”后按下新的组合键，需包含 Ctrl 或 Alt。</small>
+                </div>
+                <details class="advanced">
+                  <summary>手动选择按键</summary>
+                  <div class="desktop-modifiers">
+                    <label class="checkbox"><input name="ctrl" type="checkbox" />Ctrl</label>
+                    <label class="checkbox"><input name="alt" type="checkbox" />Alt</label>
+                    <label class="checkbox"><input name="shift" type="checkbox" />Shift</label>
+                    <label class="field compact"><span>按键</span><select name="key" id="desktop-key"></select></label>
+                  </div>
+                </details>
+                <div class="field">
+                  <span>外观主题</span>
+                  <div class="theme-options">
+                    <label class="theme-card star"><input type="radio" name="theme" value="star" /><span class="theme-swatch" aria-hidden="true"></span><strong>星核</strong><small>深空霓光</small></label>
+                    <label class="theme-card frost"><input type="radio" name="theme" value="frost" /><span class="theme-swatch" aria-hidden="true"></span><strong>霜蓝</strong><small>明亮清透</small></label>
+                  </div>
+                  <small>同时应用于快捷面板和此页面。</small>
+                </div>
+                <div class="actions">
+                  <button type="submit" id="desktop-save">保存并应用</button>
+                  <button type="button" id="desktop-retry" class="secondary" hidden>重试生效</button>
+                  <span class="spacer"></span>
+                  <button type="button" id="desktop-check" class="quiet">检查占用</button>
+                  <button type="button" id="desktop-reset" class="quiet">恢复默认</button>
+                </div>
+              </fieldset>
+            </form>
+          </section>
+
+          <form id="settings-form">
+            <div class="pane" data-pane="general">
+              <div class="pane-head">
+                <h3>常规</h3>
+                <p>给这台设备起个名字，并选择任务可以使用的文件夹。</p>
+              </div>
+              <label class="field"><span>设备名称</span><input name="name" required maxlength="80" placeholder="例如 书房电脑" /></label>
+              <label class="field"><span>工作目录</span><input name="root" placeholder="例如 D:\AsterhandWorkspace" />
+                <small>文件任务只在此目录内读写；仅聊天可留空。</small></label>
+            </div>
+
+            <div class="pane" data-pane="model">
+              <div class="pane-head">
+                <h3>模型</h3>
+                <p>密钥加密保存在本机，不会上传。</p>
+              </div>
+              <div class="field-grid">
+                <label class="field"><span>模型服务</span><select name="provider"></select></label>
+                <label class="field"><span>模型</span><select name="model"></select></label>
+              </div>
+              <input type="hidden" name="credential_ref" />
+              <label class="field"><span>API Key</span><input name="key" type="password" autocomplete="new-password" placeholder="已保存时留空即可" />
+                <small id="key-status"></small></label>
+              <label class="checkbox"><input type="checkbox" name="delete_key" />清除已保存的密钥</label>
+              <details class="advanced">
+                <summary>高级</summary>
+                <label class="field"><span>运行环境</span><select name="agent_runtime"></select></label>
+              </details>
+              <div class="probe-row">
+                <button type="button" id="probe" class="secondary">测试连接</button>
+                <div id="probe-status" class="status-line">尚未测试</div>
+              </div>
+              <small>测试会消耗少量 API 额度，不测试也可以直接使用。</small>
+            </div>
+
+            <div class="pane" data-pane="network">
+              <div class="pane-head">
+                <h3>网络与高级</h3>
+                <p>让你的其他设备找到这台电脑。</p>
+              </div>
+              <div class="network-row">
+                <div id="network-status" class="status-line">正在检测网络…</div>
+                <button type="button" id="use-tailnet" class="secondary" hidden>使用 Tailscale 地址</button>
+              </div>
+              <label class="field"><span>访问地址</span><input name="endpoint" placeholder="https://100.x.x.x:17433" /></label>
+              <label class="field"><span>监听地址</span><input name="peer_listen" required placeholder="100.x.x.x:17433" />
+                <small>两台设备需在同一 Tailscale 网络或局域网内；修改监听地址后需重启。</small></label>
+              <details class="advanced">
+                <summary>高级信息</summary>
+                <div id="runtime-status" class="metadata"></div>
+                <div class="danger-zone">
+                  <div><strong>停止本机服务</strong><small>停止后需从启动入口重新打开。</small></div>
+                  <button type="button" id="stop-node" class="danger">停止</button>
+                </div>
+              </details>
+            </div>
+
+            <div class="settings-footer">
+              <div id="settings-status" class="status-line" role="status"></div>
+              <button type="submit">保存设置</button>
+            </div>
+          </form>
         </div>
-        <p>模型凭据只保存在本机。Windows 使用当前用户的 DPAPI 加密。</p>
-        <label
-          >节点名称<input
-            name="name"
-            required
-            maxlength="80"
-            placeholder="Windows B" /></label
-        ><label
-            >授权目录（文件任务，可选）<input
-            name="root"
-            placeholder="例如 F:\AsterhandWorkspace" /></label
-        ><small
-            >纯聊天可留空；文件任务只允许在此目录内创建和读取文本。不存在的目录会自动创建。</small
-        >
-        <div id="network-status" class="status-box">正在检测 Tailscale…</div>
-        <button type="button" id="use-tailnet" class="quiet" hidden>
-          使用 Tailscale 地址</button
-        ><label
-          >节点地址<input
-            name="endpoint"
-            placeholder="https://100.x.x.x:17433" /></label
-        ><label>节点监听地址（修改后需重启）<input name="peer_listen" required placeholder="100.x.x.x:17433" /></label
-        ><small
-          >跨 NAT 使用 Tailscale 地址，A、B 加入同一
-          Tailnet。局域网或隔离测试也可填写可达 IP。配对始终校验节点 TLS
-          身份。</small
-        ><label>Agent 运行时<select name="agent_runtime"></select></label>
-        <label>模型提供方<select name="provider"></select></label>
-        <label>模型<select name="model"></select></label>
-        <input type="hidden" name="credential_ref" />
-        <label
-          >API key<input
-            name="key"
-            type="password"
-            autocomplete="new-password"
-            placeholder="输入 key；已保存时留空保持原值" /></label
-        ><small id="key-status"></small
-        ><label class="checkbox"
-          ><input type="checkbox" name="delete_key" />删除本机已保存的
-          key</label
-        >
-        <div class="actions">
-          <button type="submit">保存设置</button
-          ><button type="button" id="probe" class="secondary">
-            测试模型与工具（可选）
-          </button>
-        </div>
-        <small>保存后可直接使用已配置的功能。可选测试会调用模型并产生 API 费用；基础节点无需配置 API key。</small>
-        <div id="settings-status" class="status-box" role="status"></div>
-        <div id="probe-status" class="status-box">尚未测试，不影响已配置功能的使用。</div>
-        <div id="runtime-status" class="metadata"></div>
-        <button type="button" id="stop-node" class="quiet">停止本机节点</button>
-      </form>
+      </div>
     </dialog>
-    <dialog id="pair">
-      <div class="dialog-title">
+
+    <dialog id="pair" class="pair-dialog">
+      <div class="dialog-head">
         <div>
           <p class="eyebrow">设备协作</p>
-          <h2>建立节点信任</h2>
+          <h2>配对新设备</h2>
         </div>
-        <button data-close="pair" class="quiet">关闭</button>
+        <button type="button" data-close="pair" class="icon-btn" aria-label="关闭">×</button>
       </div>
-      <p>
-        在 B 生成一次性配对码，完整复制到 A。配对码包含 B
-        的证书和一次性凭据，请仅交给自己的设备。
-      </p>
-      <button id="make-invite" class="secondary">在本机生成配对码</button
-      ><textarea
-        id="invite"
-        rows="3"
-        readonly
-        placeholder="配对码将在这里显示，10 分钟内有效"
-      ></textarea
-      ><button id="copy-invite" class="quiet">复制配对码</button>
-      <hr />
-      <form id="pair-form">
-        <label
-          >粘贴另一台节点的配对码<textarea
-            name="code"
-            rows="4"
-            required
-          ></textarea></label
-        ><button>添加并验证节点</button>
-      </form>
+      <div class="pair-grid">
+        <section class="pair-card">
+          <span class="step">1</span>
+          <h3>邀请其他设备</h3>
+          <p>生成配对码，复制到另一台设备。10 分钟内有效，只发给自己的设备。</p>
+          <button id="make-invite" type="button" class="secondary">生成配对码</button>
+          <textarea id="invite" rows="3" readonly placeholder="配对码将显示在这里" aria-label="本机配对码"></textarea>
+          <button id="copy-invite" type="button" class="quiet">复制配对码</button>
+        </section>
+        <section class="pair-card">
+          <span class="step">2</span>
+          <h3>连接到其他设备</h3>
+          <p>粘贴另一台设备生成的配对码。</p>
+          <form id="pair-form">
+            <textarea name="code" rows="4" required aria-label="对方的配对码" placeholder="粘贴配对码"></textarea>
+            <button>添加设备</button>
+          </form>
+        </section>
+      </div>
     </dialog>
+
     <dialog id="detail">
-      <div class="dialog-title">
+      <div class="dialog-head">
         <h2>任务详情</h2>
-        <button data-close="detail" class="quiet">关闭</button>
+        <button type="button" data-close="detail" class="icon-btn" aria-label="关闭">×</button>
       </div>
       <div id="detail-content"></div>
     </dialog>
+
     <dialog id="local-commands">
-      <div class="dialog-title"><div><p class="eyebrow">快捷入口</p><h2>本地命令</h2></div><button id="commands-close" class="quiet" type="button">关闭</button></div>
-      <p>在快捷输入中键入 / 选择命令。每次确认独立启动一次，脚本由当前用户运行。</p>
+      <div class="dialog-head">
+        <div>
+          <p class="eyebrow">快捷入口</p>
+          <h2>本地命令</h2>
+        </div>
+        <button id="commands-close" class="icon-btn" type="button" aria-label="关闭">×</button>
+      </div>
+      <p class="dialog-lead">在快捷面板中输入 / 即可选择并运行命令。</p>
       <div class="commands-management">
-        <section class="commands-sidebar" aria-label="已注册命令">
-          <input id="commands-search" aria-label="搜索英文名或别名" placeholder="搜索英文名或别名">
-          <div class="actions"><button id="command-new" type="button">新建</button><button id="commands-refresh" type="button" class="quiet">刷新</button></div>
-          <small id="command-count"></small><div id="registered-commands"></div>
+        <section class="commands-sidebar" aria-label="已添加的命令">
+          <input id="commands-search" aria-label="搜索命令" placeholder="搜索命令" />
+          <div class="actions compact"><button id="command-new" type="button">新建</button><button id="commands-refresh" type="button" class="quiet">刷新</button></div>
+          <small id="command-count"></small>
+          <div id="registered-commands"></div>
         </section>
-        <form id="command-form">
+        <form id="command-form" class="command-editor">
           <h3 id="command-form-title">新建命令</h3>
-          <label>英文名<input name="name" required maxlength="64" pattern="[A-Za-z][A-Za-z0-9_\-]*" placeholder="backup"></label>
-          <label>别名（可选，每行一个）<textarea name="aliases" rows="2" placeholder="备份"></textarea></label>
-          <label>功能描述（可选）<input name="description" maxlength="512"></label>
-          <label for="command-script">脚本绝对路径</label>
-          <div class="command-script-path"><input id="command-script" name="script" required placeholder="C:\Scripts\backup.ps1"><button id="command-browse" type="button" class="quiet">Browse</button></div>
-          <small>支持 .bat、.cmd 和 Windows PowerShell 5.1 .ps1。直接引用本机文件；文件内容修改后，下次执行使用更新内容。</small>
-          <label>工作目录（可选）<input name="directory" placeholder="留空使用脚本所在目录"></label>
-          <label>启动方式<select name="window"><option value="background">后台运行</option><option value="terminal">打开终端</option></select></label>
-          <div class="command-argument-title">固定参数</div><div id="command-arguments"></div>
-          <button id="command-add-argument" type="button" class="quiet">＋ 添加参数</button>
-          <small>每项一个参数，空值表示空参数；含空格时无需自行加引号。批处理参数含字面双引号时请改用 .ps1。需要交互或查看输出请选择终端模式。</small>
-          <div class="actions"><button type="submit">保存命令</button><button id="command-delete" type="button" class="quiet" hidden>删除命令</button></div>
+          <div class="field-grid">
+            <label class="field"><span>命令名</span><input name="name" required maxlength="64" pattern="[A-Za-z][A-Za-z0-9_\-]*" placeholder="backup" title="以英文字母开头，可含数字、- 和 _" /></label>
+            <label class="field"><span>启动方式</span><select name="window"><option value="background">后台运行</option><option value="terminal">打开终端窗口</option></select></label>
+          </div>
+          <label class="field"><span>别名 <em>可选，每行一个</em></span><textarea name="aliases" rows="2" placeholder="备份"></textarea></label>
+          <label class="field"><span>说明 <em>可选</em></span><input name="description" maxlength="512" /></label>
+          <div class="field">
+            <label for="command-script">脚本文件</label>
+            <div class="command-script-path"><input id="command-script" name="script" required placeholder="C:\Scripts\backup.ps1" /><button id="command-browse" type="button" class="secondary">浏览…</button></div>
+            <small>支持 .bat、.cmd 和 .ps1，修改脚本后下次运行即生效。</small>
+          </div>
+          <label class="field"><span>工作目录 <em>可选</em></span><input name="directory" placeholder="默认为脚本所在目录" /></label>
+          <div class="field">
+            <span class="command-argument-title">固定参数</span>
+            <div id="command-arguments"></div>
+            <button id="command-add-argument" type="button" class="quiet">＋ 添加参数</button>
+            <small>每项一个参数，无需加引号。需要查看输出时请选择“打开终端窗口”。</small>
+          </div>
+          <div class="actions"><button type="submit">保存命令</button><span class="spacer"></span><button id="command-delete" type="button" class="danger" hidden>删除命令</button></div>
         </form>
       </div>
-      <div id="commands-status" class="status-box" role="status"></div>
+      <div id="commands-status" class="status-line" role="status"></div>
     </dialog>
-    <footer>ASTERHAND / 个人设备助手 <span id="version"></span></footer>
+    <footer class="page-footer"><span>Asterhand · 星伴</span><span id="version"></span></footer>
   </body>
 </html>

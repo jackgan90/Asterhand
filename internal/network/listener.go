@@ -42,13 +42,13 @@ func LoopbackListener(address string) bool {
 
 func ConnectionWarning(endpoint, configured, actual string) string {
 	if !ListenerMatches(configured, actual) {
-		return "节点监听配置尚未生效：请停止本机节点，再运行 start.ps1。"
+		return "网络设置修改后尚未生效，请停止本机服务后重新启动。"
 	}
 	if LoopbackListener(actual) || LoopbackEndpoint(endpoint) {
-		return "当前节点连接地址仅本机可达。双机使用请在节点设置中选择 Tailscale 地址并按提示重启。"
+		return "当前仅本机可以访问。如需与其他设备协作，请在“设置 › 网络与高级”中使用 Tailscale 地址。"
 	}
 	if endpoint == "" {
-		return "尚未设置对外节点地址，请在节点设置中选择 Tailscale 地址。"
+		return "尚未设置访问地址。如需与其他设备协作，请在“设置 › 网络与高级”中使用 Tailscale 地址。"
 	}
 	return ""
 }

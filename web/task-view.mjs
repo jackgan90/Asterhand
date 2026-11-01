@@ -1,76 +1,78 @@
 import {$, node, date, dialog} from "./ui.mjs";
 const states = {
-  queued: "已接收 · 排队中",
+  queued: "排队中",
   running: "执行中",
-  waiting_input: "等待你的回答",
-  cancel_requested: "已登记取消",
+  waiting_input: "等你回答",
+  cancel_requested: "正在取消",
   cancelled: "已停止",
-  succeeded: "完成并验证",
-  completed_unverified: "执行完成 · 待验收",
-  failed: "执行失败",
-  rejected: "目标节点未接收",
-  reconciliation_required: "需要核对",
+  succeeded: "已完成",
+  completed_unverified: "已完成 · 待确认",
+  failed: "失败",
+  rejected: "对方未接收",
+  reconciliation_required: "状态待确认",
 };
+const tones = {
+  queued: "wait", running: "run", waiting_input: "wait", cancel_requested: "wait", cancelled: "muted",
+  succeeded: "ok", completed_unverified: "ok", failed: "error", rejected: "error", reconciliation_required: "error",
+};
+const outcomes = {
+  not_started: "未开始", not_run: "未运行", running: "进行中", succeeded: "成功", failed: "失败", cancelled: "已停止",
+  completed_unverified: "完成待确认", unknown_manually_closed: "人工核对后关闭",
+  passed: "已验证", not_applicable: "无需验证", pending: "待确认",
+};
+const size = bytes => bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
+const time = value => value ? new Date(value).toLocaleString([], {month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit"}) : "";
 
 export function taskView({guarded, callbacks, submissionChanged}) {
-  let editing = false, context;
+  let editing = false, context, eventsRoot;
   function render(views, selection) {
     context = selection;
     const root = $("#tasks");
     root.replaceChildren();
     for (const view of views) root.append(taskCard(view.job, view.out, view.goal));
-    if (!root.children.length) root.append(node("div", "还没有任务。从创建一个 hello-world.txt 开始。", "empty"));
-    $("#last-refresh").textContent = "已同步 " + new Date().toLocaleTimeString();
+    if (!root.children.length) root.append(node("div", "还没有任务，在上方描述你想完成的事", "empty"));
+    $("#last-refresh").textContent = "更新于 " + new Date().toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+  }
+  function badge(job, out) {
+    const rejected = out?.state === "rejected", lost = !rejected && out?.error;
+    const element = node("span", rejected ? states.rejected : lost ? "连接中断" : states[job.state] || job.state,
+      `badge ${["failed", "rejected", "reconciliation_required"].includes(job.state) ? "error" : ""}`);
+    element.dataset.tone = lost ? "wait" : tones[rejected ? "rejected" : job.state] || "muted";
+    return element;
   }
   function taskCard(job, out, goal = job.request.goal) {
     const card = node("article", null, "task"),
       head = node("div", null, "task-head");
-    head.append(
-      node("div", goal, "task-title"),
-      node(
-        "span",
-        out?.state === "rejected" ? states.rejected : out?.error ? "连接中断 · 保留最后状态" : states[job.state] || job.state,
-        `badge ${["failed", "rejected", "reconciliation_required"].includes(job.state) ? "error" : ""}`,
-      ),
-    );
+    head.append(node("div", goal, "task-title"), badge(job, out));
     card.append(head);
     const owner =
       job.owner === context.info.node_id
         ? context.info.name
         : context.peers.find((p) => p.id === job.owner)?.name || job.owner;
-    card.append(
-      node(
-        "div",
-        `执行节点：${owner} · 最后确认：${date(out?.updated || job.updated)}`,
-        "metadata",
-      ),
-    );
+    const updated = out?.updated || job.updated;
+    card.append(node("div", updated ? `${owner} · ${time(updated)}` : owner, "metadata"));
     if (out && !out.job)
-      card.append(node("p", out.state === "rejected" ? "目标节点明确拒绝接收，已停止投递。请修复该节点配置后重新提交。" : "送达待确认。重试保持原目标和请求 ID。", "result"));
+      card.append(node("p", out.state === "rejected" ? "对方设备未接收此任务，已停止发送。请检查该设备的设置后重新发送。" : "正在送达…", "result"));
     if (
       out?.cancel && out.state !== "rejected" &&
       !["succeeded", "failed", "cancelled", "completed_unverified"].includes(
         job.state,
       )
     )
-      card.append(node("p", "取消已登记，正在等待执行节点确认。", "result"));
+      card.append(node("p", "正在取消，等待对方设备确认。", "result"));
     if (job.result) card.append(node("div", job.result, "result"));
     if (job.error || out?.error)
       card.append(node("div", job.error || out.error, "error-text"));
     for (const a of job.artifacts || []) {
-      const block = node("div", null, "artifact");
-      block.append(
-        node("strong", "文件已创建并读取验证"),
-        node("div", a.path),
-        node("pre", a.preview),
-        node("small", `${a.size} bytes · SHA-256 ${a.sha256}`),
-      );
+      const block = node("div", null, "artifact"), meta = node("small", size(a.size));
+      meta.title = `SHA-256 ${a.sha256}`;
+      block.append(node("strong", "已生成文件"), node("div", a.path), node("pre", a.preview), meta);
       card.append(block);
     }
     if (job.interaction?.state === "pending" && job.state === "waiting_input")
       card.append(question(job, out));
     const actions = node("div", null, "task-actions");
-    const detail = node("button", "查看执行记录", "quiet");
+    const detail = node("button", "详情", "quiet");
     detail.addEventListener("click", () => guarded(() => callbacks.detail(job, out)));
     actions.append(detail);
     if (
@@ -127,30 +129,39 @@ export function taskView({guarded, callbacks, submissionChanged}) {
     return root;
   }
 
+  // Readable outcome first; identifiers and raw events stay in a disclosure.
   function detail(job) {
-  const root = $("#detail-content");
-  root.replaceChildren(
-    node("div", `Job ${job.id}`, "metadata"),
-    node("div", `Attempt ${job.attempt || "尚未开始"}`, "metadata"),
-    node(
-      "p",
-      `执行：${job.execution_outcome || "not_run"}；验证：${job.verification_outcome || "not_run"}；用户验收：${job.user_acceptance || "pending"}`,
-    ),
-  );
-  dialog("#detail");
-
+    const root = $("#detail-content"), summary = node("div", null, "detail-summary");
+    const item = (label, value) => {
+      const cell = node("div");
+      cell.append(node("span", label), node("strong", value));
+      return cell;
+    };
+    summary.append(
+      item("状态", states[job.state] || job.state),
+      item("执行", outcomes[job.execution_outcome || "not_run"] || job.execution_outcome),
+      item("验证", outcomes[job.verification_outcome || "not_run"] || job.verification_outcome),
+      item("你的确认", outcomes[job.user_acceptance || "pending"] || job.user_acceptance),
+    );
+    const technical = node("details", null, "advanced");
+    technical.append(
+      node("summary", "技术记录"),
+      node("div", `任务 ID ${job.id} · 第 ${job.attempt || 0} 次尝试 · 创建于 ${date(job.created)}`, "metadata"),
+    );
+    eventsRoot = node("div");
+    technical.append(eventsRoot);
+    root.replaceChildren(node("div", job.request?.goal || "", "task-title"), summary, technical);
+    dialog("#detail");
   }
   function events(events) {
-    const root = $("#detail-content"), data = {events};
-    for (const event of data.events) {
+    for (const event of events) {
       const row = node("div", null, "event");
       row.append(
         node("strong", `#${event.seq} ${event.type} · ${date(event.time)}`),
         node("pre", JSON.stringify(event.data, null, 2)),
       );
-      root.append(row);
+      eventsRoot?.append(row);
     }
-
   }
   return {render, detail, events, detailOpen:() => $("#detail").open, editing:() => editing, submissionChanged,
     submitted:goal => { if ($("#goal").value.trim() === goal) $("#goal").value = ""; }};

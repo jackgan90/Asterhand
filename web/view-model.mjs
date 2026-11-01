@@ -29,20 +29,20 @@ export function taskViews(jobs, outbox, localID) {
 }
 
 export function submissionState(local, target, project, goal, submitting) {
-  if (submitting) return { disabled: true, busy: true, reason: "正在保存任务提交…" };
+  if (submitting) return { disabled: true, busy: true, reason: "" };
   let reason = "";
   const localTasks = modelTaskStatus(local), targetTasks = modelTaskStatus(target);
   if (!localTasks.available) reason = `本机：${localTasks.detail}`;
-  else if (!targetTasks.available) reason = `执行节点：${targetTasks.detail}`;
-  else if (!project) reason = "请选择执行节点的授权目录。";
-  else if (!goal.trim()) reason = "请输入任务内容，上方灰色文字仅为示例。";
-  return { disabled: !!reason, busy: false, reason };
+  else if (!targetTasks.available) reason = `所选设备：${targetTasks.detail}`;
+  else if (!project) reason = "所选设备还没有工作目录，请先在设置中添加。";
+  // An empty goal only disables sending; the placeholder already explains it.
+  return { disabled: !!reason || !goal.trim(), busy: false, reason };
 }
 
 export function modelTaskStatus(info) {
   if (info?.capabilities !== undefined) {
     const status = info.capabilities?.model_tasks;
-    return {available:status?.available === true, detail:status?.detail || "节点未提供模型任务配置，请在该节点检查设置。"};
+    return {available:status?.available === true, detail:status?.detail || "未获取到模型配置，请在该设备的设置中检查。"};
   }
-  return {available:info?.ready === true, detail:"此节点使用旧版验证规则，请在该节点验证模型与工具或升级。"};
+  return {available:info?.ready === true, detail:"该设备版本较旧（旧版验证规则），请升级后使用。"};
 }

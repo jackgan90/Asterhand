@@ -1,7 +1,7 @@
 import {apiClient} from "./api-client.mjs";
 import {appLifecycle} from "./app-lifecycle.mjs";
 import {browserActions} from "./browser-actions.mjs";
-import {$, noticeView} from "./ui.mjs";
+import {$, noticeView, applyTheme, restoreTheme, settingsTabs} from "./ui.mjs";
 import {desktopSettings} from "./desktop-settings.mjs";
 import {nodeController} from "./node-controller.mjs";
 import {nodeSettings} from "./node-settings.mjs";
@@ -10,11 +10,12 @@ import {taskView} from "./task-view.mjs";
 import {localCommands} from "./local-commands.mjs";
 
 export function mountApp() {
+  restoreTheme();
   const client = apiClient(), actions = browserActions(), notices = noticeView($("#notice"));
   const listeners = [];
-  const listen = (target, event, callback) => {
-    target.addEventListener(event, callback);
-    listeners.push(() => target.removeEventListener(event, callback));
+  const listen = (target, event, callback, options) => {
+    target.addEventListener(event, callback, options);
+    listeners.push(() => target.removeEventListener(event, callback, options));
   };
   let lifecycle, tasks;
   const session = () => lifecycle?.session();
@@ -34,9 +35,11 @@ export function mountApp() {
     resolve:job => tasks.resolve(job), detail:(...args) => tasks.detail(...args), refresh:() => tasks.refresh(),
   }});
   tasks = taskController({...client, view, selection:nodes.selection, session, notice, actions});
+  settingsTabs($("#settings"), listen);
   const connection = online => {
     const {info} = nodes.selection();
-    $("#connection").textContent = online ? `当前连接：${info.name}` : `连接中断 · 最后连接 ${info.name}`;
+    $("#connection").textContent = online ? info.name : `${info.name} · 连接中断`;
+    $("#connection").dataset.state = online ? "online" : "offline";
   };
   async function initialize(scope, token) {
     try {
@@ -45,6 +48,8 @@ export function mountApp() {
       if (token && $("#login-form").elements.token.value === token) $("#login-form").reset();
       $("#login").hidden = true;
       $("#workspace").hidden = false;
+      // Theme is cosmetic; a failed read keeps the last applied theme.
+      client.api("/api/desktop/settings").then(value => { if (scope.active) applyTheme(value?.desired?.theme_id); }, () => {});
       await nodes.refresh();
       if (!scope.active) return;
       connection(true);
@@ -60,7 +65,8 @@ export function mountApp() {
       if (scope.active) {
         $("#login").hidden = false;
         $("#workspace").hidden = true;
-        $("#connection").textContent = "等待本机登录";
+        $("#connection").textContent = "未登录";
+        $("#connection").dataset.state = "offline";
       }
       throw error;
     }
@@ -77,11 +83,11 @@ export function mountApp() {
   });
   listen($("#task-form"), "submit", event => { event.preventDefault(); void guarded(() => tasks.submit(nodes.content())); });
   listen($("#stop-node"), "click", () => {
-    if (actions.confirm("停止本机节点？尚未发送的排队消息将丢弃；执行中的任务将停止并在下次启动时核对；其他节点已接收的任务继续运行。"))
+    if (actions.confirm("停止本机服务？\n\n执行中的任务会停止，下次启动时自动核对；尚未发出的消息将丢弃。其他设备已接收的任务不受影响。"))
       void guarded(async () => {
         const scope = session();
         await client.post("/api/stop");
-        if (scope.active) notice("节点正在停止。下次使用启动入口重新打开。");
+        if (scope.active) notice("服务正在停止，可从启动入口重新打开。");
       });
   });
   listen(window, "pagehide", lifecycle.stop);

@@ -48,7 +48,7 @@ export function taskController({api, post, view, selection, session, notice, act
       interaction_id:interaction.id, attempt:interaction.attempt, answer_id:answerIDs.get(key), answer:text,
     });
     if (!scope?.active) return false;
-    notice("回答已保存，等待执行节点应用");
+    notice("回答已发送");
     return true;
   }
   async function cancel(job, out) {
@@ -57,7 +57,7 @@ export function taskController({api, post, view, selection, session, notice, act
     if (scope?.active) await refresh(scope);
   }
   async function resolve(job) {
-    const reason = actions.prompt("请先检查实际文件和运行记录。填写核对证据及关闭理由（不会将任务记为成功）：");
+    const reason = actions.prompt("请先确认实际文件和执行情况，再填写关闭原因（任务不会被标记为成功）：");
     if (!reason) return;
     const scope = session();
     await post(`/api/jobs/${job.id}/resolve`, {reason});

@@ -13,7 +13,8 @@
 | [node-controller.mjs](node-controller.mjs) | 节点快照、显式目标、项目选择和配对事务 |
 | [node-settings.mjs](node-settings.mjs) | 节点表单读取/保存与模型检查轮询；关闭/离开使迟到读取失效 |
 | [desktop-settings.mjs](desktop-settings.mjs) | 独立桌面设置操作 ID、修订号、录制租约和轮询 |
-| [ui.mjs](ui.mjs)、[browser-actions.mjs](browser-actions.mjs) | DOM 文本与通知计时器、现有 confirm/prompt/clipboard 窄依赖 |
+| [ui.mjs](ui.mjs)、[browser-actions.mjs](browser-actions.mjs) | DOM 文本与通知计时器、页面主题应用、设置分页切换、现有 confirm/prompt/clipboard 窄依赖 |
+| [style.css](style.css) | 与快捷面板共用的星核/霜蓝设计变量及全部页面样式 |
 
 视图通过回调发出业务操作，不创建 fetch/EventSource。节点选择通过只读快照供任务使用；没有全局 store 或事件总线。快捷输入的[独立桥](../internal/quickinput/assets/webview2-bridge.mjs)只依赖 WebView2，不导入主页面客户端。
 

@@ -26,20 +26,20 @@ export function nodeController({api, post, session, guarded, notice, actions, li
         name,
         node(
           "small",
-          `${p.local ? "本机 · " : ""}${p.online ? "节点运行中" : "暂不可达"}`,
+          `${p.local ? "本机 · " : ""}${p.online ? "在线" : "离线"}`,
         ),
       );
       if (p.info) {
         const status = modelTaskStatus(p.info);
-        card.append(node("small", `${p.online ? "" : "上次配置："}${status.available ? "模型任务配置齐全" : status.detail}`));
+        card.append(node("small", `${p.online ? "" : "上次状态："}${status.available ? "已就绪" : status.detail}`));
         if (p.info.capabilities?.chat?.available && !status.available)
-          card.append(node("small", "聊天配置齐全"));
+          card.append(node("small", "可以聊天"));
       }
       if (p.error) card.append(node("small", p.error, "error-text"));
       if (!p.local) {
-        const revoke = node("button", "撤销配对", "quiet");
+        const revoke = node("button", "解除配对", "quiet");
         revoke.addEventListener("click", () => {
-          if (actions.confirm(`撤销与 ${p.name} 的配对？已经执行的任务不会自动取消。`))
+          if (actions.confirm(`解除与 ${p.name} 的配对？已在执行的任务不会被取消。`))
             guarded(async () => {
               const scope = session();
               await api("/api/peers", {
@@ -80,11 +80,11 @@ export function nodeController({api, post, session, guarded, notice, actions, li
       select.value = previous;
     const project = selected?.projects?.find((p) => p.id === select.value);
     $("#target-hint").textContent = project
-      ? `保存到 ${selected.name}：${project.root}`
-      : "节点离线或尚未配置授权目录";
+      ? `保存到 ${project.root}`
+      : "该设备离线或尚未设置工作目录";
     if (id !== info.node_id && project && !peers.find((p) => p.id === id)?.online)
       $("#target-hint").textContent +=
-        "（暂不可达，按最后确认配置排队，恢复连接后送达）";
+        " · 设备离线，恢复连接后自动送达";
     updateSubmission();
   }
   function updateSubmission() {
@@ -94,7 +94,7 @@ export function nodeController({api, post, session, guarded, notice, actions, li
     const state = submissionState(info, selected, project, $("#goal").value, isSubmitting());
     $("#submit-task").disabled = state.disabled;
     $("#submit-task").setAttribute("aria-busy", String(state.busy));
-    $("#submit-task").textContent = state.busy ? "正在提交…" : "发送任务 ↗";
+    $("#submit-task").textContent = state.busy ? "正在发送…" : "发送";
     $("#submit-status").textContent = state.reason;
   }
   listen($("#goal"), "input", updateSubmission);
@@ -112,7 +112,7 @@ export function nodeController({api, post, session, guarded, notice, actions, li
   listen($("#copy-invite"), "click", () => guarded(async () => {
     const scope = session();
     await actions.copy($("#invite").value);
-    if (scope?.active) notice("已复制，10 分钟内在另一台设备粘贴。");
+    if (scope?.active) notice("已复制，请在 10 分钟内粘贴到另一台设备。");
   }));
   listen($("#pair-form"), "submit", event => {
     event.preventDefault();
@@ -121,7 +121,7 @@ export function nodeController({api, post, session, guarded, notice, actions, li
       await post("/api/pair", {code:new FormData(event.target).get("code")});
       if (!scope?.active) return;
       event.target.reset(); $("#pair").close();
-      notice("节点配对成功，TLS 身份已验证。");
+      notice("配对成功");
       await refreshPeers();
     });
   });

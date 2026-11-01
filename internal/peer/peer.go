@@ -297,11 +297,24 @@ func Call(ctx context.Context, p model.Peer, method, path string, input, output 
 		return fmt.Errorf("连接 %s 失败: %w", p.Endpoint, err)
 	}
 	defer res.Body.Close()
-	b, err := io.ReadAll(io.LimitReader(res.Body, 2*1024*1024))
+	const responseLimit = 2 * 1024 * 1024
+	b, err := io.ReadAll(io.LimitReader(res.Body, responseLimit+1))
 	if err != nil {
 		return err
 	}
+	if len(b) > responseLimit {
+		return errors.New("节点响应超过大小限制")
+	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		// Only a complete, request-bound rejection from the submission endpoint
+		// proves non-acceptance. Other errors retain unknown delivery semantics.
+		if method == "POST" && path == "/v1/jobs" && res.StatusCode == http.StatusConflict {
+			var rejection model.TaskRejection
+			request, ok := input.(model.Request)
+			if ok && json.Unmarshal(b, &rejection) == nil && rejection.Message != "" && rejection.Matches(request) {
+				return &rejection
+			}
+		}
 		var failure struct {
 			Error string `json:"error"`
 		}

@@ -102,8 +102,9 @@ export function nodeSettings({api, post, session, desktop, guarded, notice, refr
       });
       if (!scope?.active || generation !== openGeneration) return;
       event.target.elements.key.value = "";
-      const readiness = f.get("root").trim() ? (result.ready ? "模型验证保持有效。" : "请验证模型与工具。") : "纯聊天无需运行文件工具检查。";
-      const message = ["设置已保存。", readiness, result.restart_required ? "监听地址已修改：请停止本机节点，再运行 start.ps1。" : ""].join(" ");
+      const chat = result.capabilities?.chat;
+      const configuration = chat?.available ? "模型配置已保存，可直接聊天；模型与工具测试为可选诊断。" : "需要使用模型功能时，再配置 API key 和运行环境；无需提前测试。";
+      const message = ["设置已保存。", configuration, result.restart_required ? "监听地址已修改：请停止本机节点，再运行 start.ps1。" : ""].join(" ");
       $("#settings-status").textContent = message;
       notice(message);
       await updateProbe();
@@ -117,14 +118,14 @@ export function nodeSettings({api, post, session, desktop, guarded, notice, refr
     if (!scope?.active || generation !== probeGeneration) return;
     $("#probe-status").textContent =
       {
-        not_run: "尚未运行检查",
+        not_run: "尚未测试，不影响已配置功能的使用。",
         running: "正在调用所选模型并检查受限工具…",
-        passed: "模型与工具检查通过。节点已就绪。",
-        failed: "检查失败：",
-      }[result.state] + (result.error || "");
+        passed: "本次模型与工具测试通过。",
+        failed: "上次测试失败。",
+        stale: "配置或程序版本已变化，旧测试结果已过期；可直接使用已配置功能。",
+      }[result.state] + (result.error ? ` ${result.error}` : "");
     $("#probe").disabled = result.state === "running";
     if (result.state === "running") probeTimer = setTimeout(() => guarded(updateProbe), 1500);
-    if (result.state === "passed") await refreshPeers();
   }
   listen($("#probe"), "click", () =>
     guarded(async () => {

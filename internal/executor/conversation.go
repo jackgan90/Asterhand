@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"embed"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -28,13 +29,15 @@ type ConversationRuntime struct {
 	gate        chan struct{}
 	process     *chatProcess
 	fingerprint string
+	startup     *chatStartup
+	start       chatStarter
 	ctx         context.Context
 	cancel      context.CancelFunc
 }
 
 func NewConversationRuntime(manager *config.Manager) *ConversationRuntime {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &ConversationRuntime{config: manager, gate: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
+	return &ConversationRuntime{config: manager, gate: make(chan struct{}, 1), ctx: ctx, cancel: cancel, start: startConversationProcess}
 }
 
 func (r *ConversationRuntime) Describe() (conversation.Descriptor, error) {
@@ -42,17 +45,18 @@ func (r *ConversationRuntime) Describe() (conversation.Descriptor, error) {
 	if c.AgentRuntime != "openclaw" {
 		return conversation.Descriptor{}, conversation.Fail("unsupported", "当前运行时尚未提供持续会话能力")
 	}
-	options, err := clawOptions(c)
+	_, err := clawOptions(c)
 	if err != nil {
 		return conversation.Descriptor{}, err
 	}
 	if _, err = openClawProvider(c); err != nil {
 		return conversation.Descriptor{}, err
 	}
-	key, keyErr := r.config.Credential(c.LLM.CredentialRef)
+	status := ConfiguredCapabilities(r.config, c).Chat
 	return conversation.Descriptor{ID: "openclaw", Binding: chatBindingID(), Provider: c.LLM.Provider, Model: c.LLM.Model,
 		Prompt:       conversationPrompt(c).Application,
-		CanSend:      keyErr == nil && key != "" && options.NodePath != "" && options.EntryPath != "",
+		CanSend:      status.Available,
+		SendError:    status.Detail,
 		Capabilities: conversation.Capabilities{History: true, Streaming: true, Cancellation: true, DurableReceipts: true}}, nil
 }
 
@@ -60,60 +64,6 @@ func chatBindingID() string {
 	// The node data directory owns the logical runtime generation. Installer
 	// version paths and provider/model/key changes must not orphan its history.
 	return model.Digest([]byte("openclaw-chat-v1"))[:32]
-}
-
-func (r *ConversationRuntime) ensure(ctx context.Context, binding conversation.Binding) (*chatProcess, error) {
-	select {
-	case r.gate <- struct{}{}:
-		defer func() { <-r.gate }()
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-r.ctx.Done():
-		return nil, conversation.Fail("unavailable", "会话运行时已关闭")
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if r.ctx.Err() != nil {
-		return nil, conversation.Fail("unavailable", "会话运行时已关闭")
-	}
-	c := r.config.Get()
-	options, err := clawOptions(c)
-	if err != nil || binding.Runtime != "openclaw" || c.AgentRuntime != "openclaw" || binding.Generation != chatBindingID() {
-		return nil, conversation.Fail("binding_changed", "原会话的运行时绑定不可用，请恢复原配置")
-	}
-	provider, err := openClawProvider(c)
-	if err != nil {
-		return nil, err
-	}
-	key, _ := r.config.Credential(c.LLM.CredentialRef)
-	fingerprint := model.Hash(struct {
-		Options              openClawOptions
-		Provider, Model, Key string
-	}{options, c.LLM.Provider, c.LLM.Model, model.Digest([]byte(key))})
-	if r.process != nil && r.fingerprint == fingerprint && r.process.alive() {
-		return r.process, nil
-	}
-	if r.process != nil {
-		if err := r.process.close(); err != nil {
-			return nil, err
-		}
-		r.process = nil
-	}
-	startup, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	unregister := context.AfterFunc(r.ctx, cancel)
-	defer unregister()
-	if err := checkConversationBundle(startup, options, provider, c.LLM.Provider); err != nil {
-		return nil, err
-	}
-	root := filepath.Join(r.config.Home, "conversations", "runtime-"+binding.Generation)
-	process, err := startChatProcess(startup, c, options, provider, key, root)
-	if err != nil {
-		return nil, err
-	}
-	r.process, r.fingerprint = process, fingerprint
-	return process, nil
 }
 
 func checkConversationBundle(ctx context.Context, options openClawOptions, provider providerBridge, name string) error {
@@ -146,7 +96,7 @@ func checkConversationBundle(ctx context.Context, options openClawOptions, provi
 	return nil
 }
 
-func startChatProcess(ctx context.Context, c config.Config, options openClawOptions, provider providerBridge, key, root string) (*chatProcess, error) {
+func startChatProcess(ctx context.Context, c config.Config, options openClawOptions, provider providerBridge, key, root string, diagnostic *chatDiagnostics) (*chatProcess, error) {
 	for _, directory := range []string{"state", "workspace", "bridge", "userprofile", "appdata", "localappdata", "temp"} {
 		if err := os.MkdirAll(filepath.Join(root, directory), 0700); err != nil {
 			return nil, err
@@ -185,21 +135,42 @@ func startChatProcess(ctx context.Context, c config.Config, options openClawOpti
 	}
 	cmd := exec.Command(options.NodePath, filepath.Join(root, "bridge", "main.mjs"))
 	cmd.Dir, cmd.Env = root, conversationEnvironment(root, options.NodePath, provider.KeyEnv, key, token)
-	process, err := launchChatProcess(cmd)
+	process, err := launchChatProcess(cmd, diagnostic)
 	if err != nil {
+		diagnostic.finish("launch_failed")
 		return nil, err
 	}
 	bootstrap := chatCommand{Action: "bootstrap", Entry: options.EntryPath, Port: port, Token: token,
 		Prompt: &plan.Application, PromptInstance: plan.Instance}
-	if err := process.call(ctx, bootstrap, nil); err != nil {
-		process.close()
-		return nil, conversation.Fail("unavailable", "聊天运行时启动失败或超时，请刷新重试")
+	if deadline, ok := ctx.Deadline(); ok {
+		bootstrap.StartupTimeoutMS = max(1, min(conversationStartupBudget.Milliseconds(), time.Until(deadline).Milliseconds()-1000))
 	}
+	if err := process.call(ctx, bootstrap, nil); err != nil {
+		outcome := "bootstrap_failed"
+		if errors.Is(err, context.DeadlineExceeded) {
+			outcome = "startup_timeout"
+		}
+		if errors.Is(err, context.Canceled) {
+			outcome = "startup_cancelled"
+		}
+		diagnostic.finish(outcome)
+		if cleanupErr := process.close(); cleanupErr != nil {
+			return process, cleanupErr
+		}
+		return nil, conversation.Fail("unavailable", "聊天运行时启动失败，请查看启动诊断后重试")
+	}
+	diagnostic.finish("ready")
 	return process, nil
 }
 
 func (r *ConversationRuntime) Close() error {
 	r.cancel()
+	r.gate <- struct{}{}
+	startup := r.startup
+	<-r.gate
+	if startup != nil {
+		<-startup.done
+	}
 	r.gate <- struct{}{}
 	defer func() { <-r.gate }()
 	if r.process != nil {
@@ -221,6 +192,13 @@ func (r *ConversationRuntime) Create(ctx context.Context, binding conversation.B
 	result := binding
 	err := r.invoke(ctx, binding, chatCommand{Action: "create"}, &result)
 	return result, err
+}
+
+// Queue preparation waits for startup before starting the submission deadline.
+// It never sends a model message.
+func (r *ConversationRuntime) Prepare(ctx context.Context, binding conversation.Binding) error {
+	_, err := r.ensure(ctx, binding)
+	return err
 }
 
 func (r *ConversationRuntime) Submit(ctx context.Context, binding conversation.Binding, submission conversation.Submission) (conversation.Receipt, error) {

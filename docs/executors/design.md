@@ -8,6 +8,8 @@
 
 `Runtime` 接口嵌入 Executor，提供 Describe、Validate、Discover、Check 和 ProtectedPaths。静态工厂只登记实际实现的 adapter，当前为 OpenClaw；Selected 在每次 attempt 按当前配置解析 adapter。环境管理使用同一工厂发现和诊断，应用入口不直接实例化具体 agent。
 
+按需准入增加本地配置能力检查：公共层校验选择和凭据，adapter 声明聊天与任务各自的本地安装条件，返回稳定 code/detail。检查读取固定数量的路径/包元数据，不启动 Node/OpenClaw，不递归校验依赖或请求模型；版本执行诊断仍由 Check 和实际 runtime 承担。能力 available 是“配置可尝试使用”，与手动 probe 通过分开。任务提交前使用同一判断，执行时重新校验必要配置；聊天使用同源本地规则且不依赖任务工具插件或授权目录。见 [按需配置决策](../assistant/adr/009-on-demand-model-readiness.md)。
+
 将运行时专用选项放在 Config.runtime_options[runtime ID] JSON 中，由该适配器解析和校验；公共配置与 CLI 不声明厂商专用字段。CLI 用 --agent-runtime 和 --runtime-options（JSON 文件）选择及配置；旧 --node/--openclaw/--plugin/--provider 参数由此替代。历史 flat JSON 字段仅由兼容迁移模块读取，保存时移除，身份和凭据文件不改写。
 
 适配器 ProtectedPaths 返回已知运行时、宿主、工具插件和模型插件保护目录。公共授权目录校验统一拒绝与这些目录及节点数据目录重叠，解析现有目录/祖先的符号链接与 junction 后再比较；目录声明或解析失败显式拒绝。更换运行时选项时对既有授权目录重新校验。

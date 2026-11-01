@@ -1,0 +1,26 @@
+[
+  {
+    "local_node_id": "node-a",
+    "request": {
+      "request_id": "request-default",
+      "project_id": "workspace",
+      "goal": "你好 \u003ctag\u003e\u0026\n\t \u2028 \u2029 😀",
+      "start_before": "2026-10-30T01:00:00.000Z",
+      "mode": "execute"
+    },
+    "digest": "62044215e0f361ef25b75f084fc4c02104d2f7d34739e4a6da88b6f0a57326d3"
+  },
+  {
+    "local_node_id": "node-a",
+    "request": {
+      "request_id": "request-remote",
+      "project_id": "workspace",
+      "goal": "write file",
+      "start_before": "2026-10-30T01:00:00.000Z",
+      "mode": "execute",
+      "target": "node-b",
+      "target_explicit": true
+    },
+    "digest": "4526f2286e31c64e5d59e743386f196762a4706082b79b4a91c5d107b43a3676"
+  }
+]

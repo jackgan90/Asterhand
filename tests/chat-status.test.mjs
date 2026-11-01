@@ -10,7 +10,7 @@ test('send, preparation and generation share one reply status; hiding and errors
   const running = {delivery: 'accepted', run: 'running', persistence: 'saved'};
   const [label, dots] = container.children;
   view.visible(true);
-  for (const turn of [null, {delivery: 'pending', run: 'pending'}, {delivery: 'accepted', run: 'pending'}, running]) {
+  for (const turn of [null, {delivery: 'queued', run: 'queued'}, {delivery: 'pending', run: 'pending'}, {delivery: 'accepted', run: 'pending'}, running]) {
     view.turn(turn, '', turn === null);
     assert.equal(container.textContent, '正在回复...'); assert.equal(dots.hidden, false);
   }

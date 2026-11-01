@@ -26,7 +26,7 @@ irm https://raw.githubusercontent.com/jackgan90/Asterhand/main/install.ps1 -Erro
 
 `irm` 下载脚本，`iex` 在内存中执行，无需手动保存文件。指定版本或标签的一行命令见 [安装指南](docs/installation/quickstart.md)。版本必须已公开发布；没有稳定版时，可显式选择已发布的预发布版。
 
-脚本解析目标后下载同一标签的完整包，包含 Node.js、OpenClaw 和模型插件，并补齐 Microsoft VC++ x64 运行库、WebView2 Runtime 与 Tailscale。安装可选择创建桌面图标，也可显式传入 `-DesktopShortcut Create` 或 `Skip`；完成后退出，不启动节点、不要求模型凭据或网络登录。用户随后双击桌面图标，或运行安装目录的 `AsterhandLauncher.exe` / `start.ps1`。让 A、B 加入同一 Tailscale 网络，在各自设置页配置凭据、授权目录并验证，再用 B 生成的配对码在 A 配对。桌面选择、旧包兼容和本地包模式见安装指南。
+脚本解析目标后下载同一标签的完整包，包含 Node.js、OpenClaw 和模型插件，并补齐 Microsoft VC++ x64 运行库、WebView2 Runtime 与 Tailscale。安装可选择创建桌面图标，也可显式传入 `-DesktopShortcut Create` 或 `Skip`；完成后退出，不启动节点、不要求模型凭据或网络登录。用户随后双击桌面图标，或运行安装目录的 `AsterhandLauncher.exe` / `start.ps1`。让 A、B 加入同一 Tailscale 网络，用 B 生成的配对码在 A 配对。模型凭据和文件授权目录按功能需要配置，保存后可直接使用，模型与工具测试为可选诊断。桌面选择、旧包兼容和本地包模式见安装指南。
 
 在 A 选择 B，发送“在授权目录新建 hello-world.txt，内容精确为 hello world，不添加换行或 BOM”。成功后检查 B 的实际文件及页面显示的 11 字节结果。完整步骤见 [安装、升级与诊断](docs/installation/quickstart.md)。
 

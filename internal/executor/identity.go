@@ -20,11 +20,11 @@ func ExecutionIdentity(c config.Config) string {
 	}{c.AgentRuntime, c.LLM, c.RuntimeOptions[c.AgentRuntime]})
 }
 
-// A new binary or dependency set must earn readiness with a fresh tool probe.
+// Diagnostic evidence belongs to one build/configuration, not to task admission.
 func InvalidateStaleVerification(c *config.Manager) error {
 	cfg := c.Get()
 	if cfg.ModelVerified && (cfg.VerifiedBundle != BundleIdentity() || cfg.VerifiedExecution != ExecutionIdentity(cfg)) {
-		cfg.ModelVerified = false
+		cfg.InvalidateModelDiagnostic()
 		return c.Save(cfg)
 	}
 	return nil

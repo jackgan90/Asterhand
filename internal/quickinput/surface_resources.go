@@ -24,7 +24,7 @@ func resourceTypes() map[string]string {
 		allowed[name] = "text/css; charset=utf-8"
 	}
 	for _, name := range []string{"input.js", "input-model.mjs", "webview2-bridge.mjs", "chat-client.mjs",
-		"chat-model.mjs", "chat-renderer.mjs", "chat-ui.mjs", "chat-outbox.mjs", "chat-status.mjs",
+		"chat-model.mjs", "chat-renderer.mjs", "chat-ui.mjs", "chat-outbox.mjs", "chat-status.mjs", "chat-queue.mjs", "chat-connection.mjs",
 		"chat-markup.mjs", "chat-math.mjs"} {
 		allowed[name] = "application/javascript; charset=utf-8"
 	}

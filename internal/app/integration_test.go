@@ -17,10 +17,12 @@ import (
 	"github.com/jackgan90/Asterhand/internal/executor"
 	"github.com/jackgan90/Asterhand/internal/model"
 	"github.com/jackgan90/Asterhand/internal/peer"
+	"github.com/jackgan90/Asterhand/internal/testutil/runtimefixture"
 )
 
 type fakeExecutor struct {
 	calls    atomic.Int32
+	probes   atomic.Int32
 	started  chan struct{}
 	gate     chan struct{}
 	once     sync.Once
@@ -54,6 +56,10 @@ func (f *fakeExecutor) Execute(ctx context.Context, r executor.Run) (executor.Re
 	if r.Mode == "route" {
 		tool = "asterhand_submit"
 		args = map[string]string{"goal": "create hello world"}
+	}
+	if r.Mode == "probe" {
+		f.probes.Add(1)
+		tool, args = "asterhand_probe", map[string]string{}
 	}
 	if f.gate != nil {
 		select {
@@ -107,6 +113,7 @@ func newNode(t *testing.T, f *fakeExecutor) *testNode {
 	if err = c.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
+	runtimefixture.Configure(t, c)
 	n := &testNode{cfg: c, root: root}
 	n.start(t, f)
 	t.Cleanup(func() { n.close() })

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { taskViews, submissionState } from "../web/view-model.mjs";
+import { taskViews, submissionState, modelTaskStatus } from "../web/view-model.mjs";
 
 const job = (id, created, owner = "A") => ({id, created, owner, state:"succeeded", request:{goal:id}});
 test("new remote task stays first across routing, delivery, completion and refresh", () => {
@@ -48,4 +48,16 @@ test("submission explains disabled prerequisites and remains busy across refresh
   const busy=submissionState(ready,ready,project,"goal",true);
   assert.equal(busy.busy,true);
   assert.equal(busy.disabled,true);
+});
+
+test("capability status overrides old probe state while legacy peers retain their gate", () => {
+  const configured={ready:false,capabilities:{model_tasks:{available:true,code:"configured"}}};
+  const missing={ready:true,capabilities:{model_tasks:{available:false,code:"unknown-future-code",detail:"missing prerequisite"}}};
+  const project={id:"workspace"};
+  assert.equal(submissionState(configured,configured,project,"goal",false).disabled,false);
+  assert.match(submissionState(configured,missing,project,"goal",false).reason,/missing prerequisite/);
+  assert.equal(modelTaskStatus({ready:true,capabilities:{}}).available,false);
+  assert.equal(modelTaskStatus({ready:true}).available,true);
+  assert.match(modelTaskStatus({ready:false}).detail,/旧版验证规则/);
+  assert.equal(modelTaskStatus({...configured,online:false}).available,true);
 });

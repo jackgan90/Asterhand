@@ -73,3 +73,20 @@ func TestChatOutOfOrderHistoryAndCoalescedDraft(t *testing.T) {
 		t.Fatal("settled stale intent was retained")
 	}
 }
+
+func TestQueuedCustodyRecoversLostReplyAcrossHostRebuild(t *testing.T) {
+	op, conversation := model.ID(), model.ID()
+	c := &chatController{pending: map[string]*chatSubmission{op: {identity: hostipc.PendingSubmission{Operation: op, Conversation: conversation}, digest: model.Digest([]byte("pending body")), host: "old", sequence: 4, parentRevision: 9}}}
+	surface := &remoteSurface{session: "replacement", draft: &Draft{text: "pending body", revision: 9}}
+	response := wire.Response{Queue: &wire.QueueState{Entries: []wire.QueueItem{{Operation: op, Conversation: conversation, Kind: "send", State: "queued", Turn: &wire.Turn{Operation: op, Conversation: conversation, Delivery: "queued", Run: "queued"}}}}}
+	reply := c.decorate(surface, wire.Request{Action: "hello"}, response, "hello")
+	if reply.ClearSequence == nil || *reply.ClearSequence != 9 {
+		t.Fatal("queue custody did not recover lost acknowledgment")
+	}
+	if err := surface.draft.Update("new edit", 10); err != nil {
+		t.Fatal(err)
+	}
+	if reply = c.decorate(surface, wire.Request{Action: "queue"}, response, "queue"); reply.ClearSequence != nil {
+		t.Fatal("queued acknowledgment erased a newer draft")
+	}
+}

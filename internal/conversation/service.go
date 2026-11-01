@@ -10,25 +10,31 @@ import (
 )
 
 // Service has one node-wide generation slot. It shares no scheduling state with
-// file tasks. The catalog persists identities; Runtime owns all message bodies.
+// file tasks. The catalog persists identities; queued text lives only in RAM
+// until Runtime takes durable custody of the message body.
 type Service struct {
-	mu          sync.Mutex
-	observe     sync.Mutex
-	catalog     catalog
-	runtime     Runtime
-	active      *turnRecord
-	dispatching bool
-	creating    map[string]bool
-	stopping    bool
-	configuring bool
-	fault       error
-	ctx         context.Context
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
-	start       sync.Once
-	close       sync.Once
-	closeErr    error
-	onCompleted func()
+	queue         []*queuedOperation
+	queuePaused   string
+	queueWake     chan struct{}
+	queueStarted  bool
+	queueRevision uint64
+	mu            sync.Mutex
+	observe       sync.Mutex
+	catalog       catalog
+	runtime       Runtime
+	active        *turnRecord
+	dispatching   bool
+	creating      map[string]bool
+	stopping      bool
+	configuring   bool
+	fault         error
+	ctx           context.Context
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	start         sync.Once
+	close         sync.Once
+	closeErr      error
+	onCompleted   func()
 }
 
 // SetCompletionHandler connects a best-effort desktop notification. The handler
@@ -42,8 +48,9 @@ func (s *Service) SetCompletionHandler(handler func()) {
 func New(node string, records *store.Store, runtime Runtime) *Service {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{catalog: catalog{store: records, target: Target{Node: node, Role: DefaultRole}}, runtime: runtime,
-		creating: map[string]bool{}, ctx: ctx, cancel: cancel}
+		creating: map[string]bool{}, queueWake: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
 	s.recoverCatalog()
+	s.recoverQueueIntents()
 	return s
 }
 
@@ -98,8 +105,12 @@ func (s *Service) Start() {
 	})
 }
 
-func (s *Service) Call(ctx context.Context, request Request) (Response, error) {
-	response := Response{Target: s.Target()}
+func (s *Service) Call(ctx context.Context, request Request) (response Response, err error) {
+	response = Response{Target: s.Target()}
+	if request.Action == "connect" || request.Action == "connection" {
+		response.Connection = "unavailable"
+	}
+	defer func() { s.mu.Lock(); response.Queue = s.queueSnapshotLocked(); s.mu.Unlock() }()
 	if err := request.Validate(); err != nil {
 		return response, err
 	}
@@ -124,12 +135,24 @@ func (s *Service) Call(ctx context.Context, request Request) (Response, error) {
 	response.Prompt = descriptor.Prompt.Normalize()
 	if describeErr == nil {
 		caps := descriptor.Capabilities
-		if (request.Action == "create" || request.Action == "submit") && (!caps.History || !caps.DurableReceipts) ||
+		if (request.Action == "create" || request.Action == "submit" || request.Action == "prepare" || request.Action == "enqueue") && (!caps.History || !caps.DurableReceipts) ||
 			(request.Action == "history" || request.Action == "message") && !caps.History || request.Action == "cancel" && !caps.Cancellation {
 			return response, Fail("unsupported", "当前运行时未提供此会话能力")
 		}
 	}
 	switch request.Action {
+	case "connect", "connection":
+		if runtime, ok := s.runtime.(interface {
+			Connection(context.Context, bool) string
+		}); ok && describeErr == nil {
+			response.Connection = runtime.Connection(ctx, request.Action == "connect")
+		}
+		return response, nil
+	case "prepare", "enqueue", "queue", "queue_item", "queue_cancel", "queue_pause", "queue_resume":
+		if describeErr != nil && (request.Action == "prepare" || request.Action == "enqueue") {
+			return response, describeErr
+		}
+		return s.queueCall(ctx, request, response)
 	case "hello":
 		return response, describeErr
 	case "list":
@@ -161,6 +184,13 @@ func (s *Service) readOrCancel(ctx context.Context, request Request, response Re
 		return response, err
 	}
 	if item.Conversation.State == "creating" && request.Action == "history" {
+		s.mu.Lock()
+		queued := s.queuedCreationLocked(item.Conversation.ID)
+		s.mu.Unlock()
+		if queued {
+			response.Conversation = &item.Conversation
+			return response, nil
+		}
 		item, err = s.finishCreation(ctx, item)
 		if err != nil {
 			return response, err
@@ -180,6 +210,8 @@ func (s *Service) readOrCancel(ctx context.Context, request Request, response Re
 		}
 	}
 	switch request.Action {
+	case "select":
+		return response, nil
 	case "history":
 		if response.Turn != nil && (response.Turn.Delivery != "accepted" || response.Turn.Persistence != "saved") {
 			turn, _, reconcileErr := s.reconcile(ctx, response.Turn.Operation)
@@ -286,8 +318,8 @@ func (s *Service) finishCreation(ctx context.Context, item conversationRecord) (
 func (s *Service) BeginConfiguration() (func(), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.stopping || s.configuring || s.active != nil || len(s.creating) != 0 {
-		return nil, Fail("busy", "请先停止并核对当前聊天，再修改模型设置")
+	if s.stopping || s.configuring || s.active != nil || len(s.creating) != 0 || len(s.queue) != 0 {
+		return nil, Fail("busy", "请先处理待发消息，并停止和核对当前聊天，再修改模型设置")
 	}
 	s.configuring = true
 	var once sync.Once
@@ -297,7 +329,7 @@ func (s *Service) BeginConfiguration() (func(), error) {
 func (s *Service) BeginStop(confirmed bool, otherAdmission ...func() bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !confirmed && (s.active != nil || len(s.creating) != 0) {
+	if !confirmed && (s.active != nil || len(s.creating) != 0 || len(s.queue) != 0) {
 		return false
 	}
 	for _, ready := range otherAdmission {
@@ -313,6 +345,7 @@ func (s *Service) Close() error {
 	s.close.Do(func() {
 		s.BeginStop(true)
 		s.mu.Lock()
+		s.discardQueueLocked()
 		var operation string
 		if s.active != nil {
 			operation = s.active.Turn.Operation
@@ -327,6 +360,9 @@ func (s *Service) Close() error {
 		s.cancel()
 		s.closeErr = s.runtime.Close()
 		s.wg.Wait()
+		s.mu.Lock()
+		s.queue = nil
+		s.mu.Unlock()
 	})
 	return s.closeErr
 }

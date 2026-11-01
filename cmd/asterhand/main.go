@@ -89,7 +89,7 @@ func run() error {
 	}
 	if *basic {
 		cfg.Profile = "basic"
-		cfg.ModelVerified = false
+		cfg.InvalidateModelDiagnostic()
 	}
 	if *web != "" {
 		cfg.WebListen = *web
@@ -109,7 +109,7 @@ func run() error {
 		return err
 	}
 	if *agent != "" || *optionsPath != "" {
-		cfg.ModelVerified = false
+		cfg.InvalidateModelDiagnostic()
 	}
 	for _, project := range cfg.Projects {
 		if err = executor.ValidateWorkspace(cfg, c.Home, project.Root); err != nil {

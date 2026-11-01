@@ -13,6 +13,9 @@ import (
 
 func TestSettingsSelectionRejectsBeforeWritingAndInvalidatesProbe(t *testing.T) {
 	n := newNode(t, &fakeExecutor{})
+	if err := n.cfg.SetKey(""); err != nil {
+		t.Fatal(err)
+	}
 	c := n.cfg.Get()
 	before := c.LLM
 	save := func(selection llm.Selection, runtime, key string) int {
@@ -81,6 +84,9 @@ func TestChatSettingsAllowNoFileWorkspace(t *testing.T) {
 
 func TestSettingsProtectsAdapterDirectoriesBeforeWritingKey(t *testing.T) {
 	n := newNode(t, &fakeExecutor{})
+	if err := n.cfg.SetKey(""); err != nil {
+		t.Fatal(err)
+	}
 	c := n.cfg.Get()
 	base := t.TempDir()
 	raw, _ := json.Marshal(map[string]any{"node_path": filepath.Join(base, "host", "node.exe"), "entry_path": filepath.Join(base, "agent", "entry.mjs"), "plugin_path": filepath.Join(base, "tools"), "provider_paths": map[string]string{c.LLM.Provider: filepath.Join(base, "model")}})

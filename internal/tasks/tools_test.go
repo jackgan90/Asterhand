@@ -14,6 +14,7 @@ import (
 	"github.com/jackgan90/Asterhand/internal/config"
 	"github.com/jackgan90/Asterhand/internal/model"
 	"github.com/jackgan90/Asterhand/internal/store"
+	"github.com/jackgan90/Asterhand/internal/testutil/runtimefixture"
 )
 
 func toolsFixture(t *testing.T) (*Engine, model.Job, string, string) {
@@ -28,6 +29,7 @@ func toolsFixture(t *testing.T) (*Engine, model.Job, string, string) {
 	cfg := c.Get()
 	cfg.Projects = []config.Project{{ID: "p", Name: "test", Root: root}}
 	c.Save(cfg)
+	runtimefixture.Configure(t, c)
 	s, err := store.Open(filepath.Join(base, "state.db"))
 	if err != nil {
 		t.Fatal(err)

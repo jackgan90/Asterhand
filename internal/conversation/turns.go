@@ -16,7 +16,7 @@ func requestDigest(request Request) string {
 	}{request.Target, request.Conversation, request.Text, request.DraftRevision})
 }
 
-func (s *Service) reserve(request Request) (*turnRecord, bool, error) {
+func (s *Service) reserve(request Request, queued bool) (*turnRecord, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	old, err := s.catalog.turn(request.Operation)
@@ -29,6 +29,20 @@ func (s *Service) reserve(request Request) (*turnRecord, bool, error) {
 	if !isMissing(err) {
 		return nil, false, err
 	}
+	var intent queueIntent
+	if err := s.catalog.store.Get("chat-intent", request.Operation, &intent); err == nil {
+		if intent.Digest != requestDigest(request) {
+			return nil, false, Fail("conflict", "操作身份已绑定其他消息")
+		}
+		if intent.Turn.Delivery == "rejected" {
+			return &turnRecord{Turn: intent.Turn, Digest: intent.Digest}, false, nil
+		}
+	} else if !isMissing(err) {
+		return nil, false, err
+	}
+	if !queued && len(s.queue) != 0 {
+		return nil, false, Fail("busy", "已有排队消息，请使用发送队列")
+	}
 	if s.stopping || s.configuring || s.active != nil || len(s.creating) != 0 {
 		return nil, false, Fail("busy", "当前节点已有聊天正在运行或核对，草稿已保留")
 	}
@@ -39,7 +53,11 @@ func (s *Service) reserve(request Request) (*turnRecord, bool, error) {
 		return nil, false, err
 	}
 	if !descriptor.CanSend {
-		return nil, false, Fail("not_configured", "请先在本机设置配置模型凭据")
+		detail := descriptor.SendError
+		if detail == "" {
+			detail = "请先在本机设置配置模型凭据"
+		}
+		return nil, false, Fail("not_configured", detail)
 	}
 	item, err := s.catalog.conversation(request.Conversation)
 	if err != nil {
@@ -75,10 +93,14 @@ func (s *Service) reserve(request Request) (*turnRecord, bool, error) {
 }
 
 func (s *Service) submit(ctx context.Context, request Request) (*Turn, error) {
+	return s.dispatch(ctx, request, false)
+}
+
+func (s *Service) dispatch(ctx context.Context, request Request, queued bool) (*Turn, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	record, dispatch, err := s.reserve(request)
+	record, dispatch, err := s.reserve(request, queued)
 	if err != nil {
 		if record != nil {
 			value := record.Turn

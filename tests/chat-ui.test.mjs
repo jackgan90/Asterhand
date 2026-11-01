@@ -32,10 +32,10 @@ class Node {
   async fire(name) { await Promise.all((this.listeners.get(name)||[]).map(listener=>listener({}))); }
 }
 
-function harness() {
+function harness(queued = false) {
   const elements = new Map();
   const ids=['chat-panel','chat-scroll','chat-status','chat-conversations','chat-send','chat-stop','chat-older','chat-messages',
-    'chat-draft-decision','chat-draft-cancel','chat-draft-discard','chat-expand','chat-conversation-name','chat-history','chat-new','chat-refresh','chat-latest','chat-pin'];
+    'chat-draft-decision','chat-draft-cancel','chat-draft-discard','chat-expand','chat-conversation-name','chat-history','chat-new','chat-refresh','chat-latest','chat-pin','chat-queue-resume','chat-connection'];
   for(const id of ids) elements.set(id,new Node());
   Object.defineProperty(elements.get('chat-scroll'),'scrollHeight',{get:()=>elements.get('chat-messages').children.length*10});
   globalThis.document={getElementById:id=>elements.get(id),createElement:tag=>new Node(tag),
@@ -52,6 +52,8 @@ function harness() {
   const requests=[], held=[];
   const holdActions=new Set(), overrides=new Map();
   let running=true, draft='', revision=1, total=100, reset=false;
+  let queueRevision=0;
+  const queueState={entries:[],paused:false,limit:8};
   const turn=()=>({id:'turn-00000000001',operation_id:'operation-000001',conversation_id:A,delivery:'accepted',
     run:running?'running':'completed',persistence:running?'pending':'saved',assistant_message_id:running?'':'final-message'});
   let staged=null;
@@ -64,8 +66,22 @@ function harness() {
       const response={target,can_send:true,busy:running};
       switch(request.action){
         case 'hello': break;
+        case 'connect': case 'connection': response.connection='connected'; break;
         case 'list': response.conversations=[{id:A,updated_at:'2026-10-27T00:00:00Z',state:'ready'},{id:B,updated_at:'2026-10-26T00:00:00Z',state:'ready'}];break;
         case 'create': response.conversation={id:B,state:'ready'};break;
+        case 'select': response.conversation={id:request.conversation_id,state:'ready'};break;
+        case 'prepare':
+          response.conversation={id:B,state:'creating'};
+          queueState.entries.push({kind:'create',state:'queued',operation_id:request.operation_id,conversation_id:B});break;
+        case 'enqueue': {
+          response.turn={id:request.operation_id,operation_id:request.operation_id,conversation_id:request.conversation_id,delivery:'queued',run:'queued'};
+          queueState.entries.push({kind:'send',state:'queued',operation_id:request.operation_id,conversation_id:request.conversation_id,text:request.text,turn:response.turn});break;
+        }
+        case 'queue_item': response.queue_item=queueState.entries.find(item=>item.operation_id===request.operation_id);break;
+        case 'queue_cancel': response.queue_item=queueState.entries.find(item=>item.operation_id===request.operation_id);
+          queueState.entries=queueState.entries.filter(item=>item.operation_id!==request.operation_id);break;
+        case 'queue_pause': queueState.paused=true;break;
+        case 'queue_resume': queueState.paused=false;break;
         case 'history':
           response.conversation={id:request.conversation_id,state:'ready'};
           response.turn=request.conversation_id===A?turn():null;
@@ -75,20 +91,219 @@ function harness() {
         case 'reconcile': response.turn=turn();break;
         case 'submit': response.turn={...turn(),conversation_id:request.conversation_id,operation_id:request.operation_id};break;
       }
+      if(queued)response.queue={...queueState,entries:queueState.entries.map(({text,...item})=>item),revision:++queueRevision};
       Object.assign(response, overrides.get(request.action)?.(request, response));
-      const send = (extra={}, envelope={}) => bridge.emit({kind:'chat_result',id:value.id,reply:{...envelope,response:{...response,...extra}}});
+      const send = (extra={}, envelope={}) => bridge.emit({kind:'chat_result',id:value.id,reply:{...(queued && request.action==='enqueue' && !response.error ? {clear_sequence:request.draft_revision} : {}),...envelope,response:{...response,...extra}}});
       if(holdActions.has(request.action)) held.push({request,send});
       else queueMicrotask(()=>send());
     }};
   const panel=chatPanel(bridge,editor);
-  return {elements,requests,bridge,editor,
+  return {elements,requests,bridge,editor,queueState,
     hold(action){holdActions.add(action);}, override(action,fn){overrides.set(action,fn);},
     reply(action,response={},envelope={}){const index=held.findIndex(item=>item.request.action===action);assert.ok(index>=0);held.splice(index,1)[0].send(response,envelope);},
     get confirmations(){return confirmations;},setDraft(value){draft=value;revision++;},setRunning(value){running=value;},setTotal(value){total=value;},setReset(value){reset=value;},
     async open(){bridge.emit({kind:'focus'});await flush();await elements.get('chat-expand').fire('click');await flush();},
     async tick(){const entry=[...timers].find(([,value])=>value.ms===500);assert.ok(entry,'expected scheduled reconciliation');timers.delete(entry[0]);await entry[1].fn();await flush();},
+    async connectionTick(){const entry=[...timers].find(([,value])=>value.ms===1000);assert.ok(entry,'expected connection poll');timers.delete(entry[0]);await entry[1].fn();await flush();},
+    get connectionTimers(){return [...timers.values()].filter(value=>value.ms===1000).length;},
     close(){panel.dispose();globalThis.setTimeout=originalSetTimeout;globalThis.clearTimeout=originalClearTimeout;}};
 }
+
+test('connection label is independent of queue, reply status and conversation selection', async () => {
+  const h = harness(true);
+  try {
+    h.override('connect', () => ({connection:'connecting'}));
+    await h.open();
+    const label = h.elements.get('chat-connection');
+    assert.equal(label.textContent, '连接中');
+    assert.equal(label.dataset.state, 'connecting');
+    await h.connectionTick();
+    assert.equal(label.textContent, '已连接');
+    h.setDraft('hello'); await h.editor.submit(); await flush();
+    const reply = h.elements.get('chat-status').textContent;
+    h.override('connection', () => ({connection:'unavailable', busy:false}));
+    await h.connectionTick();
+    assert.equal(label.textContent, '无法连接');
+    assert.equal(label.dataset.state, 'unavailable');
+    assert.equal(h.elements.get('chat-status').textContent, reply);
+    assert.equal(h.elements.get('chat-send').disabled, false);
+    await h.elements.get('chat-stop').fire('click'); await flush();
+    assert.equal(label.textContent, '无法连接');
+    await h.elements.get('chat-new').fire('click'); await flush();
+    assert.equal(label.textContent, '无法连接');
+  } finally { h.close(); }
+});
+
+test('expanding before hello finishes connects with the resolved target and no credential failure detail', async () => {
+  const h = harness(true);
+  try {
+    h.hold('hello');
+    h.override('connect', () => ({connection:'unavailable'}));
+    await h.open();
+    assert.equal(h.elements.get('chat-connection').textContent, '连接中');
+    h.reply('hello', {can_send:false}); await flush();
+    assert.equal(h.requests.filter(request => request.action === 'connect').length, 1);
+    assert.equal(h.elements.get('chat-connection').textContent, '无法连接');
+    assert.equal(h.elements.get('chat-connection').getAttribute('title'), null);
+  } finally { h.close(); }
+});
+
+test('empty expanded chat connects once; visibility stops polling and discards delayed snapshots', async () => {
+  const h = harness(true);
+  try {
+    h.setRunning(false);
+    h.override('list', () => ({conversations:[]}));
+    await h.open();
+    assert.equal(h.elements.get('chat-connection').textContent, '已连接');
+    assert.equal(h.requests.filter(request => request.action === 'connect').length, 1);
+    assert.ok(!h.requests.some(request => ['create','prepare','submit','enqueue'].includes(request.action)));
+    h.hold('connection');
+    const pending = h.connectionTick(); await flush();
+    h.bridge.emit({kind:'visibility', visible:false});
+    assert.equal(h.connectionTimers, 0);
+    h.reply('connection', {connection:'unavailable'}); await pending;
+    assert.equal(h.elements.get('chat-connection').textContent, '已连接');
+    h.bridge.emit({kind:'focus'}); await flush();
+    assert.equal(h.elements.get('chat-connection').textContent, '已连接');
+    assert.equal(h.connectionTimers, 1);
+    await h.elements.get('chat-expand').fire('click');
+    assert.equal(h.connectionTimers, 0);
+  } finally { h.close(); }
+});
+
+test('startup queue accepts successive sends to the prepared conversation without waiting for history',async()=>{
+  const h=harness(true);
+  try {
+    h.setRunning(false);await h.open();
+    h.hold('history');
+    const refreshing=h.elements.get('chat-refresh').fire('click');await flush();
+    await h.elements.get('chat-new').fire('click');await flush();
+    assert.equal(h.elements.get('chat-conversation-name').textContent,'对话 '+B.slice(0,8));
+    for(const text of ['first queued','second queued']){
+      h.setDraft(text);await h.editor.submit();await flush();
+      assert.equal(h.elements.get('chat-send').disabled,false);
+      assert.equal(h.editor.snapshot().text,'');
+    }
+    const sends=h.requests.filter(request=>request.action==='enqueue');
+    assert.equal(sends.length,2);
+    assert.ok(sends.every(request=>request.conversation_id===B));
+    assert.notEqual(sends[0].operation_id,sends[1].operation_id);
+    assert.match(h.elements.get('chat-messages').textContent,/first queued/);
+    assert.match(h.elements.get('chat-messages').textContent,/second queued/);
+    assert.equal(h.elements.get('chat-status').textContent,'正在回复...');
+    assert.doesNotMatch(h.elements.get('chat-messages').textContent,/待发送|取回编辑|取消发送/);
+    h.reply('history');await refreshing;await flush();
+    assert.equal(h.elements.get('chat-conversation-name').textContent,'对话 '+B.slice(0,8));
+  } finally {h.close();}
+});
+
+test('startup, preparation and accepted generation keep one ordinary bubble and reply status',async()=>{
+  const h=harness(true);
+  try {
+    h.setRunning(false);await h.open();h.setDraft('one smooth message');await h.editor.submit();await flush();
+    const rows=h.elements.get('chat-messages'),status=h.elements.get('chat-status');
+    const bubble=rows.children.find(row=>row.textContent.includes('one smooth message'));
+    const entry=h.queueState.entries.find(item=>item.kind==='send');
+    const assertWaiting=()=>{
+      assert.ok(rows.children.includes(bubble),'stage transition replaced the message bubble');
+      assert.equal(status.textContent,'正在回复...');
+      assert.equal(status.children[1].hidden,false);
+      assert.doesNotMatch(bubble.textContent,/待发送|取回编辑|取消发送|正在准备/);
+      assert.equal(h.elements.get('chat-queue-resume').hidden,true);
+    };
+    for(const phase of ['queued','preparing','sending']) {
+      entry.state=phase;
+      await h.tick();assertWaiting();
+    }
+    const accepted={...entry.turn,id:'native-turn',delivery:'accepted',run:'running',user_message_id:'native-user'};
+    h.queueState.entries=[];h.queueState.active=accepted;
+    h.override('queue_item',()=>({queue_item:{...entry,state:'settled',turn:accepted}}));
+    h.override('reconcile',()=>({turn:accepted}));
+    h.override('history',()=>({turn:accepted,page:{messages:[{id:'native-user',role:'user',blocks:[{type:'text',text:'one smooth message'}]}]}}));
+    await h.tick();assertWaiting();
+    assert.equal(rows.children.filter(row=>row.textContent.includes('one smooth message')).length,1);
+    assert.equal(h.requests.filter(request=>request.action==='enqueue').length,1);
+  } finally {h.close();}
+});
+
+test('a new empty conversation does not inherit another conversation startup status',async()=>{
+  const h=harness(true);
+  try {
+    h.setRunning(false);await h.open();h.setDraft('message for A');await h.editor.submit();await flush();
+    await h.elements.get('chat-new').fire('click');await flush();
+    assert.doesNotMatch(h.elements.get('chat-status').textContent,/正在回复|待发送|正在准备/);
+    assert.equal(h.elements.get('chat-status').children[1].hidden,true);
+    assert.doesNotMatch(h.elements.get('chat-messages').textContent,/message for A/);
+  } finally {h.close();}
+});
+
+test('recovery controls appear only after a real startup failure and disappear on retry',async()=>{
+  const h=harness(true);
+  try {
+    h.setRunning(false);await h.open();await h.elements.get('chat-new').fire('click');await flush();
+    h.setDraft('retain on actual failure');await h.editor.submit();await flush();
+    const rows=h.elements.get('chat-messages'),status=h.elements.get('chat-status');
+    assert.doesNotMatch(rows.textContent,/取回编辑|取消发送/);
+    const creation=h.queueState.entries.find(item=>item.kind==='create');
+    creation.state='failed';creation.error={message:'连接失败，请重试'};h.queueState.paused=true;
+    await h.tick();
+    assert.equal(status.textContent,'连接失败，请重试');
+    assert.equal(status.children[1].hidden,true);
+    assert.match(rows.textContent,/取回编辑/);
+    assert.match(rows.textContent,/取消发送/);
+    creation.state='preparing';h.queueState.paused=false;
+    await h.tick();
+    assert.equal(status.textContent,'正在回复...');
+    assert.doesNotMatch(rows.textContent,/取回编辑|取消发送/);
+    assert.equal(h.requests.filter(request=>request.action==='enqueue').length,1);
+  } finally {h.close();}
+});
+
+test('queued messages survive hiding and explicit pause requires resume',async()=>{
+  const h=harness(true);
+  try {
+    h.setRunning(false);await h.open();h.setDraft('keep while hidden');await h.editor.submit();await flush();
+    await h.elements.get('chat-stop').fire('click');await flush();
+    assert.equal(h.queueState.paused,true);
+    assert.equal(h.elements.get('chat-status').textContent,'已停止');
+    assert.doesNotMatch(h.elements.get('chat-messages').textContent,/取回编辑|取消发送/);
+    assert.equal(h.elements.get('chat-queue-resume').hidden,false);
+    h.bridge.emit({kind:'visibility',visible:false});
+    h.bridge.emit({kind:'visibility',visible:true});await h.tick();
+    assert.equal(h.queueState.paused,true);
+    assert.match(h.elements.get('chat-messages').textContent,/keep while hidden/);
+    await h.elements.get('chat-queue-resume').fire('click');await flush();
+    assert.equal(h.queueState.paused,false);
+    assert.equal(h.requests.filter(request=>request.action==='enqueue').length,1);
+  } finally {h.close();}
+});
+
+test('queue admission failure restores only the submitted draft',async()=>{
+  const h=harness(true);
+  try {
+    h.setRunning(false);await h.open();
+    h.override('enqueue',()=>({turn:null,error:{code:'queue_full',message:'待发队列已满，当前草稿已保留'}}));
+    h.setDraft('overflow draft');await h.editor.submit();await flush();
+    assert.equal(h.editor.snapshot().text,'overflow draft');
+    assert.match(h.elements.get('chat-status').textContent,/队列已满/);
+  } finally {h.close();}
+});
+
+test('queue completion between polls still loads native reply history',async()=>{
+  const h=harness(true);
+  try {
+    h.setRunning(false);await h.open();h.setDraft('fast queue');await h.editor.submit();await flush();
+    const request=h.requests.find(item=>item.action==='enqueue');
+    const completed={operation_id:request.operation_id,conversation_id:A,id:'fast-native-turn',delivery:'accepted',run:'completed',persistence:'saved',user_message_id:'fast-user'};
+    h.queueState.entries=[];
+    h.override('queue_item',()=>({queue_item:{operation_id:request.operation_id,conversation_id:A,kind:'send',state:'settled',turn:completed}}));
+    h.override('history',()=>({turn:completed,page:{messages:[{id:'fast-user',role:'user',blocks:[{type:'text',text:'fast queue'}]},{id:'fast-reply',role:'assistant',blocks:[{type:'text',text:'fast reply received'}]}]}}));
+    await h.tick();
+    assert.match(h.elements.get('chat-messages').textContent,/fast reply received/);
+    assert.equal(h.elements.get('chat-messages').children.filter(row=>row.textContent.includes('fast queue')).length,1);
+    assert.equal(h.requests.filter(item=>item.action==='enqueue').length,1);
+  } finally {h.close();}
+});
 
 test('new conversation requires a decision before carrying an unsent draft to its target',async()=>{
   const h=harness();

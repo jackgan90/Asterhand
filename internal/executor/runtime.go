@@ -34,6 +34,7 @@ type Runtime interface {
 	Discover(config.Config, string) config.Config
 	Check(context.Context, config.Config) (map[string]any, error)
 	Validate(config.Config) error
+	Configuration(config.Config) ConfigurationCapabilities
 	ProtectedPaths(config.Config) ([]string, error)
 }
 
@@ -70,7 +71,7 @@ func (s *Selected) Execute(ctx context.Context, r Run) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
-	if err := ValidateSelection(s.Config.Get()); err != nil {
+	if err := RequireTaskConfiguration(s.Config, s.Config.Get()); err != nil {
 		return Result{}, err
 	}
 	runtime, err := NewRuntime(s.Config)

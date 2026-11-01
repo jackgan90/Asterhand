@@ -25,27 +25,51 @@ export class Gateway {
     this.started = Date.now();
   }
 
-  async start({entry, port, token}) {
+  async start({entry, port, token, startup_timeout_ms = 55000}) {
+    if (!Number.isInteger(startup_timeout_ms) || startup_timeout_ms < 1 || startup_timeout_ms > 180000) {
+      throw failure('invalid_request', '运行时启动等待参数无效');
+    }
     this.port = port;
     this.token = token;
     // Go has already assigned this bridge to its kill-on-close Job. Children
     // therefore inherit ownership before they execute runtime code.
     this.child = spawn(process.execPath, [entry, 'gateway', 'run', '--port', String(port), '--bind', 'loopback'], {
-      cwd: process.cwd(), env: process.env, windowsHide: true, stdio: 'ignore',
+      cwd: process.cwd(), env: process.env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
     });
+    // Go drains and filters startup output into fixed, bounded diagnostic fields.
+    // After authentication, discard runtime output including all model content.
+    let starting = true;
+    let diagnosticBytes = 0;
+    const diagnostic = chunk => {
+      if (!starting || diagnosticBytes >= 256 * 1024) return;
+      const part = chunk.subarray(0, 256 * 1024 - diagnosticBytes);
+      diagnosticBytes += part.length;
+      process.stderr.write(part);
+    };
+    this.child.stdout.on('data', diagnostic);
+    this.child.stderr.on('data', diagnostic);
     this.child.on('error', () => { this.childFailed = true; this.onExit(); });
-    this.child.on('exit', () => { this.childFailed = true; this.disconnect(); this.onExit(); });
-    const deadline = Date.now() + 55000;
+    this.child.on('exit', (code, signal) => {
+      const safeSignal = ['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGABRT', 'SIGSEGV'].includes(signal) ? signal : 'none';
+      process.stderr.write(`[asterhand] gateway exited code=${Number.isInteger(code) ? code : 'null'} signal=${safeSignal}\n`);
+      this.childFailed = true;
+      this.disconnect();
+      this.onExit();
+    });
+    const deadline = Date.now() + startup_timeout_ms;
     while (Date.now() < deadline) {
       if (this.childFailed) throw failure('unavailable', '聊天运行时未能启动');
       try {
         await this.connect();
+        process.stderr.write('[asterhand] gateway authenticated\n');
+        starting = false;
         return;
       } catch {
         this.disconnect();
         await delay(300);
       }
     }
+    process.stderr.write('[asterhand] gateway startup timeout\n');
     throw failure('unavailable', '聊天运行时启动超时');
   }
 

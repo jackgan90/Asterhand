@@ -29,7 +29,7 @@ func (a *App) info(projects []string) map[string]any {
 			visible = append(visible, p)
 		}
 	}
-	return map[string]any{"node_id": c.NodeID, "name": c.Name, "version": config.Version, "ready": c.ModelVerified, "projects": visible, "endpoint": c.Endpoint, "model": c.LLM.Model, "agent_runtime": c.AgentRuntime, "source_sha256": config.SourceDigest, "bundle_identity": executor.BundleIdentity(), "network_warning": network.ConnectionWarning(c.Endpoint, c.PeerListen, a.peerAddress), "restart_required": !network.ListenerMatches(c.PeerListen, a.peerAddress)}
+	return map[string]any{"node_id": c.NodeID, "name": c.Name, "version": config.Version, "ready": c.ModelVerified, "capabilities": executor.ConfiguredCapabilities(a.Config, c), "projects": visible, "endpoint": c.Endpoint, "model": c.LLM.Model, "agent_runtime": c.AgentRuntime, "source_sha256": config.SourceDigest, "bundle_identity": executor.BundleIdentity(), "network_warning": network.ConnectionWarning(c.Endpoint, c.PeerListen, a.peerAddress), "restart_required": !network.ListenerMatches(c.PeerListen, a.peerAddress)}
 }
 func (a *App) api(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/api/desktop/") {
@@ -239,30 +239,28 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	workspaceChanged := len(before.Projects) != 1 || before.Projects[0].ID != "workspace" || before.Projects[0].Root != root
-	requiresProbe := input.Key != "" || input.DeleteKey || workspaceChanged || executor.ExecutionIdentity(before) != executor.ExecutionIdentity(c)
-	if requiresProbe {
-		c.ModelVerified = false
+	workspaceChanged := len(before.Projects) != len(c.Projects) || len(before.Projects) == 1 && (before.Projects[0].ID != "workspace" || before.Projects[0].Root != root)
+	diagnosticChanged := input.Key != "" || input.DeleteKey || workspaceChanged || executor.ExecutionIdentity(before) != executor.ExecutionIdentity(c)
+	if diagnosticChanged {
+		c.InvalidateModelDiagnostic()
 	}
 	if err = a.Config.Save(c); err != nil {
 		fail(w, 500, err)
 		return
 	}
-	if requiresProbe {
-		a.probeStatus, a.probeError = "not_run", ""
+	if diagnosticChanged {
+		a.probeStatus, a.probeError = string(c.DiagnosticStatus()), ""
 	}
 	a.requestPeerSync()
-	send(w, 200, map[string]bool{"saved": true, "ready": c.ModelVerified, "restart_required": !network.ListenerMatches(c.PeerListen, a.peerAddress)})
+	send(w, 200, map[string]any{"saved": true, "ready": c.ModelVerified, "capabilities": executor.ConfiguredCapabilities(a.Config, c), "restart_required": !network.ListenerMatches(c.PeerListen, a.peerAddress)})
 }
 func (a *App) probe(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	if r.Method == "GET" {
 		state, detail := a.probeStatus, a.probeError
 		if !a.probeRunning {
-			if a.Config.Get().ModelVerified {
-				state, detail = "passed", ""
-			} else if state == "passed" {
-				state, detail = "not_run", ""
+			if state != "failed" {
+				state, detail = string(a.Config.Get().DiagnosticStatus()), ""
 			}
 		}
 		a.mu.Unlock()
@@ -304,7 +302,9 @@ func (a *App) probe(w http.ResponseWriter, r *http.Request) {
 		}
 		c := a.Config.Get()
 		c.ModelVerified = err == nil
+		c.ModelDiagnostic = config.DiagnosticFailed
 		if err == nil {
+			c.ModelDiagnostic = config.DiagnosticPassed
 			c.VerifiedBundle = executor.BundleIdentity()
 			c.VerifiedExecution = executor.ExecutionIdentity(c)
 		}
@@ -399,10 +399,6 @@ func (a *App) jobsAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if !a.Config.Get().ModelVerified {
-		fail(w, 409, errors.New("请先完成本机模型和工具检查"))
-		return
-	}
 	var req model.Request
 	if err := read(w, r, &req); err != nil {
 		fail(w, 400, err)
@@ -421,7 +417,7 @@ func (a *App) jobsAPI(w http.ResponseWriter, r *http.Request) {
 	req.Mode = "route"
 	j, err := a.Engine.Accept(a.Config.Get().NodeID, req)
 	if err != nil {
-		fail(w, 409, err)
+		failAdmission(w, req, err)
 		return
 	}
 	send(w, 202, j)

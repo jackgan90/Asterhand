@@ -103,13 +103,16 @@ func (a *App) deliverAnswers(ctx context.Context) {
 func (a *App) refreshOutbox(ctx context.Context, o model.Outbox) {
 	var j model.Job
 	var err error
+	rejected := false
 	if o.PeerID == a.Config.Get().NodeID {
 		if o.Job == nil {
 			if o.Cancel {
 				err = a.Store.Cancel(a.Config.Get().NodeID, o.Request.RequestID)
 			}
 			if err == nil {
-				j, err = a.Engine.Accept(a.Config.Get().NodeID, o.Request)
+				j, err = a.acceptLocal(o.Request)
+				var rejection *model.TaskRejection
+				rejected = errors.As(err, &rejection) && rejection.Matches(o.Request)
 			}
 		} else {
 			err = a.Store.Get("job", o.Job.ID, &j)
@@ -128,6 +131,8 @@ func (a *App) refreshOutbox(ctx context.Context, o model.Outbox) {
 		}
 		if err == nil && o.Job == nil {
 			err = peer.Call(ctx, p, "POST", "/v1/jobs", o.Request, &j)
+			var rejection *model.TaskRejection
+			rejected = errors.As(err, &rejection) && rejection.Matches(o.Request)
 		} else if err == nil {
 			err = peer.Call(ctx, p, "GET", "/v1/jobs/"+url.PathEscape(o.Job.ID), nil, &j)
 		}
@@ -135,6 +140,9 @@ func (a *App) refreshOutbox(ctx context.Context, o model.Outbox) {
 	if err != nil {
 		o.Error = err.Error()
 		o.State = "delivery_unknown"
+		if rejected {
+			o.State = "rejected"
+		}
 	} else {
 		o.Job = &j
 		o.Error = ""

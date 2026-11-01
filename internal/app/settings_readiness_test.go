@@ -32,8 +32,11 @@ func TestMetadataSettingsPreserveReadinessAndExplainRestart(t *testing.T) {
 		v["endpoint"] = "https://100.121.127.89:17433"
 		v["peer_listen"] = "100.121.127.89:17433"
 	})
-	var result map[string]bool
-	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &result) != nil || !result["ready"] || !result["restart_required"] {
+	var result struct {
+		Ready           bool `json:"ready"`
+		RestartRequired bool `json:"restart_required"`
+	}
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &result) != nil || !result.Ready || !result.RestartRequired {
 		t.Fatal(response.Code, response.Body.String())
 	}
 	if !n.cfg.Get().ModelVerified {
@@ -100,7 +103,7 @@ func TestExecutionSettingsInvalidateAndClearStaleProbe(t *testing.T) {
 			}
 			probe := httptest.NewRecorder()
 			n.app.probe(probe, httptest.NewRequest(http.MethodGet, "/api/probe", nil))
-			if !bytes.Contains(probe.Body.Bytes(), []byte(`"not_run"`)) {
+			if !bytes.Contains(probe.Body.Bytes(), []byte(`"stale"`)) {
 				t.Fatal("stale passed", probe.Body.String())
 			}
 		})

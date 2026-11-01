@@ -22,6 +22,10 @@
 
 ## 其他入口
 
+- [聊天连接状态](development/features/chat-connection-status/plan.md)：对话 ID 后的三态提示、主题字色和不调用模型的连接观察。
+- [聊天运行时启动诊断与恢复](development/features/chat-startup-recovery/plan.md)：并发请求共享启动、请求超时与恢复生命周期分离及有界诊断。
+- [聊天操作队列](development/features/chat-operation-queue/plan.md)：启动期间即时收下消息、顺序执行、取消与暂停、宿主重建和退出边界。
+
 - [聊天发送稳定性与后台完成提醒](development/features/chat-completion-attention/plan.md)：固定状态区与任务栏高亮闪烁。
 
 - [聊天展示与桌面窗口体验](development/features/chat-desktop-experience/plan.md)、[验收标准与验证](development/features/chat-desktop-experience/validation.md)：精简提示、动态回复、数学公式、拖动与任务栏入口。
@@ -32,6 +36,7 @@
 - [研究来源](overview/research.md)、[后续方向](overview/future.md)。
 - [手工验收](testing/acceptance.md)、[自动化验收矩阵](testing/matrix.md)、[平台矩阵](testing/platforms.md)。
 - [开发流程](development/workflow.md)、[代码风格](development/code-style.md)、[待验证事项](development/open-questions.md)。
+- [按需模型配置与可选诊断](development/features/on-demand-model-readiness/plan.md)、[验证方法](development/features/on-demand-model-readiness/validation.md)：基础启动、功能配置和手动诊断分离，保留任务去重与取消恢复。
 - [Feature 模板](development/templates/feature-plan.md)、[ADR 模板](development/templates/adr.md)、[验证说明模板](development/templates/validation.md)。
 - [项目结构与文档治理](development/features/project-structure/plan.md)、[接口契约](../contracts/README.md)。
 - [Windows 跨节点助手](development/features/windows-assistant/plan.md)、[源码许可与发布](development/features/source-publication/plan.md)。

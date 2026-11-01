@@ -40,6 +40,7 @@ type Descriptor struct {
 	Provider     string
 	Model        string
 	CanSend      bool
+	SendError    string
 	Capabilities Capabilities
 	Prompt       prompt.Application
 }
@@ -118,6 +119,9 @@ type Request struct {
 }
 
 type Response struct {
+	Connection         string             `json:"connection,omitempty"`
+	Queue              *QueueState        `json:"queue,omitempty"`
+	QueueItem          *QueueItem         `json:"queue_item,omitempty"`
 	Prompt             prompt.Application `json:"prompt"`
 	Target             Target             `json:"target"`
 	Capabilities       Capabilities       `json:"capabilities"`
@@ -173,13 +177,13 @@ func (r Request) Validate() error {
 	} else if !ValidID(r.Target.Node) || r.Target.Role != DefaultRole {
 		return Fail("invalid_target", "会话目标无效")
 	}
-	needsConversation := r.Action == "history" || r.Action == "message" || r.Action == "submit" || r.Action == "reconcile" || r.Action == "cancel"
-	needsOperation := r.Action == "create" || r.Action == "submit"
+	needsConversation := r.Action == "select" || r.Action == "history" || r.Action == "message" || r.Action == "submit" || r.Action == "enqueue" || r.Action == "queue_item" || r.Action == "queue_cancel" || r.Action == "reconcile" || r.Action == "cancel"
+	needsOperation := r.Action == "create" || r.Action == "prepare" || r.Action == "submit" || r.Action == "enqueue" || r.Action == "queue_item" || r.Action == "queue_cancel"
 	if (needsConversation && !ValidID(r.Conversation)) || (!needsConversation && r.Conversation != "") ||
 		(needsOperation && !ValidID(r.Operation)) || (r.Operation != "" && !ValidID(r.Operation)) {
 		return Fail("invalid_request", "会话或操作身份无效")
 	}
-	if r.Action != "submit" && (r.Text != "" || r.DraftRevision != 0) || r.Action != "message" && r.Message != "" ||
+	if r.Action != "submit" && r.Action != "enqueue" && (r.Text != "" || r.DraftRevision != 0) || r.Action != "message" && r.Message != "" ||
 		r.Action != "history" && r.Action != "message" && r.Action != "list" && r.Offset != 0 || r.Action != "history" && r.Cursor != "" {
 		return Fail("invalid_request", "请求包含其他操作的字段")
 	}
@@ -187,12 +191,12 @@ func (r Request) Validate() error {
 		return Fail("invalid_request", "请求包含多余操作身份")
 	}
 	switch r.Action {
-	case "hello", "list", "create", "history", "reconcile", "cancel":
+	case "hello", "list", "connect", "connection", "select", "create", "prepare", "history", "reconcile", "cancel", "queue", "queue_item", "queue_cancel", "queue_pause", "queue_resume":
 	case "message":
 		if !ValidID(r.Message) {
 			return Fail("invalid_request", "消息身份无效")
 		}
-	case "submit":
+	case "submit", "enqueue":
 		if strings.TrimSpace(r.Text) == "" || len(r.Text) > MaxInputBytes || !utf8.ValidString(r.Text) || strings.ContainsRune(r.Text, '\r') {
 			return Fail("invalid_text", "请输入有效文本，最多 16,000 UTF-8 字节")
 		}

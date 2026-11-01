@@ -202,6 +202,7 @@ func TestNativeConversationReadOnlyAdapter(t *testing.T) {
 	if err != nil || descriptor.CanSend {
 		t.Fatalf("read-only descriptor: %v", err)
 	}
+	assertNativeChatConfiguration(t, manager, runtime)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	startup := time.Now()
@@ -234,6 +235,29 @@ func TestNativeConversationReadOnlyAdapter(t *testing.T) {
 	after, err := runtime.Describe()
 	if err != nil || after.Binding != descriptor.Binding {
 		t.Fatal("installer version path orphaned history")
+	}
+}
+
+// Exercise the real locked manifests with a synthetic key. Without a key,
+// Describe short-circuits before inspecting runtime/provider installation.
+func assertNativeChatConfiguration(t *testing.T, manager *config.Manager, runtime *ConversationRuntime) {
+	t.Helper()
+	if err := manager.SetKey("synthetic-native-configuration"); err != nil {
+		t.Fatal(err)
+	}
+	status := ConfiguredCapabilities(manager, manager.Get())
+	descriptor, err := runtime.Describe()
+	if err != nil || !descriptor.CanSend || !status.Chat.Available || status.ModelTasks.Code != TaskToolsMissing {
+		t.Fatal("locked runtime failed local configuration check", status, err)
+	}
+	if manager.Get().ModelVerified {
+		t.Fatal("configuration check fabricated a model diagnostic")
+	}
+	if _, err := os.Stat(filepath.Join(manager.Home, "conversations")); !os.IsNotExist(err) {
+		t.Fatal("configuration check initialized native runtime", err)
+	}
+	if err := manager.SetKey(""); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -62,17 +62,22 @@ func (e *Engine) Accept(origin string, r model.Request) (model.Job, error) {
 	if t.After(time.Now().Add(24 * time.Hour)) {
 		return model.Job{}, errors.New("启动截止时间最多 24 小时")
 	}
-	if r.Mode == "execute" {
-		if _, err = e.project(r.ProjectID); err != nil {
-			return model.Job{}, err
-		}
-	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.stopping {
 		return model.Job{}, errors.New("节点正在退出，暂不接收新任务")
 	}
-	j, err := e.Store.Accept(e.Config.Get().NodeID, origin, r)
+	j, err := e.Store.AcceptChecked(e.Config.Get().NodeID, origin, r, func() error {
+		if err := executor.RequireTaskConfiguration(e.Config, e.Config.Get()); err != nil {
+			return &model.TaskRejection{Code: model.TaskConfigurationUnavailable, Message: err.Error(),
+				RequestID: r.RequestID, RequestDigest: model.Hash(r)}
+		}
+		if r.Mode == "execute" {
+			_, err := e.project(r.ProjectID)
+			return err
+		}
+		return nil
+	})
 	if err == nil {
 		e.Notify()
 	}

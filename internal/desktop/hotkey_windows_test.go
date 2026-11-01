@@ -38,7 +38,7 @@ func TestNativeHotkeyConflictAcrossProcesses(t *testing.T) {
 	if os.Getenv("ASTERHAND_DESKTOP_TEST") != "1" {
 		t.Skip("requires interactive desktop")
 	}
-	tray, err := Start(Options{State: func() State { return State{Name: "快捷键验证", Ready: true} }, OpenWeb: func() error { return nil }, Stop: func(bool) bool { return true }})
+	tray, err := Start(Options{State: func() State { return State{Name: "快捷键验证"} }, OpenWeb: func() error { return nil }, Stop: func(bool) bool { return true }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestNativeDefaultHotkeyDispatchAndNoRepeat(t *testing.T) {
 	if os.Getenv("ASTERHAND_DESKTOP_TEST") != "1" {
 		t.Skip("requires interactive desktop")
 	}
-	tray, err := Start(Options{State: func() State { return State{Name: "默认键验证", Ready: true} }, OpenWeb: func() error { return nil }, Stop: func(bool) bool { return true }})
+	tray, err := Start(Options{State: func() State { return State{Name: "默认键验证"} }, OpenWeb: func() error { return nil }, Stop: func(bool) bool { return true }})
 	if err != nil {
 		t.Fatal(err)
 	}

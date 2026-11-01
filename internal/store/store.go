@@ -18,6 +18,7 @@ var ErrUnchanged = errors.New("记录已处于目标状态")
 
 const EventLimit = 4096
 const ControlEventReserve = 16
+const SchemaVersion = 2 // Adds durable task-rejection receipts; older binaries must not ignore them.
 
 type Store struct {
 	mu sync.Mutex
@@ -35,15 +36,15 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	if schema > 1 {
+	if schema > SchemaVersion {
 		db.Close()
-		return nil, fmt.Errorf("数据库版本 %d 高于当前支持版本 1，请使用较新的 Asterhand", schema)
+		return nil, fmt.Errorf("数据库版本 %d 高于当前支持版本 %d，请使用较新的 Asterhand", schema, SchemaVersion)
 	}
 	_, err = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
 	CREATE TABLE IF NOT EXISTS records(kind TEXT NOT NULL, id TEXT NOT NULL, body BLOB NOT NULL, PRIMARY KEY(kind,id));
 	CREATE TABLE IF NOT EXISTS events(job TEXT NOT NULL, seq INTEGER NOT NULL, body BLOB NOT NULL, PRIMARY KEY(job,seq));
 	CREATE TABLE IF NOT EXISTS dedup(origin TEXT NOT NULL, request TEXT NOT NULL, digest TEXT NOT NULL, job TEXT NOT NULL, PRIMARY KEY(origin,request));
-	PRAGMA user_version=1;`)
+	PRAGMA user_version=2;`)
 	if err != nil {
 		db.Close()
 		return nil, err
@@ -147,6 +148,12 @@ func event(tx *sql.Tx, j *model.Job, typ string, data any) error {
 	return put(tx, "job", j.ID, j)
 }
 func (s *Store) Accept(owner, origin string, r model.Request) (model.Job, error) {
+	return s.AcceptChecked(owner, origin, r, nil)
+}
+
+// AcceptChecked runs admit only for a new, non-cancelled request, inside the
+// acceptance transaction. admit must not re-enter Store or acquire outer locks.
+func (s *Store) AcceptChecked(owner, origin string, r model.Request, admit func() error) (model.Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	tx, err := s.db.Begin()
@@ -167,6 +174,16 @@ func (s *Store) Accept(owner, origin string, r model.Request) (model.Job, error)
 	if !errors.Is(err, sql.ErrNoRows) {
 		return model.Job{}, err
 	}
+	receiptKey := model.Hash([]string{origin, r.RequestID})
+	var rejection model.TaskRejection
+	if err = get(tx, "task-rejection", receiptKey, &rejection); err == nil {
+		if !rejection.Matches(r) {
+			return model.Job{}, ErrConflict
+		}
+		return model.Job{}, &rejection
+	} else if !errors.Is(err, ErrNotFound) {
+		return model.Job{}, err
+	}
 	j := model.Job{ID: model.ID(), Origin: origin, Owner: owner, Request: r, Digest: model.Hash(r), State: "queued", Created: model.Now(), Execution: "not_run", Verification: "not_run", Acceptance: "pending"}
 	var tomb bool
 	if err = get(tx, "cancel", model.Hash([]string{origin, r.RequestID}), &tomb); err != nil && !errors.Is(err, ErrNotFound) {
@@ -175,6 +192,10 @@ func (s *Store) Accept(owner, origin string, r model.Request) (model.Job, error)
 	if tomb {
 		j.State = "cancelled"
 		j.Execution = "not_started"
+	} else if admit != nil {
+		if err := admit(); err != nil {
+			return model.Job{}, recordRejection(tx, receiptKey, r, err)
+		}
 	}
 	_, err = tx.Exec("INSERT INTO dedup(origin,request,digest,job) VALUES(?,?,?,?)", origin, r.RequestID, j.Digest, j.ID)
 	if err != nil {

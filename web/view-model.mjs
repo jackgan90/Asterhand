@@ -6,7 +6,7 @@ export function taskViews(jobs, outbox, localID) {
     if (out.job && out.peer_id === localID) represented.add(out.job.id);
     const job = (out.peer_id === localID && out.job && byID.get(out.job.id)) || out.job || {
       id: out.id,
-      state: "queued",
+      state: out.state === "rejected" ? "rejected" : "queued",
       request: out.request,
       owner: out.peer_id,
       created: route?.created || out.updated,
@@ -31,9 +31,18 @@ export function taskViews(jobs, outbox, localID) {
 export function submissionState(local, target, project, goal, submitting) {
   if (submitting) return { disabled: true, busy: true, reason: "正在保存任务提交…" };
   let reason = "";
-  if (!local?.ready) reason = "本机尚未就绪，请在节点设置中验证模型与工具。";
-  else if (!target?.ready) reason = "执行节点尚未就绪，请在该节点验证模型与工具。";
+  const localTasks = modelTaskStatus(local), targetTasks = modelTaskStatus(target);
+  if (!localTasks.available) reason = `本机：${localTasks.detail}`;
+  else if (!targetTasks.available) reason = `执行节点：${targetTasks.detail}`;
   else if (!project) reason = "请选择执行节点的授权目录。";
   else if (!goal.trim()) reason = "请输入任务内容，上方灰色文字仅为示例。";
   return { disabled: !!reason, busy: false, reason };
+}
+
+export function modelTaskStatus(info) {
+  if (info?.capabilities !== undefined) {
+    const status = info.capabilities?.model_tasks;
+    return {available:status?.available === true, detail:status?.detail || "节点未提供模型任务配置，请在该节点检查设置。"};
+  }
+  return {available:info?.ready === true, detail:"此节点使用旧版验证规则，请在该节点验证模型与工具或升级。"};
 }

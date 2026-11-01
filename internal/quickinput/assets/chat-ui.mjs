@@ -3,6 +3,8 @@ import {ChatWindow, unsettled, newerTurn} from './chat-model.mjs';
 import {messageRenderer} from './chat-renderer.mjs';
 import {ChatOutbox} from './chat-outbox.mjs';
 import {replyStatusView} from './chat-status.mjs';
+import {operationQueue} from './chat-queue.mjs';
+import {connectionView} from './chat-connection.mjs';
 
 export function chatPanel(bridge, editor) {
   const query = id => document.getElementById(id);
@@ -17,22 +19,39 @@ export function chatPanel(bridge, editor) {
   let selected = '', turn = null, pending = null, expanded = false, visible = false, ready = false;
   let sending = false, polling = false, loading = false, timer = null, selection = 0, nodeBusy = false;
   let createOperation = '', listOffset = 0;
+  let creatingRequest = null;
   let draftDecision = null, historyLoaded = false, historyLoading = -1, readingOlder = false, refreshHistory = false;
   const cleanup = [];
   const listen = (node, name, fn) => { node.addEventListener(name, fn); cleanup.push(() => node.removeEventListener(name, fn)); };
   const statusView = replyStatusView(status);
   const say = message => statusView.message(message);
-  const sayTurn = (suffix = '') => statusView.turn(turn, suffix,
-    sending && turn?.operation_id !== sendingOperation);
+  const sayTurn = (suffix = '') => {
+    if (queue.enabled) {
+      if (queue.state.paused) {
+        const uncertain = queue.state.entries.find(item => item.state === 'unknown');
+        if (uncertain) return statusView.turn(uncertain.turn, suffix);
+        const failed = queue.state.entries.find(item => item.state === 'failed');
+        if (failed?.turn?.delivery === 'unknown') return say('消息送达仍未确认，运行已停止；请勿重复发送');
+        if (failed) return say(failed.error?.message ?? '消息发送失败');
+        return say(queue.state.active ? '正在停止…' : '已停止');
+      }
+      if (queue.state.active?.conversation_id === selected) return statusView.turn(queue.state.active, suffix);
+      if (queue.awaitingReply(selected)) return statusView.turn(null, suffix, true);
+    }
+    statusView.turn(turn, suffix, sending && turn?.operation_id !== sendingOperation);
+  };
   const updateButtons = () => {
-    sendButton.disabled = !ready || sending || nodeBusy || unsettled(turn) || Boolean(outbox.pending(selected)) || Boolean(draftDecision);
-    stopButton.hidden = !unsettled(turn);
+    sendButton.disabled = !ready || sending || (!queue.enabled && (nodeBusy || unsettled(turn) || Boolean(outbox.pending(selected)))) || Boolean(draftDecision);
+    stopButton.hidden = queue.enabled ? !queue.waiting || queue.state.paused && !queue.state.active : !unsettled(turn);
+    const resume = query('chat-queue-resume');
+    if (resume) resume.hidden = !queue.state?.paused;
     olderButton.hidden = !windowState.hasMore;
   };
 
   function envelope(value) {
     if (value.clear_sequence !== undefined) editor.clearIfRevision(value.clear_sequence);
     const response = value.response ?? {};
+    queue.observe(response.queue);
     const stale = turn && (response.turn?.conversation_id === selected || response.conversation?.id === selected) &&
       newerTurn(turn, response.turn) !== response.turn;
     if (!stale) {
@@ -42,11 +61,14 @@ export function chatPanel(bridge, editor) {
     outbox.observe(response.turn);
     if (response.turn?.delivery === 'rejected') editor.restoreSubmission(response.turn.operation_id);
     if (response.target?.node_id) ready = true;
+    connection.visible(visible && expanded && ready);
     updateButtons();
     paint();
   }
   const client = conversationClient(bridge, editor, envelope);
-  const render = messageRenderer(query('chat-messages'), {copy, expand: expandMessage});
+  const queue = operationQueue(client, outbox);
+  const connection = connectionView(query('chat-connection'), client);
+  const render = messageRenderer(query('chat-messages'), {copy, expand: expandMessage, cancelQueued});
 
   const atBottom = () => scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 48;
   const followsLatest = () => !readingOlder && atBottom();
@@ -74,6 +96,7 @@ export function chatPanel(bridge, editor) {
     query('chat-expand').textContent = value ? '收起 ▾' : '展开 ▴';
     query('chat-expand').setAttribute('aria-expanded', String(value));
     editor.setExpanded(value);
+    connection.visible(visible && expanded && ready);
     if (value) { paint(); if (selected && !historyLoaded) void safely(() => history()); }
     schedule();
   }
@@ -90,12 +113,20 @@ export function chatPanel(bridge, editor) {
       const hello = await client.call('hello');
       ready = true;
       const conversations = await client.call('list');
+      if (queue.enabled) {
+        const intent = hello.envelope.pending;
+        if (intent) {
+          try { outbox.queued((await client.call('queue_item', intent)).queue_item); }
+          catch (error) { if (error.code !== 'not_found') throw error; }
+        }
+        await queue.refresh();
+      }
       const restored = hello.envelope.pending?.conversation_id || hello.envelope.selected || conversations.conversations?.[0]?.id;
       if (restored && restored !== selected) await select(restored);
       else if (selected && expanded) await history();
       else if (sending) sayTurn();
       else say(hello.can_send ? '输入内容，开始新对话' : '请先在本机设置配置模型；已有历史可继续查看');
-    } catch (error) { say(error.message); }
+    } catch (error) { if (!ready) connection.unavailable(); say(error.message); }
     finally { loading = false; updateButtons(); schedule(); }
   }
 
@@ -111,14 +142,21 @@ export function chatPanel(bridge, editor) {
     list.hidden = true;
     query('chat-conversation-name').textContent = '对话 ' + id.slice(0, 8);
     paint();
-    if (expanded) await history();
+    if (queue.enabled) sayTurn();
+    if (queue.enabled) void safely(() => client.call('select', {conversation_id:id}));
+    if (expanded && !queue.creating(id)) {
+      if (queue.enabled) void safely(() => history()); else await history();
+    }
     schedule();
   }
 
   async function history(older = false) {
     if (!selected) return;
     const version = selection, id = selected;
-    if (historyLoading === version) return;
+    if (historyLoading !== -1) {
+      if (historyLoading !== version) refreshHistory = true;
+      return;
+    }
     historyLoading = version;
     try {
       const response = await client.call('history', {conversation_id: id,
@@ -135,7 +173,7 @@ export function chatPanel(bridge, editor) {
         sayTurn(); paint();
         return;
       }
-      historyLoaded = true;
+      historyLoaded = response.conversation?.state !== 'creating';
       refreshHistory = false;
       readingOlder = older && !response.page?.reset;
       windowState.apply(response.page ?? {messages: []}, older);
@@ -145,27 +183,38 @@ export function chatPanel(bridge, editor) {
       updateButtons();
     } finally {
       if (historyLoading === version) historyLoading = -1;
-      if (refreshHistory && version === selection) schedule();
+      if (refreshHistory) schedule();
     }
   }
 
   async function create() {
+    if (creatingRequest) return creatingRequest;
+    creatingRequest = createOnce().finally(() => { creatingRequest = null; });
+    return creatingRequest;
+  }
+
+  async function createOnce() {
     createOperation ||= crypto.randomUUID();
-    const response = await client.call('create', {operation_id: createOperation});
-    if (response.conversation?.state !== 'ready') throw new Error('会话正在创建，请稍后刷新核对');
+    const response = await client.call(queue.enabled ? 'prepare' : 'create', {operation_id: createOperation});
+    if (!queue.enabled && response.conversation?.state !== 'ready') throw new Error('会话正在创建，请稍后刷新核对');
     createOperation = '';
     await select(response.conversation.id);
   }
 
   async function submit() {
     const snapshot = editor.snapshot();
-    if (!snapshot || !snapshot.text.trim() || sending || nodeBusy || unsettled(turn) || outbox.pending(selected) || draftDecision) return;
+    if (!snapshot || !snapshot.text.trim() || sending || (!queue.enabled && (nodeBusy || unsettled(turn) || outbox.pending(selected))) || draftDecision) return;
     const operation = crypto.randomUUID();
     if (!editor.stageSubmission(operation, snapshot)) return;
     sendingOperation = operation;
     sending = true;
     let dispatched = false;
-    outbox.begin(operation, selected, snapshot.text);
+    if (!outbox.begin(operation, selected, snapshot.text)) {
+      editor.restoreSubmission(operation);
+      sendingOperation = ''; sending = false;
+      say('请先处理已有待发消息，当前草稿已保留');
+      updateButtons(); return;
+    }
     readingOlder = false;
     updateButtons();
     setExpanded(true);
@@ -174,20 +223,21 @@ export function chatPanel(bridge, editor) {
     sayTurn();
     try {
       if (!ready) await connect();
+      if (creatingRequest) await creatingRequest;
       if (!selected) await create();
       const id = selected, version = selection;
       outbox.bind(operation, id);
       pending = {operation_id: operation, conversation_id: id};
       dispatched = true;
       outbox.dispatched(operation);
-      const response = await client.call('submit', {conversation_id: id, operation_id: operation,
+      const response = await client.call(queue.enabled ? 'enqueue' : 'submit', {conversation_id: id, operation_id: operation,
         text: snapshot.text, draft_revision: snapshot.revision});
       outbox.observe(response.turn);
       if (selected === id && selection === version) {
         turn = newerTurn(turn, response.turn);
         sayTurn();
         paint();
-        await history();
+        if (!queue.enabled) await history();
       }
     } catch (error) {
       outbox.observe(error.response?.turn);
@@ -201,7 +251,7 @@ export function chatPanel(bridge, editor) {
   function schedule() {
     clearTimeout(timer);
     timer = null;
-    if (visible && selected && (expanded && (refreshHistory || nodeBusy) || unsettled(turn) || outbox.pending(selected) || pending?.conversation_id === selected)) {
+    if (visible && selected && (queue.waiting || expanded && (refreshHistory || nodeBusy) || unsettled(turn) || outbox.pending(selected) || pending?.conversation_id === selected)) {
       timer = setTimeout(poll, 500);
     }
   }
@@ -211,9 +261,29 @@ export function chatPanel(bridge, editor) {
     polling = true;
     const id = selected, version = selection;
     try {
+      if (queue.enabled) {
+        const creating = queue.creating(id);
+        const before = queue.state.active?.operation_id;
+        await queue.refresh();
+        if (id !== selected || version !== selection) return;
+        if (queue.consumeHistoryChange(id)) historyLoaded = false;
+        if (creating && !queue.creating(id) || !historyLoaded && !queue.creating(id) || before && before !== queue.state.active?.operation_id) {
+          historyLoaded = false;
+          if (expanded && followsLatest()) void safely(() => history());
+        }
+        if (!queue.state.active || queue.state.active.conversation_id !== id) {
+          if (!queue.waiting && unsettled(turn)) {
+            if (expanded && followsLatest()) void safely(() => history());
+            else { historyLoaded = false; turn = null; }
+          }
+          if (!queue.waiting) pending = null;
+          sayTurn(); paint(); return;
+        }
+        turn = queue.state.active;
+      }
       const identity = outbox.pending(id) ?? (pending?.conversation_id === id ? pending : null);
       const response = await client.call('reconcile', {conversation_id: id,
-        ...(identity ? {operation_id: identity.operation_id} : {})});
+        ...(queue.enabled ? {operation_id:queue.state.active.operation_id} : identity ? {operation_id: identity.operation_id} : {})});
       if (id !== selected || version !== selection) return;
       const previous = turn;
       turn = newerTurn(turn, response.turn);
@@ -240,9 +310,19 @@ export function chatPanel(bridge, editor) {
       const button = document.createElement('button');
       button.type = 'button';
       button.textContent = new Date(entry.updated_at).toLocaleString() + ' · ' + entry.id.slice(0, 8) +
-        (entry.id === response.active_conversation ? ' · 正在运行或核对' : entry.state === 'creating' ? ' · 创建待核对' : '');
+        (entry.id === response.active_conversation ? queue.state?.active?.delivery === 'unknown' ? ' · 送达待确认' : ' · 正在回复' : '');
       button.addEventListener('click', () => { if (entry.id !== selected) requestSwitch(() => select(entry.id)); });
       list.append(button);
+      const creation = queue.state?.entries.find(item => item.kind === 'create' && item.conversation_id === entry.id);
+      if (creation?.state === 'failed') {
+        const cancel = document.createElement('button');
+        cancel.type = 'button'; cancel.textContent = '取消创建';
+        cancel.addEventListener('click', () => safely(async () => {
+          await client.call('queue_cancel', {conversation_id:entry.id, operation_id:creation.operation_id});
+          await showList(); sayTurn(); updateButtons();
+        }));
+        list.append(cancel);
+      }
     }
     listOffset += entries.length;
     if (entries.length === 50) {
@@ -291,6 +371,22 @@ export function chatPanel(bridge, editor) {
     editor.post('copy', payload);
   }
 
+  async function cancelQueued(operation, conversation, restore) {
+    const snapshot = editor.snapshot();
+    if (restore && (!snapshot || snapshot.text)) { say('请先处理输入框中的草稿，再取回待发消息'); return; }
+    try {
+      const reply = await client.call('queue_cancel', {operation_id:operation, conversation_id:conversation});
+      const entry = outbox.entries.get(operation);
+      if (entry) {
+        entry.text=reply.queue_item.text ?? entry.text; entry.queued=false; entry.queueState=''; entry.needsReceipt=false;
+        outbox.observe(reply.queue_item.turn);
+      }
+      if (restore && !editor.restoreQueued?.(reply.queue_item.text, snapshot.revision)) say('消息已取消，文本仍保留在气泡中，可复制');
+      else say(restore ? '已取回输入框' : '已取消待发消息');
+      paint(); updateButtons(); schedule();
+    } catch (error) { say(error.message); }
+  }
+
   async function safely(action) { try { await action(); } catch (error) { say(error.message); } }
   function requestSwitch(action) {
     if (sending) { say('消息正在发送，请稍后切换会话'); return; }
@@ -321,30 +417,36 @@ export function chatPanel(bridge, editor) {
   listen(query('chat-expand'), 'click', () => setExpanded(!expanded));
   listen(query('chat-history'), 'click', () => safely(() => ready ? showList() : connect().then(() => showList())));
   listen(query('chat-new'), 'click', () => requestSwitch(async () => { setExpanded(true); if (!ready) await connect(); await create(); }));
-  listen(query('chat-refresh'), 'click', () => safely(() => ready && selected ? history().then(schedule) : connect()));
+  listen(query('chat-refresh'), 'click', () => { connection.refresh(); return safely(() => ready && selected ? history().then(schedule) : connect()); });
   listen(query('chat-latest'), 'click', () => safely(async () => { await history(); scroll.scrollTop = scroll.scrollHeight; schedule(); }));
   listen(olderButton, 'click', () => safely(() => history(true)));
   listen(stopButton, 'click', () => safely(async () => {
+    if (queue.enabled) { await client.call('queue_pause'); sayTurn(); updateButtons(); schedule(); return; }
     if (!selected || !turn) return;
     say('正在请求停止…');
     const response = await client.call('cancel', {conversation_id: selected, operation_id: turn.operation_id});
     turn = newerTurn(turn, response.turn); sayTurn(); schedule();
+  }));
+  if (query('chat-queue-resume')) listen(query('chat-queue-resume'), 'click', () => safely(async () => {
+    await client.call('queue_resume'); sayTurn(); updateButtons(); schedule();
   }));
   editor.onSubmit(submit);
   const unsubscribe = bridge.subscribe(message => {
     if (message.kind === 'focus' || message.kind === 'visibility' && message.visible) {
       visible = true;
       statusView.visible(true);
+      connection.visible(expanded && ready);
       if (!ready) void connect(); else { paint(); schedule(); }
     } else if (message.kind === 'visibility' && !message.visible) {
       visible = false;
       statusView.visible(false);
+      connection.visible(false);
       clearTimeout(timer);
       timer = null;
     }
   });
   updateButtons();
-  function dispose() { clearTimeout(timer); statusView.dispose(); render.dispose(); unsubscribe(); client.dispose(); cleanup.forEach(remove => remove()); }
+  function dispose() { clearTimeout(timer); connection.dispose(); statusView.dispose(); render.dispose(); unsubscribe(); client.dispose(); cleanup.forEach(remove => remove()); }
   listen(window, 'pagehide', dispose);
   return {dispose};
 }

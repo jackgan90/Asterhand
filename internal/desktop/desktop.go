@@ -6,7 +6,6 @@ import "github.com/jackgan90/Asterhand/internal/quickinput"
 
 type State struct {
 	Name     string
-	Ready    bool
 	Stopping bool
 }
 
@@ -23,8 +22,5 @@ func (s State) text() string {
 	if s.Stopping {
 		return "正在退出"
 	}
-	if !s.Ready {
-		return "待配置"
-	}
-	return "助手就绪"
+	return "节点运行中"
 }

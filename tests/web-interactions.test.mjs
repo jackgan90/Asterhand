@@ -99,7 +99,7 @@ test("cancelled stop and reconciliation prompts cause no write", async t => {
   assert.equal(ui.requests.filter(r => r.options.method === "POST").length,0);
 });
 
-test("settings save preserves payload, clears key and reports retained readiness", async t => {
+test("settings save preserves payload, clears key and never requires a probe", async t => {
   const ui = await page(t, (path, body) => {
     if (path === "/api/settings" && body) return {ready:true,restart_required:false};
     if (path === "/api/probe") return {state:"not_run"};
@@ -112,7 +112,29 @@ test("settings save preserves payload, clears key and reports retained readiness
   assert.equal(write.body.root,"workspace");
   assert.equal(write.body.llm.provider,"deepseek");
   assert.equal(form.elements.key.value,"");
-  assert.match(ui.select("#settings-status").textContent,/模型验证保持有效/);
+  assert.match(ui.select("#settings-status").textContent,/无需提前测试/);
+  assert.equal(ui.requests.filter(r => r.path === "/api/probe" && r.options.method === "POST").length, 0);
+});
+
+test("an unconfigured node opens the main page without a settings or model request", async t => {
+  const ui = await page(t, path => path === "/api/info" ? {
+    node_id:"local", name:"New node", ready:false, version:"test", projects:[],
+    capabilities:{chat:{available:false},model_tasks:{available:false,code:"credential_missing",detail:"请配置 API key"}},
+  } : undefined);
+  assert.equal(ui.select("#workspace").hidden,false);
+  assert.equal(ui.requests.some(r => ["/api/settings","/api/probe","/api/network"].includes(r.path)),false);
+  assert.match(ui.select("#submit-status").textContent,/API key/);
+  assert.match(ui.select("#nodes").children[0].children[1].textContent,/节点运行中/);
+});
+
+test("definite task rejection is distinct from unknown delivery and has no cancel action", async t => {
+  const out = {id:"route",peer_id:"remote",state:"rejected",error:"请配置 API key",request:{goal:"file"},updated:new Date().toISOString()};
+  const ui = await page(t, path => path === "/api/outbox" ? [out] : undefined);
+  const elements = descendants(ui.select("#tasks"));
+  assert.ok(elements.some(el => el.textContent?.includes("目标节点未接收")));
+  assert.ok(elements.some(el => el.textContent?.includes("已停止投递")));
+  assert.equal(elements.some(el => el.textContent === "取消任务"),false);
+  assert.equal(elements.some(el => el.textContent?.includes("送达待确认")),false);
 });
 
 test("pagehide invalidates in-flight task reads; persisted pageshow restores one subscription", async t => {

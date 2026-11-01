@@ -28,7 +28,9 @@ OpenClaw 内置 shell、任意文件访问、代码模式和自动再次委派�
 
 用户在本机设置页输入 DeepSeek key。Windows 使用当前用户 DPAPI；数据目录 ACL 仅该用户和 SYSTEM。页面只返回 has_key。key 仅注入对应 runtime 子进程环境，不写入任务或 OpenClaw JSON；错误输出做脱敏。A、B 各自配置，配对不传 key。
 
-保存有效执行配置的变化将 ModelVerified 置为 false，名称和网络设置保持既有就绪；点击检查会通过真实模型调用 `asterhand_probe`，仅收到回调才标为就绪。替换、删除 key 后必须重新验证。运行时或网络在检查后失效时，执行返回具体失败。
+模型凭据按需配置，基础节点、设置和任务记录不依赖凭据。保存设置不触发模型请求；聊天及模型任务在使用时检查本地必要配置，直接执行真实请求。运行时和外部 API 的在线错误由该请求返回。
+
+`ModelVerified` 只表示当前配置的手动工具诊断通过，配合持久诊断状态及原成功摘要区分未测试、通过、失败和过期；执行中状态属于当前进程。有效执行配置变化使诊断过期，名称和网络设置保留诊断。点击可选测试才通过真实模型调用 `asterhand_probe`，收到回调且完整执行成功后记录通过。诊断失败或过期不作为聊天/任务的准入门槛。设计取舍见 [按需配置决策](adr/009-on-demand-model-readiness.md)。
 
 ### 模型 provider 边界
 
@@ -38,7 +40,7 @@ OpenClaw 内置 shell、任意文件访问、代码模式和自动再次委派�
 
 provider 描述不执行模型调用。OpenClaw 的 provider bridge 把选择转换为插件 ID、插件路径及环境变量；其他 agent 需提供自己的转换。模型 key 只在 adapter 内读取并注入子进程。当前 adapter 对 final/error/stderr 中已知 key 和回调 token 脱敏。
 
-就绪记录绑定源码摘要、依赖清单摘要和有效执行配置摘要（runtime ID、LLM Selection、该 runtime 的选项）。新候选、自动路径迁移或任何有效配置变化使旧记录失效；缺少执行摘要的旧就绪记录也要求重新 probe。成功 probe 后重新绑定。自动验证报告还核对正在运行节点的源码摘要，防止用旧程序验证新源码。
+诊断成功记录绑定源码摘要、依赖清单摘要和有效执行配置摘要（runtime ID、LLM Selection、该 runtime 的选项）。新候选、自动路径迁移或有效配置变化使旧成功记录过期；缺少执行摘要的旧记录也按过期处理。成功手动测试后重新绑定，不影响正常使用。发布验证仍显式运行 probe 并核对正在运行节点的源码摘要，防止用旧程序验证新源码。
 
 扩展步骤见 [边界 ADR](adr/003-provider-runtime-bundle-boundaries.md)。首版仍只交付 DeepSeek + OpenClaw，其他 provider 和 Hermes 尚未实现或验证。
 
@@ -46,6 +48,8 @@ provider 描述不执行模型调用。OpenClaw 的 provider bridge 把选择转
 
 Linux 密钥层为权限受限本地文件，未宣称加密；当前 Linux 基础包不含助手运行时。按 [助手验证方法](../development/features/windows-assistant/validation.md) 区分工程测试和真实双机验收。
 
-## 就绪保持
+## 功能配置与诊断状态
 
-保存节点名称、公布地址或监听地址不撤销已完成的模型验证。模型选择、凭据写入/删除、运行时选择或授权目录变化则撤销并清除旧 passed 探测展示；程序包或运行时选项变化按执行配置摘要失效规则处理。重启后 GET probe 与持久 ModelVerified 一致，不能显示“检查通过”而实际禁止提交。
+executor 层统一提供 `capabilities.chat` 与 `capabilities.model_tasks`，各自包含 available/code/detail。available 表示必要本地配置齐全，不承诺 API 在线。检查只读当前配置、凭据及少量安装文件，不启动 Node/OpenClaw 或模型请求；聊天不依赖任务工具插件和文件授权目录。执行任务另按本次 project 校验目标目录，A 的模型路由不要求 A 的本地目录。
+
+保存名称、公布地址或监听地址保留诊断；模型选择、凭据写入/删除、运行时或授权目录实际变化撤销旧 passed。重启保留诊断失败/过期的状态，失败详情只在当前进程展示，避免持久化运行时错误内容。旧 `ready` 字段继续表示手动诊断通过，新入口读取能力字段。详见 [功能计划](../development/features/on-demand-model-readiness/plan.md)。

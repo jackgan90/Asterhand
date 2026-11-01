@@ -38,6 +38,7 @@ type Config struct {
 	Configured             bool                       `json:"configured"`
 	Profile                string                     `json:"profile,omitempty"`
 	ModelVerified          bool                       `json:"model_verified"`
+	ModelDiagnostic        DiagnosticState            `json:"model_diagnostic,omitempty"`
 	VerifiedBundle         string                     `json:"verified_bundle,omitempty"`
 	VerifiedExecution      string                     `json:"verified_execution,omitempty"`
 	AcceptanceDelay        int                        `json:"acceptance_delay_seconds,omitempty"`

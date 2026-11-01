@@ -40,6 +40,10 @@ A 先保存提交请求，再向 B 发送。B 校验身份和范围后，在单�
 
 ## 状态语义
 
+新请求准入与手动模型诊断分离。App 的本机 HTTP、peer HTTP 和本机 outbox 接收与设置保存共用配置互斥；任务引擎在接收事务内提供有界本地配置检查。Store 先处理已有任务/拒绝结果及摘要冲突，再处理 cancel 墓碑；只有全新且未取消的请求才检查模型任务配置和具体执行项目。检查不调用网络、子进程或重入 Store/App/Engine，锁顺序为 App → Engine → Store → Config。取消先于首次提交时，迟到提交保存 cancelled，不依赖模型可用性；已有终局结果不被后来的取消改写。
+
+缺配置的新请求在 Store 事务中保存独立 `task-rejection` receipt，绑定 origin、请求 ID 和完整摘要；提交成功后才返回明确未接收的结构化错误，不创建 job/attempt。相同请求在配置恢复、重启及迟到后仍返回原拒绝，不同摘要冲突；持久拒绝不自动清理。写入或提交失败返回普通错误，不能作为停止对账的证据。outbox 仅在提交阶段收到相匹配的拒绝时进入 rejected，显示原因且停止自动投递；用户修复配置后以新 ID 重新提交。查询/取消失败、连接超时、畸形响应和未知错误维持 delivery_unknown，不按错误文本或任意 HTTP 状态推断未接收。已接收请求即使后来缺配置仍回读原任务，真实执行失败仍由原 job 保存，不自动重新启动。请求摘要和未知任务恢复规则保持。
+
 | 状态 | 含义 |
 |---|---|
 | accepted / queued | 已持久接收，尚未执行 |
@@ -91,7 +95,7 @@ SQLite 数据库存本地，不跨设备同步活跃文件。迁移应可诊断�
 
 ## 实现契约
 
-- SQLite WAL + synchronous=FULL；schema 1，拒绝较新 schema。Accept 原子写 job/dedup/event，Change 原子更新任务与事件。attempt 内嵌于 job；max_attempts=1，不提供自动 resume 或独立多 attempt 表。
+- SQLite WAL + synchronous=FULL；schema 2，兼容读取并升级 schema 1，拒绝较新 schema。升级保持已有 job/event/dedup 形状，增加独立 task-rejection receipt；旧二进制拒绝 schema 2，防止忽略终局拒绝后执行迟到请求。Accept 原子写 job/dedup/event 或明确拒绝 receipt，Change 原子更新任务与事件。attempt 内嵌于 job；max_attempts=1，不提供自动 resume 或独立多 attempt 表。
 - 当前 Web 任务入口输入先形成 route job；execute job 才拥有文件工具。route 的 succeeded 表示提交已持久保存，UI 展示对应执行任务；执行 job 的 succeeded 要求文件回读证据，无文件证据的模型回复为 completed_unverified。
 - 每节点一个全局执行槽；reconciliation_required 阻塞后续启动。重启时所有非 queued、非终态执行进入待核对；本机填写证据关闭后状态为 failed / unknown_manually_closed。
 - 一个同步 interaction；普通问题 10 分钟有效，回答事务保存后交给原回调。旧 attempt 和第二个不同回答拒绝；远端答案先存 A 的 answer-outbox。当前没有审批或并行交互 UI。

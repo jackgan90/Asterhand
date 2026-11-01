@@ -96,6 +96,13 @@ export function inputEditor(bridge) {
       input.value = previous;
       return true;
     },
+    restoreQueued(text, expected) {
+      if (!generation || composing || staged || revision !== expected || input.value) return false;
+      input.value = text;
+      commit();
+      input.focus();
+      return true;
+    },
     clearIfRevision(expected) {
       if (composing || revision !== expected) return false;
       staged = null;

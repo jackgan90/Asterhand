@@ -8,6 +8,7 @@
 |---|---|
 | 本地与远端自然语言文件任务、问答、取消 | [Windows 跨节点助手](features/windows-assistant/plan.md) |
 | 模型配置、执行器契约、依赖锁定 | [模型、运行时与依赖边界](features/provider-runtime-boundaries/plan.md) |
+| 无模型配置启动、按功能准入与可选模型工具诊断（工程验证、独立审计及本机聊天验收通过，其余专项见验证说明） | [按需模型配置](features/on-demand-model-readiness/plan.md)、[验证说明](features/on-demand-model-readiness/validation.md) |
 | 运行时专用选项、受保护目录、通用包描述 | [提供者无关的公共流程](features/provider-neutral-flows/plan.md) |
 | 日志预算、取消竞争、文件证据与配置迁移 | [任务可靠性与配置保留](features/task-reliability/plan.md) |
 | Windows 安装、升级、相对路径与数据保留 | [安装路径解析](features/installer-path-resolution/plan.md) |
@@ -20,6 +21,9 @@
 | 独立非提权输入宿主、主进程草稿、有限恢复和真实可用状态（本机用户验收完成） | [快捷输入进程隔离](features/quick-input-process-isolation/plan.md) |
 | 原生 Web 同源客户端、生命周期、任务/节点/设置职责与独立 WebView2 桥；保持现有功能和平台范围 | [Web 与快捷输入维护性重构](features/web-ui-maintainability/plan.md) |
 | 本机持续聊天：真实消息发送、历史查询、新对话、展开/收起（用户验收通过） | [持续聊天](features/local-node-chat/plan.md) |
+| 聊天连接中、已连接、无法连接三态提示（工程验证及本机桌面用户验收通过） | [连接状态](features/chat-connection-status/plan.md) |
+| 聊天启动诊断、共享冷启动与已有状态恢复（工程验证及本机聊天使用验收通过） | [启动恢复](features/chat-startup-recovery/plan.md) |
+| 聊天启动操作队列与统一发送体验（工程验证及本机桌面用户验收通过） | [操作队列](features/chat-operation-queue/plan.md) |
 | 聊天发送反馈、快捷键与正文展示；提示词保留原生身份和角色设定，局部补充能力约束 | [聊天交互](features/chat-prompt-interaction/plan.md)、[原生提示词保留](features/native-harness-prompt-preservation/plan.md) |
 | 精简提示、动态回复、本地数学公式、标题拖动和任务栏入口（本机日常交互用户验收通过） | [聊天展示与桌面窗口体验](features/chat-desktop-experience/plan.md) |
 | 正常发送状态与气泡稳定、提示词诊断退出聊天展示、后台完成任务栏提醒（本机用户验收通过） | [聊天发送稳定性与后台完成提醒](features/chat-completion-attention/plan.md) |

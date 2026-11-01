@@ -1,5 +1,11 @@
 # 测试入口
 
+聊天三态标签、冷启动连接、隐藏恢复以及真实 OpenClaw 在本机模拟模型返回 401 时的零额外探测验证，见[连接状态计划](../docs/development/features/chat-connection-status/plan.md)。
+
+聊天启动队列的顺序、取消、恢复、IPC 帧预算与固定 OpenClaw 集成测试见[操作队列验证](../docs/development/features/chat-operation-queue/validation.md)。实际安装后的快速重启和实体桌面验收独立进行。
+
+无模型凭据启动、按功能准入、明确未接收与未知投递区分、取消/重复请求及诊断持久化见[按需模型配置验证](../docs/development/features/on-demand-model-readiness/validation.md)。普通测试不调用在线模型；锁定 OpenClaw 的本地受控模型测试需显式启用。
+
 快速本地安装的指纹、缓存、目录候选与完整包互操作验证见[快速本地安装验证](../docs/development/features/fast-local-install/validation.md)。隔离基本节点测试不调用模型、不修改活跃安装或真实桌面。
 
 聊天公式、动态回复状态、拖动和任务栏窗口的自动化与实体桌面边界见[聊天桌面体验验证](../docs/development/features/chat-desktop-experience/validation.md)。包含本地 KaTeX 完整性、公式安全/预算、位置/DPI 逻辑与真实 WebView2 双主题检查。

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jackgan90/Asterhand/internal/config"
+	"github.com/jackgan90/Asterhand/internal/testutil/runtimefixture"
 	"github.com/jackgan90/Asterhand/packaging"
 )
 
@@ -81,8 +82,15 @@ func fixtureAdapter(t *testing.T, mode string) (*Selected, *config.Manager) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	runtimefixture.Configure(t, m)
 	c := m.Get()
-	setClawOptions(&c, openClawOptions{NodePath: os.Args[0], EntryPath: filepath.Join(m.Home, mode), PluginPath: filepath.Join(m.Home, "plugin"), ProviderPaths: map[string]string{c.LLM.Provider: filepath.Join(m.Home, "provider")}})
+	options, _ := clawOptions(c)
+	options.NodePath = os.Args[0]
+	options.EntryPath = filepath.Join(filepath.Dir(options.EntryPath), mode)
+	if err = os.WriteFile(options.EntryPath, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	setClawOptions(&c, options)
 	if err = m.Save(c); err != nil {
 		t.Fatal(err)
 	}

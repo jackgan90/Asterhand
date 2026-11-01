@@ -16,20 +16,21 @@ import (
 )
 
 type chatCommand struct {
-	Prompt         *prompt.Application  `json:"prompt,omitempty"`
-	PromptInstance string               `json:"prompt_instance,omitempty"`
-	ID             string               `json:"id"`
-	Action         string               `json:"action"`
-	Binding        conversation.Binding `json:"binding"`
-	Run            string               `json:"run,omitempty"`
-	Text           string               `json:"text,omitempty"`
-	Message        string               `json:"message,omitempty"`
-	Offset         int                  `json:"offset,omitempty"`
-	Cursor         string               `json:"cursor,omitempty"`
-	Started        int64                `json:"started,omitempty"`
-	Entry          string               `json:"entry,omitempty"`
-	Port           int                  `json:"port,omitempty"`
-	Token          string               `json:"token,omitempty"`
+	Prompt           *prompt.Application  `json:"prompt,omitempty"`
+	PromptInstance   string               `json:"prompt_instance,omitempty"`
+	ID               string               `json:"id"`
+	Action           string               `json:"action"`
+	Binding          conversation.Binding `json:"binding"`
+	Run              string               `json:"run,omitempty"`
+	Text             string               `json:"text,omitempty"`
+	Message          string               `json:"message,omitempty"`
+	Offset           int                  `json:"offset,omitempty"`
+	Cursor           string               `json:"cursor,omitempty"`
+	Started          int64                `json:"started,omitempty"`
+	Entry            string               `json:"entry,omitempty"`
+	Port             int                  `json:"port,omitempty"`
+	Token            string               `json:"token,omitempty"`
+	StartupTimeoutMS int64                `json:"startup_timeout_ms,omitempty"`
 }
 
 type chatResult struct {
@@ -51,7 +52,7 @@ type chatProcess struct {
 	finish   sync.Once
 }
 
-func launchChatProcess(cmd *exec.Cmd) (*chatProcess, error) {
+func launchChatProcess(cmd *exec.Cmd, diagnostics ...*chatDiagnostics) (*chatProcess, error) {
 	input, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -61,9 +62,11 @@ func launchChatProcess(cmd *exec.Cmd) (*chatProcess, error) {
 		input.Close()
 		return nil, err
 	}
-	// Gateway diagnostics are private and may contain prompt/provider content.
-	// The bridge emits only bounded public results; stderr is never persisted.
+	// The optional sink persists only fixed diagnostic fields, never raw stderr.
 	cmd.Stderr = io.Discard
+	if len(diagnostics) != 0 {
+		cmd.Stderr = diagnostics[0]
+	}
 	cleanup, err := startManaged(cmd)
 	if err != nil {
 		input.Close()
@@ -72,7 +75,14 @@ func launchChatProcess(cmd *exec.Cmd) (*chatProcess, error) {
 	}
 	p := &chatProcess{input: input, output: output, cleanup: cleanup, done: make(chan struct{}), exited: make(chan struct{}), pending: map[string]chan chatResult{}}
 	go p.read()
-	go func() { cmd.Wait(); close(p.exited); p.stop() }()
+	go func() {
+		cmd.Wait()
+		if len(diagnostics) != 0 {
+			diagnostics[0].exited(cmd.ProcessState.ExitCode())
+		}
+		close(p.exited)
+		p.stop()
+	}()
 	return p, nil
 }
 

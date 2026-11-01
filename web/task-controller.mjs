@@ -1,4 +1,5 @@
 import {taskViews} from "./view-model.mjs";
+import {definitiveTaskRejection} from "./task-admission.mjs";
 
 export function taskController({api, post, view, selection, session, notice, actions, storage = sessionStorage, uuid = () => crypto.randomUUID()}) {
   let snapshot = {jobs:[], outbox:[]}, refreshing, submitting = false;
@@ -16,6 +17,7 @@ export function taskController({api, post, view, selection, session, notice, act
   async function submit(content) {
     if (submitting || !content.goal.trim()) return;
     const scope = session();
+    const localNodeID = selection().info.node_id;
     const pendingKey = "asterhand-pending";
     let request;
     try { request = JSON.parse(storage.getItem(pendingKey)); } catch { /* absent */ }
@@ -32,6 +34,10 @@ export function taskController({api, post, view, selection, session, notice, act
       if (!scope?.active) return;
       view.submitted(content.goal);
       await refresh(scope);
+    } catch (error) {
+      if (await definitiveTaskRejection(error, request, localNodeID) &&
+          storage.getItem(pendingKey) === JSON.stringify(request)) storage.removeItem(pendingKey);
+      throw error;
     } finally { submitting = false; if (session()?.active) view.submissionChanged(); }
   }
   async function answer(job, out, text) {

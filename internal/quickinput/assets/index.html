@@ -6,7 +6,7 @@
     <button id="chat-expand" type="button" aria-expanded="false" aria-controls="chat-panel">展开 ▴</button>
   </nav></header>
   <section id="chat-panel" hidden aria-label="持续聊天">
-    <div class="chat-session-bar"><span id="chat-conversation-name">本机默认助手</span><nav><button id="chat-latest" type="button">回到最新</button><button id="chat-refresh" type="button">刷新</button></nav></div>
+    <div class="chat-session-bar"><div class="chat-session-identity"><span id="chat-conversation-name">本机默认助手</span><span aria-hidden="true"> · </span><span id="chat-connection" data-state="connecting" role="status">连接中</span></div><nav><button id="chat-latest" type="button">回到最新</button><button id="chat-refresh" type="button">刷新</button></nav></div>
     <nav id="chat-conversations" hidden aria-label="历史会话"></nav>
     <div id="chat-scroll" tabindex="0" aria-label="消息历史"><button id="chat-older" type="button" hidden>读取更早消息</button><div id="chat-messages"></div></div>
   </section>
@@ -15,6 +15,6 @@
     <button id="chat-draft-cancel" type="button">保留当前</button><button id="chat-draft-discard" type="button">丢弃草稿并切换</button>
   </section>
   <textarea id="input" aria-label="快捷输入" spellcheck="false" autocomplete="off"></textarea>
-  <div class="chat-actions"><span id="chat-status" role="status">Enter 发送 · Shift+Enter 换行</span><button id="chat-stop" type="button" hidden>停止</button><button id="chat-send" type="button" disabled>发送</button></div>
+  <div class="chat-actions"><span id="chat-status" role="status">Enter 发送 · Shift+Enter 换行</span><button id="chat-queue-resume" type="button" hidden>继续发送</button><button id="chat-stop" type="button" hidden>停止</button><button id="chat-send" type="button" disabled>发送</button></div>
   <footer><span>Esc 隐藏</span><span id="status" role="status"></span></footer>
 </main></body></html>

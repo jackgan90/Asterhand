@@ -199,13 +199,9 @@ func (a *App) remote(w http.ResponseWriter, r *http.Request) {
 		}
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		if !a.Config.Get().ModelVerified {
-			fail(w, 503, errors.New("目标节点助手尚未通过验证"))
-			return
-		}
 		j, err := a.Engine.Accept(p.ID, req)
 		if err != nil {
-			fail(w, 409, err)
+			failAdmission(w, req, err)
 			return
 		}
 		send(w, 202, j)

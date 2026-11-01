@@ -89,7 +89,7 @@ func (t *Tray) showMenu() {
 
 func (t *Tray) requestExit() {
 	if !t.options.Stop(false) {
-		message := "本机有任务或模型检查正在执行。退出后，本机执行会停止，在途任务需要在下次启动时核对；其他节点已接收的任务继续运行。\n\n确定退出 Asterhand？"
+		message := "本机有聊天、待发消息、任务或模型检查。退出会丢弃尚未发送的队列内容，并停止本机执行；已派发操作在下次启动时核对。其他节点已接收的任务继续运行。\n\n确定退出 Asterhand？"
 		result, _, _ := messageBox.Call(t.window.Load(), uintptr(unsafe.Pointer(textPointer(message))), uintptr(unsafe.Pointer(textPointer("退出 Asterhand"))), 0x24|0x100) // Yes/No, default No
 		if result != 6 {
 			return

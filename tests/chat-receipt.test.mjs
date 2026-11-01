@@ -15,7 +15,7 @@ const binding = {runtime: 'openclaw', generation: 'generation-0123456789', key: 
 test('submit confirms missing-sequence acknowledgements by durable evidence and preserves unknown failures', async () => {
   const root = mkdtempSync(join(tmpdir(), 'aster-receipt-'));
   try {
-    for (const name of ['main.mjs', 'projection.mjs', 'prompt-state.mjs']) copyFileSync(new URL(name, source), join(root, name));
+    for (const name of ['main.mjs', 'projection.mjs', 'prompt-state.mjs', 'connection.mjs']) copyFileSync(new URL(name, source), join(root, name));
     writeFileSync(join(root, 'gateway.mjs'), `
       import {writeFileSync} from 'node:fs';
       export {failure, submissionError} from ${JSON.stringify(new URL('gateway.mjs', source).href)};

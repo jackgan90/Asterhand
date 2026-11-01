@@ -66,11 +66,11 @@ export function newerTurn(current, incoming) {
   if (current.updated_at && incoming.updated_at && Date.parse(incoming.updated_at) < Date.parse(current.updated_at)) return current;
   const same = current.operation_id === incoming.operation_id;
   if (same && ['accepted', 'rejected'].includes(current.delivery) && !['accepted', 'rejected'].includes(incoming.delivery)) return current;
-  if (same && !unsettled(current) && unsettled(incoming)) return current;
+  if (same && ['completed', 'cancelled', 'failed', 'interrupted'].includes(current.run) && unsettled(incoming)) return current;
   return incoming;
 }
 
-export const awaitingReply = turn => Boolean(turn && (turn.delivery === 'pending' ||
+export const awaitingReply = turn => Boolean(turn && (turn.delivery === 'queued' || turn.delivery === 'pending' ||
   turn.delivery === 'accepted' && ['pending', 'running'].includes(turn.run)));
 
 export function turnStatus(turn, submitting = false) {

@@ -48,8 +48,7 @@ export function mountApp() {
       $("#version").textContent = `v${nodes.selection().info.version}`;
       await tasks.refresh(scope);
       if (!scope.active) return;
-      if (!nodes.selection().info.ready) await settings.open();
-      else await settings.resume();
+      await settings.resume();
     } catch (error) {
       if (scope.active) {
         $("#login").hidden = false;
@@ -71,7 +70,7 @@ export function mountApp() {
   });
   listen($("#task-form"), "submit", event => { event.preventDefault(); void guarded(() => tasks.submit(nodes.content())); });
   listen($("#stop-node"), "click", () => {
-    if (actions.confirm("停止本机节点？执行中的任务将停止并在下次启动时核对；其他节点已接收的任务继续运行。"))
+    if (actions.confirm("停止本机节点？尚未发送的排队消息将丢弃；执行中的任务将停止并在下次启动时核对；其他节点已接收的任务继续运行。"))
       void guarded(async () => {
         const scope = session();
         await client.post("/api/stop");

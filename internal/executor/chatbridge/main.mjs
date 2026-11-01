@@ -1,9 +1,11 @@
 import {Gateway, failure, submissionError} from './gateway.mjs';
+import {ConnectionState} from './connection.mjs';
 import {PromptMonitor} from './prompt-state.mjs';
 import {StreamState, byteSize, historyPage, messageBytes, fragmentBytes, inputReceipt, observation, visibleHistory, visibleBodyState, HISTORY_MAX_CHARS, FULL_MESSAGE_MAX_CHARS} from './projection.mjs';
 
 const streams = new StreamState();
-const gateway = new Gateway(event => streams.event(event), () => process.exit(2));
+const connection = new ConnectionState();
+const gateway = new Gateway(event => { streams.event(event); connection.event(event); }, () => process.exit(2));
 let bootstrapped = false;
 let promptMonitor;
 let inflight = 0;
@@ -66,6 +68,10 @@ async function handle(command) {
     });
     await gateway.start(command);
     return {};
+  }
+  if (bootstrapped && ['connect', 'connection'].includes(command.action)) {
+    if (command.action === 'connect') void gateway.ensureConnected().catch(() => {});
+    return connection.snapshot(gateway);
   }
   const binding = command.binding;
   if (!bootstrapped || !binding || !validID(binding.key) || binding.runtime !== 'openclaw' || !validID(binding.generation)) {

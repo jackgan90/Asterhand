@@ -52,7 +52,7 @@ func TestNativeTrayLifecycleOnInteractiveDesktop(t *testing.T) {
 	var opened atomic.Int32
 	cleanup := make(chan struct{})
 	tray, err := Start(Options{
-		State:   func() State { return State{Name: "托盘验证", Ready: true, Stopping: stopping.Load()} },
+		State:   func() State { return State{Name: "托盘验证", Stopping: stopping.Load()} },
 		OpenWeb: func() error { opened.Add(1); return nil },
 		Stop: func(bool) bool {
 			if stopping.CompareAndSwap(false, true) {

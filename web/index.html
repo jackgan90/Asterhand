@@ -156,12 +156,12 @@
         <div class="actions">
           <button type="submit">保存设置</button
           ><button type="button" id="probe" class="secondary">
-            验证模型与工具
+            测试模型与工具（可选）
           </button>
         </div>
-        <small>验证会发起一次小型模型请求，可能产生少量 API 费用。</small>
+        <small>保存后可直接使用已配置的功能。可选测试会调用模型并产生 API 费用；基础节点无需配置 API key。</small>
         <div id="settings-status" class="status-box" role="status"></div>
-        <div id="probe-status" class="status-box">尚未运行检查</div>
+        <div id="probe-status" class="status-box">尚未测试，不影响已配置功能的使用。</div>
         <div id="runtime-status" class="metadata"></div>
         <button type="button" id="stop-node" class="quiet">停止本机节点</button>
       </form>

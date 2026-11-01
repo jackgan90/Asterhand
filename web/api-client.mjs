@@ -11,6 +11,7 @@ export function apiClient({fetch: request = globalThis.fetch, EventSource: Sourc
     if (!response.ok) {
       const error = new Error(data.error || `请求失败 (${response.status})`);
       error.status = response.status;
+      error.details = data;
       throw error;
     }
     return data;

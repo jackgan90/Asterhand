@@ -30,7 +30,7 @@ func runNode(c *config.Manager, open bool) error {
 	tray, err := desktop.Start(desktop.Options{
 		State: func() desktop.State {
 			cfg := c.Get()
-			return desktop.State{Name: cfg.Name, Ready: cfg.ModelVerified, Stopping: a.Stopping()}
+			return desktop.State{Name: cfg.Name, Stopping: a.Stopping()}
 		},
 		OpenWeb: func() error {
 			address, err := launch.ExistingURL(c.Home)

@@ -132,7 +132,10 @@ test('outbox merges by identity, preserves distinct equal text, and separates de
   assert.match(box.merge([native],'A')[1].delivery_status,/消息发送失败/);
   assert.equal(box.merge([], 'B').length,1);
   for(let i=0;i<20;i++)box.begin('op'+i,'A','x'.repeat(16000));
-  assert.equal(box.entries.size,8);assert.equal(box.reservedBytes,128000);
+  assert.equal(box.entries.size,16);
+  assert.equal(box.entries.get('third').text,'elsewhere','unconfirmed snapshots must not be evicted');
+  assert.ok(box.reservedBytes<=16*16000);
+  assert.equal(box.begin('overflow','A','keep in composer'),false);
   const window=new ChatWindow();window.reserve(box.reservedBytes);
   window.apply({messages:Array.from({length:200},(_,i)=>message('large'+i,'x'.repeat(16000)))});
   assert.ok(window.messages.reduce((n,m)=>n+bodyBytes(m),0)+box.reservedBytes<=MAX_BODY_BYTES);

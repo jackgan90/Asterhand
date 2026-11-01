@@ -8,6 +8,7 @@ const states = {
   succeeded: "完成并验证",
   completed_unverified: "执行完成 · 待验收",
   failed: "执行失败",
+  rejected: "目标节点未接收",
   reconciliation_required: "需要核对",
 };
 
@@ -28,8 +29,8 @@ export function taskView({guarded, callbacks, submissionChanged}) {
       node("div", goal, "task-title"),
       node(
         "span",
-        out?.error ? "连接中断 · 保留最后状态" : states[job.state] || job.state,
-        `badge ${["failed", "reconciliation_required"].includes(job.state) ? "error" : ""}`,
+        out?.state === "rejected" ? states.rejected : out?.error ? "连接中断 · 保留最后状态" : states[job.state] || job.state,
+        `badge ${["failed", "rejected", "reconciliation_required"].includes(job.state) ? "error" : ""}`,
       ),
     );
     card.append(head);
@@ -45,9 +46,9 @@ export function taskView({guarded, callbacks, submissionChanged}) {
       ),
     );
     if (out && !out.job)
-      card.append(node("p", "送达待确认。重试保持原目标和请求 ID。", "result"));
+      card.append(node("p", out.state === "rejected" ? "目标节点明确拒绝接收，已停止投递。请修复该节点配置后重新提交。" : "送达待确认。重试保持原目标和请求 ID。", "result"));
     if (
-      out?.cancel &&
+      out?.cancel && out.state !== "rejected" &&
       !["succeeded", "failed", "cancelled", "completed_unverified"].includes(
         job.state,
       )
@@ -76,6 +77,7 @@ export function taskView({guarded, callbacks, submissionChanged}) {
       ![
         "succeeded",
         "failed",
+        "rejected",
         "cancelled",
         "completed_unverified",
         "reconciliation_required",

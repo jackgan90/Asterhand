@@ -1,5 +1,5 @@
 import {$, node, dialog} from "./ui.mjs";
-import {submissionState} from "./view-model.mjs";
+import {submissionState, modelTaskStatus} from "./view-model.mjs";
 export function nodeController({api, post, session, guarded, notice, actions, listen, isSubmitting}) {
   let info, peers = [], explicitTarget = false, refreshGeneration = 0;
   async function refreshPeers() {
@@ -26,9 +26,15 @@ export function nodeController({api, post, session, guarded, notice, actions, li
         name,
         node(
           "small",
-          `${p.local ? "本机 · " : ""}${p.online ? (p.info?.ready ? "助手就绪" : "待配置") : "暂不可达"}`,
+          `${p.local ? "本机 · " : ""}${p.online ? "节点运行中" : "暂不可达"}`,
         ),
       );
+      if (p.info) {
+        const status = modelTaskStatus(p.info);
+        card.append(node("small", `${p.online ? "" : "上次配置："}${status.available ? "模型任务配置齐全" : status.detail}`));
+        if (p.info.capabilities?.chat?.available && !status.available)
+          card.append(node("small", "聊天配置齐全"));
+      }
       if (p.error) card.append(node("small", p.error, "error-text"));
       if (!p.local) {
         const revoke = node("button", "撤销配对", "quiet");

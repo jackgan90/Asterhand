@@ -20,6 +20,7 @@ type chatController struct {
 	wg               sync.WaitGroup
 	closing          bool
 	inflight         int
+	reads            int
 	pending          map[string]*chatSubmission
 	order            uint64
 	selected         string
@@ -53,26 +54,31 @@ func (c *chatController) close() {
 }
 
 func (c *chatController) dispatch(surface *remoteSurface, message hostipc.Message) {
+	request := *message.Chat
+	priority := request.Action == "select" || request.Action == "prepare" || request.Action == "enqueue" || request.Action == "queue" || request.Action == "queue_item" || request.Action == "queue_cancel" || request.Action == "queue_pause" || request.Action == "queue_resume"
+	read := request.Action == "history" || request.Action == "message" || request.Action == "reconcile"
 	c.mu.Lock()
-	if c.closing || c.inflight >= 4 {
+	if c.closing || c.inflight >= 8 || !priority && c.inflight >= 4 || read && c.reads >= 2 {
 		c.mu.Unlock()
 		_ = surface.send(hostipc.Message{Kind: hostipc.ChatResult, ChatID: message.ChatID,
 			ChatReply: &hostipc.ChatReply{Response: wire.Response{Error: &wire.Error{Code: "busy", Message: "会话入口正在处理请求，请稍后重试"}}}})
 		return
 	}
 	c.inflight++
+	if read {
+		c.reads++
+	}
 	c.wg.Add(1)
-	request := *message.Chat
-	if request.Action == "create" || request.Action == "history" {
+	if request.Action == "select" || request.Action == "create" || request.Action == "prepare" || request.Action == "history" {
 		c.selectionRequest = message.ChatID
 	}
-	if request.Action == "submit" && c.pending[request.Operation] == nil {
+	if (request.Action == "submit" || request.Action == "enqueue") && c.pending[request.Operation] == nil {
 		for operation, intent := range c.pending {
-			if intent.terminal {
+			if intent.terminal || intent.accepted {
 				delete(c.pending, operation)
 			}
 		}
-		if len(c.pending) >= 8 {
+		if len(c.pending) >= 16 {
 			c.inflight--
 			c.wg.Done()
 			c.mu.Unlock()
@@ -86,7 +92,15 @@ func (c *chatController) dispatch(surface *remoteSurface, message hostipc.Messag
 	}
 	c.mu.Unlock()
 	go func() {
-		defer func() { c.mu.Lock(); c.inflight--; c.mu.Unlock(); c.wg.Done() }()
+		defer func() {
+			c.mu.Lock()
+			c.inflight--
+			if read {
+				c.reads--
+			}
+			c.mu.Unlock()
+			c.wg.Done()
+		}()
 		ctx, cancel := context.WithTimeout(c.ctx, 95*time.Second)
 		defer cancel()
 		response, err := c.client.Call(ctx, request)
@@ -106,14 +120,29 @@ func (c *chatController) decorate(surface *remoteSurface, request wire.Request, 
 		c.selected = response.Conversation.ID
 	}
 	var receiptIntent *chatSubmission
-	if response.Turn != nil {
-		receiptIntent = c.pending[response.Turn.Operation]
-		if receiptIntent != nil {
-			receiptIntent.accepted = response.Turn.Delivery == "accepted"
-			receiptIntent.terminal = response.Turn.Run == "completed" || response.Turn.Run == "cancelled" || response.Turn.Run == "failed" || response.Turn.Run == "interrupted"
+	observe := func(turn *wire.Turn) {
+		if turn == nil {
+			return
+		}
+		if intent := c.pending[turn.Operation]; intent != nil {
+			intent.accepted = intent.accepted || turn.Delivery == "accepted" || turn.Delivery == "queued"
+			intent.terminal = turn.Run == "completed" || turn.Run == "cancelled" || turn.Run == "failed" || turn.Run == "interrupted"
+			if receiptIntent == nil || intent.order > receiptIntent.order {
+				receiptIntent = intent
+			}
 		}
 	}
-	if request.Action == "submit" && response.Turn == nil && response.Error != nil {
+	observe(response.Turn)
+	if response.QueueItem != nil {
+		observe(response.QueueItem.Turn)
+	}
+	if response.Queue != nil {
+		for _, entry := range response.Queue.Entries {
+			observe(entry.Turn)
+		}
+		observe(response.Queue.Active)
+	}
+	if (request.Action == "submit" || request.Action == "enqueue") && response.Turn == nil && response.Error != nil && response.Error.Code != "unavailable" && response.Error.Code != "unknown" {
 		delete(c.pending, request.Operation)
 	}
 	pending := c.latestPending()

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {webview2Bridge} from "../internal/quickinput/assets/webview2-bridge.mjs";
-import {domFixture} from "./web-fixture.mjs";
+import {composerFixture} from './composer-layout-fixture.mjs';
 
 test("bridge sends unchanged envelopes and releases its exact message listener", () => {
   const host = new EventTarget(), sent = [], received = [];
@@ -16,10 +16,10 @@ test("bridge sends unchanged envelopes and releases its exact message listener",
 });
 
 test("editor retains handshake, IME snapshot order, generation, theme, size guard and hide", async t => {
-  const dom = domFixture(), host = new EventTarget(), sent = [];
+  const dom = composerFixture(), host = new EventTarget(), sent = [];
   host.postMessage = message => sent.push(message);
   globalThis.document = dom.document;
-  globalThis.window = Object.assign(new EventTarget(), {chrome:{webview:host}});
+  globalThis.window = Object.assign(dom.view, {chrome:{webview:host}});
   const {editor} = await import("../internal/quickinput/assets/input.js");
   t.after(() => { editor.dispose(); delete globalThis.document; delete globalThis.window; });
   const receive = data => { const event = new Event("message"); event.data = data; host.dispatchEvent(event); };
@@ -27,12 +27,14 @@ test("editor retains handshake, IME snapshot order, generation, theme, size guar
   receive({kind:"init",generation:"current",revision:4,text:"old",theme:"star"});
   const input = dom.select("#input");
   assert.equal(input.disabled,false);
-  assert.deepEqual(sent[1],{version:1,kind:"initialized",generation:"current"});
+  assert.equal(sent[1].kind, 'resize');
+  assert.ok(sent[1].height < 240);
+  assert.deepEqual(sent[2],{version:1,kind:"initialized",generation:"current"});
   input.fire("compositionstart"); input.value = "new\r\n中文";
   receive({kind:"snapshot",id:"snapshot-id"});
-  assert.equal(sent.length,2);
+  assert.equal(sent.length,3);
   input.fire("compositionend");
-  assert.deepEqual(sent.slice(2).map(message => message.kind),["draft_updated","snapshot"]);
+  assert.deepEqual(sent.slice(3).map(message => message.kind),["draft_updated","snapshot"]);
   assert.equal(sent.at(-1).revision,5); assert.equal(sent.at(-1).text,"new\n中文");
   assert.equal(sent.at(-1).generation,"current");
   receive({kind:"theme",theme:"frost"}); assert.equal(dom.document.documentElement.dataset.theme,"frost");
@@ -79,4 +81,27 @@ test("editor retains handshake, IME snapshot order, generation, theme, size guar
   assert.equal(editor.restoreSubmission('send-5'), false);
   assert.equal(input.value, '下一条');
   editor.dispose(); receive({kind:"theme",theme:"star"}); assert.equal(dom.document.documentElement.dataset.theme,"frost");
+});
+
+test('native height confirmation is isolated by editor generation and current resize identity', async t => {
+  const dom = composerFixture(), host = new EventTarget(), sent = [];
+  host.postMessage = message => sent.push(message);
+  globalThis.document = dom.document;
+  globalThis.window = Object.assign(dom.view, {chrome:{webview:host}});
+  const {inputEditor} = await import('../internal/quickinput/assets/input.js');
+  const editor = inputEditor(webview2Bridge(host));
+  t.after(() => { editor.dispose(); delete globalThis.document; delete globalThis.window; });
+  const receive = data => { const event = new Event('message'); event.data = data; host.dispatchEvent(event); };
+  receive({kind:'init',generation:'current',revision:0,text:'text',theme:'star'});
+  const initial = sent.find(message => message.kind === 'resize');
+  receive({kind:'focus'});
+  dom.setRows(4); dom.input.value = 'long text'; dom.input.fire('input'); dom.flushFrames();
+  const current = sent.findLast(message => message.kind === 'resize');
+  assert.notEqual(current.id, initial.id);
+  receive({kind:'layout_applied',generation:'old',id:current.id,height:180}); dom.flushFrames();
+  assert.equal(dom.input.style.overflowY, 'hidden');
+  receive({kind:'layout_applied',generation:'current',id:initial.id,height:180}); dom.flushFrames();
+  assert.equal(dom.input.style.overflowY, 'hidden');
+  receive({kind:'layout_applied',generation:'current',id:current.id,height:180}); dom.flushFrames();
+  assert.equal(dom.input.style.overflowY, 'auto');
 });

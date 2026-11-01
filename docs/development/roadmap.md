@@ -21,6 +21,7 @@
 | 独立非提权输入宿主、主进程草稿、有限恢复和真实可用状态（本机用户验收完成） | [快捷输入进程隔离](features/quick-input-process-isolation/plan.md) |
 | 原生 Web 同源客户端、生命周期、任务/节点/设置职责与独立 WebView2 桥；保持现有功能和平台范围 | [Web 与快捷输入维护性重构](features/web-ui-maintainability/plan.md) |
 | 本机持续聊天：真实消息发送、历史查询、新对话、展开/收起（用户验收通过） | [持续聊天](features/local-node-chat/plan.md) |
+| 收起态输入按实际文本增高与删除回缩、单行起步与十行滚动上限；默认恰好容纳，额外一行可供实测调整（工程验证、独立复审及本机输入体验用户验收通过） | [自动高度](features/compact-input-auto-height/plan.md)、[验证说明](features/compact-input-auto-height/validation.md) |
 | 聊天连接中、已连接、无法连接三态提示（工程验证及本机桌面用户验收通过） | [连接状态](features/chat-connection-status/plan.md) |
 | 聊天启动诊断、共享冷启动与已有状态恢复（工程验证及本机聊天使用验收通过） | [启动恢复](features/chat-startup-recovery/plan.md) |
 | 聊天启动操作队列与统一发送体验（工程验证及本机桌面用户验收通过） | [操作队列](features/chat-operation-queue/plan.md) |
@@ -30,6 +31,8 @@
 | 快速本地安装：应用与运行时分开更新、目录候选、源码核对及持续进度（工程验证、独立复审和本地提速效果用户验收完成） | [快速本地安装](features/fast-local-install/plan.md)、[验证说明](features/fast-local-install/validation.md) |
 
 ## 后续验证与功能
+
+- 收起态自动高度的本机输入体验及默认恰好容纳策略已通过用户验收；实体输入法、鼠标滚动条、多屏/DPI等专项按[验证说明](features/compact-input-auto-height/validation.md)单独验证，后续调整额外一行策略时重新检查相关体验。
 
 - 快速本地安装的真实联网依赖修复与干净环境安装继续按[验证说明](features/fast-local-install/validation.md)完成专项验证。
 

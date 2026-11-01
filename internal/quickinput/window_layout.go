@@ -6,6 +6,16 @@ type windowBounds struct{ Left, Top, Right, Bottom int32 }
 type windowPoint struct{ X, Y int32 }
 type windowPlacement struct{ X, Y int32 }
 
+const (
+	minimumSurfaceHeight = 128 // DIP; below the full one-line chrome, above an unusable request.
+	maximumSurfaceHeight = 800
+	initialSurfaceHeight = 180
+)
+
+func validSurfaceHeight(height int) bool {
+	return height >= minimumSurfaceHeight && height <= maximumSurfaceHeight
+}
+
 func scaled(value int32, dpi uint32) int32 {
 	return int32(int64(value) * int64(dpi) / 96)
 }
@@ -17,7 +27,7 @@ func fitWindow(work windowBounds, dpi uint32, height int, origin *windowPoint) w
 	marginX := min(scaled(8, dpi), max(0, (work.Right-work.Left-1)/2))
 	marginY := min(scaled(8, dpi), max(0, (work.Bottom-work.Top-1)/2))
 	width := min(scaled(680, dpi), max(1, work.Right-work.Left-2*marginX))
-	h := min(scaled(int32(max(240, min(800, height))), dpi), max(1, work.Bottom-work.Top-2*marginY))
+	h := min(scaled(int32(max(minimumSurfaceHeight, min(maximumSurfaceHeight, height))), dpi), max(1, work.Bottom-work.Top-2*marginY))
 	x := work.Left + (work.Right-work.Left-width)/2
 	y := work.Top + (work.Bottom-work.Top-h)/3
 	if origin != nil {

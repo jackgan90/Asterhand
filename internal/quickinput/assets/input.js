@@ -1,6 +1,7 @@
 import {validDraft, normalizeNewlines, insertedText, inputKeyAction} from "./input-model.mjs";
 import {webview2Bridge} from "./webview2-bridge.mjs";
 import {chatPanel} from "./chat-ui.mjs";
+import {ComposerLayout} from "./composer-layout.mjs";
 export function inputEditor(bridge) {
   const cleanup = [];
   const listen = (target, event, callback) => {
@@ -10,16 +11,17 @@ export function inputEditor(bridge) {
   const input = document.querySelector("#input"), status = document.querySelector("#status");
   input.disabled = true;
   let generation = "", revision = 0, composing = false, previous = "", pendingSnapshot = "";
-  let lastHeight = 240;
   let staged = null;
-  let expanded = false, submit = () => {};
+  let submit = () => {};
   let compositionEndedAt = -Infinity;
   const send = (kind, extra = {}) => bridge.send({version:1,kind,generation,...extra});
+  const layout = new ComposerLayout(input, (height, id) => { if (generation) send('resize', {height, id}); });
   function commit(edited = false) {
     if (!generation) return;
     const text = normalizeNewlines(input.value);
     if (!validDraft(text)) {
       input.value = staged ? "" : previous;
+      layout.schedule();
       status.textContent = "本次编辑超出 16,000 UTF-8 字节，已保留原草稿";
       if (pendingSnapshot) { send("snapshot",{id:pendingSnapshot,text:previous,revision}); pendingSnapshot = ""; }
       return;
@@ -32,13 +34,12 @@ export function inputEditor(bridge) {
       previous = text; revision++; send("draft_updated",{text,revision});
     }
     status.textContent = "";
-    const height = expanded ? 760 : Math.max(240, Math.min(480, 164 + Math.min(12, input.value.split("\n").length) * 30));
-    if (height !== lastHeight) { lastHeight = height; send("resize",{height}); }
+    layout.schedule(edited);
     if (pendingSnapshot) { send("snapshot",{id:pendingSnapshot,text:previous,revision}); pendingSnapshot = ""; }
   }
   listen(input, "compositionstart", () => {composing = true;});
   listen(input, "compositionend", () => {composing = false; compositionEndedAt = performance.now(); commit(true);});
-  listen(input, "input", () => { if (!composing) commit(true); });
+  listen(input, "input", () => { if (!composing) commit(true); else layout.schedule(true); });
   listen(input, "beforeinput", event => {
     if (composing || event.isComposing || !event.inputType.startsWith("insert") || event.data === null) return;
     if (!validDraft(insertedText(input.value,input.selectionStart,input.selectionEnd,event.data))) {
@@ -68,15 +69,20 @@ export function inputEditor(bridge) {
         generation = message.generation; revision = message.revision; staged = null;
         input.value = previous = message.text; document.documentElement.dataset.theme = message.theme;
         input.disabled = false;
+        layout.flush();
         send("initialized");
         break;
-      case "theme": document.documentElement.dataset.theme = message.theme; break;
-      case "focus": input.focus(); break;
+      case "theme": document.documentElement.dataset.theme = message.theme; layout.schedule(); break;
+      case "layout_applied":
+        if (message.generation === generation) layout.applied(message.id, message.height);
+        break;
+      case "visibility": layout.setVisible(message.visible); break;
+      case "focus": layout.setVisible(true); input.focus(); break;
       case "snapshot": pendingSnapshot = message.id; if (!composing) commit(); break;
       case "error": status.textContent = message.message; break;
     }
   });
-  function dispose() { unsubscribe(); for (const remove of cleanup) remove(); }
+  function dispose() { unsubscribe(); layout.dispose(); for (const remove of cleanup) remove(); }
   listen(window, "pagehide", dispose);
   send("ready");
   return {
@@ -88,12 +94,14 @@ export function inputEditor(bridge) {
       if (composing || staged || revision !== snapshot.revision || previous !== snapshot.text) return false;
       staged = {operation, revision};
       input.value = "";
+      layout.schedule();
       return true;
     },
     restoreSubmission(operation) {
       if (composing || staged?.operation !== operation || staged.revision !== revision) return false;
       staged = null;
       input.value = previous;
+      layout.schedule();
       return true;
     },
     restoreQueued(text, expected) {
@@ -110,7 +118,7 @@ export function inputEditor(bridge) {
       commit();
       return true;
     },
-    setExpanded(value) { expanded = value; commit(); },
+    setExpanded(value) { layout.setExpanded(value); },
   };
 }
 const bridge = webview2Bridge();

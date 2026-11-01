@@ -28,6 +28,10 @@ Windows 快捷输入使用同版本的独立 GUI 宿主 AsterhandInputHost.exe�
 
 标题拖动交给原生移动机制，前端只声明区域；Windows WebView2 启用非客户区拖动，交互控件明确排除。位置记录仅在 UI 进程内按显示器保留，内容 resize 与首次定位分开，DPI/屏幕变化按工作区修正。图标、激活、工作区等 Windows 细节不进入会话或 IPC 公共协议；macOS Dock 和 Linux 桌面入口留给各平台宿主实现。决策及验证见[桌面入口 ADR](adr/008-chat-window-desktop-presence.md)与[聊天体验计划](../development/features/chat-desktop-experience/plan.md)。
 
+收起态自动高度复用受限 resize 消息；桥校验与窗口布局共享 128—800 DIP 请求范围，允许完整单行窗口低于原 240 DIP 下限。隐藏创建目标为 180 DIP，实际高度由前端测量决定，先完成同步排版再通知就绪；显示器宽度/DPI 生效后补测。前端以逻辑像素请求，宿主统一换算 DPI 并受工作区裁定。增长/回缩不写回用户首选锚点、不激活窗口；工作区不足时由输入区滚动容纳正文。展开态仍请求 760 DIP。详见[自动高度计划](../development/features/compact-input-auto-height/plan.md)。
+
+私有 WebView2 resize 请求 ID 最多 64 字节。宿主在实际布局应用后回送 layout_applied，保留请求 ID 与窗口代次，以当前 DPI 将真实客户区高度换算为逻辑像素；同尺寸请求也确认，位置/DPI/工作区恢复按当前请求回送实际尺寸。该确认用于区分扩高等待与真实限高，避免滚动条闪现；不进入父子进程或节点协议。
+
 数学排版资源作为固定版本静态文件随程序内嵌，包含字体和第三方许可；安装后无需 npm 或联网下载。新静态依赖不混入 OpenClaw 的运行时组件集合，完整性检查、许可证分发及源码指纹覆盖其清单与资源。
 
 ## 发布与安装边界

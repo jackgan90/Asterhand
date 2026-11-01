@@ -89,6 +89,23 @@ func (s *nativeSurface) applyBounds(bounds windowBounds) {
 	// HWND_NOTOPMOST + SWP_NOACTIVATE: resizing must not change application focus.
 	uiDLL.NewProc("SetWindowPos").Call(s.hwnd.Load(), ^uintptr(1), uintptr(bounds.Left), uintptr(bounds.Top),
 		uintptr(bounds.Right-bounds.Left), uintptr(bounds.Bottom-bounds.Top), 0x0010)
+	s.postLayoutApplied()
+}
+
+func (s *nativeSurface) postLayoutApplied() {
+	if s.core == nil || s.layoutID == "" || s.closing {
+		return
+	}
+	var client nativeRect
+	if ok, _, _ := uiDLL.NewProc("GetClientRect").Call(s.hwnd.Load(), uintptr(unsafe.Pointer(&client))); ok == 0 {
+		return
+	}
+	dpi, _, _ := uiDLL.NewProc("GetDpiForWindow").Call(s.hwnd.Load())
+	if dpi == 0 {
+		return
+	}
+	_ = s.postJSON(map[string]any{"kind": "layout_applied", "generation": s.epoch, "id": s.layoutID,
+		"height": float64(client.Bottom-client.Top) * 96 / float64(dpi)})
 }
 
 func (s *nativeSurface) rememberPlacement() {

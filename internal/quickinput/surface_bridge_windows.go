@@ -51,9 +51,14 @@ func (s *nativeSurface) bridgeMessage(raw string) {
 			s.suspend(func() { s.ready <- nil })
 		}
 	case "resize":
-		if m.Height >= 240 && m.Height <= 800 {
-			s.height = m.Height
-			s.positionCurrent(nil)
+		if validSurfaceHeight(m.Height) && len(m.ID) <= 64 {
+			s.layoutID = m.ID
+			if m.Height != s.height {
+				s.height = m.Height
+				s.positionCurrent(nil)
+			} else {
+				s.postLayoutApplied()
+			}
 		}
 	case "draft_updated", "snapshot":
 		if err := s.draft.Update(m.Text, m.Revision); err != nil {

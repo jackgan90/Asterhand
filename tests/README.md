@@ -1,5 +1,7 @@
 # 测试入口
 
+收起态输入框自动高度的真实折行、删除回缩、十行滚动、可调预留行与原生窗口验证，见[自动高度验证](../docs/development/features/compact-input-auto-height/validation.md)。几何 fixture 只验证事件/策略，真实 WebView2 与实体桌面边界分开记录。
+
 聊天三态标签、冷启动连接、隐藏恢复以及真实 OpenClaw 在本机模拟模型返回 401 时的零额外探测验证，见[连接状态计划](../docs/development/features/chat-connection-status/plan.md)。
 
 聊天启动队列的顺序、取消、恢复、IPC 帧预算与固定 OpenClaw 集成测试见[操作队列验证](../docs/development/features/chat-operation-queue/validation.md)。实际安装后的快速重启和实体桌面验收独立进行。

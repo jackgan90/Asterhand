@@ -2,6 +2,30 @@ package quickinput
 
 import "testing"
 
+func TestCompactHeightRangeAndWorkArea(t *testing.T) {
+	work := windowBounds{0, 0, 1920, 2160}
+	for _, height := range []int{minimumSurfaceHeight, 178, 431, 760, maximumSurfaceHeight} {
+		if !validSurfaceHeight(height) {
+			t.Fatalf("rejected usable height %d", height)
+		}
+		bounds := fitWindow(work, 144, height, nil)
+		if bounds.Bottom-bounds.Top != scaled(int32(height), 144) {
+			t.Fatalf("height %d was not respected: %+v", height, bounds)
+		}
+	}
+	for _, height := range []int{-1, 0, minimumSurfaceHeight - 1, maximumSurfaceHeight + 1} {
+		if validSurfaceHeight(height) {
+			t.Fatalf("accepted invalid height %d", height)
+		}
+	}
+	for _, height := range []int{0, 178, 431, 760, 10000} {
+		bounds := fitWindow(windowBounds{0, 0, 340, 210}, 192, height, nil)
+		if bounds.Bottom > 210 || bounds.Right > 340 || bounds.Top < 0 || bounds.Left < 0 {
+			t.Fatalf("clamped compact layout outside work area: %+v", bounds)
+		}
+	}
+}
+
 func TestWindowPlacementPreservesDragAcrossResizeAndDPI(t *testing.T) {
 	work := windowBounds{-1920, 0, 0, 1080}
 	origin := windowPoint{-1800, 80}

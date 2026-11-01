@@ -1,5 +1,7 @@
 # 快捷输入验证
 
+收起态单行起步、按实际折行增长与删除回缩、十行滚动及可调预留行，见[自动高度验证](../compact-input-auto-height/validation.md)。该专项不改变下文热键、权限与实体桌面边界。
+
 独立宿主、主进程草稿、权限矩阵与退出清理的当前验证入口见[进程隔离验证](../quick-input-process-isolation/validation.md)。
 
 ## 交付与验收状态

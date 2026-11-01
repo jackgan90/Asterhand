@@ -22,6 +22,8 @@
 
 ## 其他入口
 
+- [收起态快捷输入框自动高度](development/features/compact-input-auto-height/plan.md)、[验证说明](development/features/compact-input-auto-height/validation.md)：单行起步、按实际折行增高与删除回缩、十行滚动上限，默认恰好容纳；工程验证、独立复审及本机输入体验用户验收通过，专项边界见验证说明。
+
 - [聊天连接状态](development/features/chat-connection-status/plan.md)：对话 ID 后的三态提示、主题字色和不调用模型的连接观察。
 - [聊天运行时启动诊断与恢复](development/features/chat-startup-recovery/plan.md)：并发请求共享启动、请求超时与恢复生命周期分离及有界诊断。
 - [聊天操作队列](development/features/chat-operation-queue/plan.md)：启动期间即时收下消息、顺序执行、取消与暂停、宿主重建和退出边界。

@@ -77,6 +77,7 @@ type nativeSurface struct {
 	waiters                       map[string]chan struct{}
 	previous                      uintptr
 	height                        int
+	layoutID                      string
 	placements                    map[string]windowPlacement
 	placing                       bool
 	contentVisible                bool
@@ -93,6 +94,7 @@ func startNativeSurface(home string, onMessage func(string), onFailure func(erro
 func startConfiguredSurface(home string, onMessage func(string), onFailure func(error), relay *editorRelay, source ...*Draft) (*nativeSurface, error) {
 	s := &nativeSurface{home: home, ready: make(chan error, 1), done: make(chan struct{}), commands: make(chan func(), 32), onMessage: onMessage, onFailure: onFailure}
 	s.remoteDraft = relay
+	s.height = initialSurfaceHeight
 	s.draft, s.theme, s.epoch, s.waiters = &Draft{}, "star", model.ID(), map[string]chan struct{}{}
 	if len(source) != 0 {
 		s.draft = source[0]
@@ -175,11 +177,12 @@ func (s *nativeSurface) createWindow() error {
 	title, _ := windows.UTF16PtrFromString("Asterhand · 星伴")
 	const appWindow = 0x00040000                             // WS_EX_APPWINDOW; no owner or TOOLWINDOW suppression.
 	const windowStyle = 0x80000000 | 0x00080000 | 0x00020000 // POPUP | SYSMENU | MINIMIZEBOX
-	hwnd, _, err := uiDLL.NewProc("CreateWindowExW").Call(appWindow, uintptr(unsafe.Pointer(s.class)), uintptr(unsafe.Pointer(title)), windowStyle, 0, 0, 680, 240, 0, 0, instance, 0)
+	hwnd, _, err := uiDLL.NewProc("CreateWindowExW").Call(appWindow, uintptr(unsafe.Pointer(s.class)), uintptr(unsafe.Pointer(title)), windowStyle, 0, 0, 680, initialSurfaceHeight, 0, 0, instance, 0)
 	if hwnd == 0 {
 		return err
 	}
 	s.hwnd.Store(hwnd)
+	s.positionForShow()
 	uiHosts.Store(hwnd, s)
 	s.setWindowIcons()
 	windows.NewLazySystemDLL("wtsapi32.dll").NewProc("WTSRegisterSessionNotification").Call(hwnd, 0)

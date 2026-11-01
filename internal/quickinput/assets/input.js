@@ -2,6 +2,8 @@ import {validDraft, normalizeNewlines, insertedText, inputKeyAction} from "./inp
 import {webview2Bridge} from "./webview2-bridge.mjs";
 import {chatPanel} from "./chat-ui.mjs";
 import {ComposerLayout} from "./composer-layout.mjs";
+import {commandPanel} from "./command-ui.mjs";
+import {quotedCommand} from "./command-model.mjs";
 export function inputEditor(bridge) {
   const cleanup = [];
   const listen = (target, event, callback) => {
@@ -16,6 +18,7 @@ export function inputEditor(bridge) {
   let compositionEndedAt = -Infinity;
   const send = (kind, extra = {}) => bridge.send({version:1,kind,generation,...extra});
   const layout = new ComposerLayout(input, (height, id) => { if (generation) send('resize', {height, id}); });
+  let commands;
   function commit(edited = false) {
     if (!generation) return;
     const text = normalizeNewlines(input.value);
@@ -36,6 +39,7 @@ export function inputEditor(bridge) {
     status.textContent = "";
     layout.schedule(edited);
     if (pendingSnapshot) { send("snapshot",{id:pendingSnapshot,text:previous,revision}); pendingSnapshot = ""; }
+    commands?.changed();
   }
   listen(input, "compositionstart", () => {composing = true;});
   listen(input, "compositionend", () => {composing = false; compositionEndedAt = performance.now(); commit(true);});
@@ -54,11 +58,12 @@ export function inputEditor(bridge) {
   });
   listen(input, "keydown", event => {
     const action = inputKeyAction(event, composing, compositionEndedAt, performance.now());
+    if (!composing && !event.isComposing && event.keyCode !== 229 && commands.key(event)) { event.preventDefault(); return; }
     if (!action) return;
     event.preventDefault();
     if (action === 'consume') return;
     commit();
-    if (action === 'send') submit();
+    if (action === 'send') { if (!commands.submit()) submit(); }
     else send("hide");
   });
   listen(document, "dragover", event => event.preventDefault());
@@ -82,7 +87,12 @@ export function inputEditor(bridge) {
       case "error": status.textContent = message.message; break;
     }
   });
-  function dispose() { unsubscribe(); layout.dispose(); for (const remove of cleanup) remove(); }
+  commands = commandPanel(bridge, {input, post:send, changed:() => layout.schedule(), sendText:() => {
+    const text = quotedCommand(input.value);
+    if (composing || !validDraft(text)) { status.textContent = '请先完成输入法候选，或缩短待引用文本'; return; }
+    input.value = text; commit(true); commands.changed(); submit();
+  }});
+  function dispose() { unsubscribe(); commands.dispose(); layout.dispose(); for (const remove of cleanup) remove(); }
   listen(window, "pagehide", dispose);
   send("ready");
   return {
@@ -95,6 +105,7 @@ export function inputEditor(bridge) {
       staged = {operation, revision};
       input.value = "";
       layout.schedule();
+      commands.changed();
       return true;
     },
     restoreSubmission(operation) {
@@ -102,13 +113,7 @@ export function inputEditor(bridge) {
       staged = null;
       input.value = previous;
       layout.schedule();
-      return true;
-    },
-    restoreQueued(text, expected) {
-      if (!generation || composing || staged || revision !== expected || input.value) return false;
-      input.value = text;
-      commit();
-      input.focus();
+      commands.changed();
       return true;
     },
     clearIfRevision(expected) {
@@ -119,6 +124,7 @@ export function inputEditor(bridge) {
       return true;
     },
     setExpanded(value) { layout.setExpanded(value); },
+    commandSubmit() { return commands.submit(); },
   };
 }
 const bridge = webview2Bridge();

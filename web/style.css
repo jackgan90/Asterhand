@@ -553,3 +553,19 @@ hr {
 .desktop-modifiers { display: flex; gap: 24px; flex-wrap: wrap; }
 .desktop-settings .status-box { overflow-wrap: anywhere; }
 #settings > .settings-header { position: sticky; top: 0; z-index: 2; background: var(--white); }
+:root { --command-selected: #d9eee8; }
+#local-commands { width: min(1000px, 94vw); max-width: 1000px; }
+.commands-management { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 24px; }
+.commands-sidebar { min-width: 0; }
+#registered-commands { max-height: 540px; overflow-y: auto; margin-top: 12px; }
+.registered-command { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; background: transparent; color: inherit; }
+.registered-command[aria-pressed=true] { background: var(--command-selected); border-color: #367965; }
+.registered-command span, .registered-command small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.command-argument { display: flex; gap: 8px; margin-bottom: 8px; }
+.command-argument input { min-width: 0; flex: 1; }
+.command-argument-title { margin-top: 16px; margin-bottom: 6px; }
+#command-form > small { display: block; }
+.command-script-path { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.command-script-path input { min-width: 0; flex: 1; }
+.command-script-path button { flex: none; }
+@media (max-width: 720px) { .commands-management { grid-template-columns: 1fr; } #registered-commands { max-height: 180px; } }

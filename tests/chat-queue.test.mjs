@@ -72,3 +72,25 @@ test('late body recovery cannot put a cancelled message back in the queue', asyn
   assert.equal(box.entries.get('one').queued,false);
   assert.equal(box.entries.get('one').delivery,'rejected');
 });
+
+test('host reconstruction restores terminal failures without occupying the send queue', async () => {
+  const box=new ChatOutbox(), calls=[];
+  const failed={...item('failed'),state:'failed',turn:turn('failed','rejected','failed')};
+  const client={async call(action,fields){
+    calls.push(action);
+    if(action==='queue')return {queue:{...state(1),failures:[failed]}};
+    assert.equal(fields.operation_id,'failed');
+    return {queue_item:{...failed,text:'retained undelivered message'}};
+  }};
+  const queue=operationQueue(client,box);
+  await queue.refresh();
+  assert.equal(queue.waiting,false);
+  assert.equal(queue.count,0);
+  assert.equal(queue.failure('A').turn.delivery,'rejected');
+  const row=box.merge([],'A')[0];
+  assert.equal(row.blocks[0].text,'retained undelivered message');
+  assert.equal(row.delivery_status,'消息未送达');
+  assert.equal(row.queue_operation,undefined);
+  await queue.refresh();
+  assert.deepEqual(calls,['queue','queue_item','queue']);
+});

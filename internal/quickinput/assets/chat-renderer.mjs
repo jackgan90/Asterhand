@@ -113,7 +113,7 @@ export function markdown(text, copy, math = mathRenderer().message()) {
   return fragment;
 }
 
-export function messageRenderer(container, {copy, expand, cancelQueued}) {
+export function messageRenderer(container, {copy, expand}) {
   const cache = new Map();
   const math = mathRenderer();
   let mathNodes = 0;
@@ -126,7 +126,7 @@ export function messageRenderer(container, {copy, expand, cancelQueued}) {
     messages.forEach((message, index) => {
       const text = messageText(message);
       const key = message.ui_id ?? message.id;
-      const signature = message.id + ':' + message.queue_operation + ':' + message.queue_restore + ':' + message.delivery_status + ':' + message.role + ':' + message.timestamp + ':' + message.truncated + ':' + message.transient + ':' + message.fragmentStart + ':' + text;
+      const signature = message.id + ':' + message.delivery_status + ':' + message.role + ':' + message.timestamp + ':' + message.truncated + ':' + message.transient + ':' + message.fragmentStart + ':' + text;
       let entry = cache.get(key);
       if (!entry) {
         entry = {node: element('article', undefined, 'chat-message'), mathNodes: 0};
@@ -150,15 +150,6 @@ export function messageRenderer(container, {copy, expand, cancelQueued}) {
         }
         entry.node.replaceChildren(author, body);
         if (message.delivery_status) entry.node.append(element('p', message.delivery_status, 'chat-delivery-status'));
-        if (message.queue_operation && cancelQueued) {
-          const actions = message.queue_restore ? [['取回编辑', true], ['取消发送', false]] : [['移出队列', false]];
-          for (const [label, restore] of actions) {
-            const button = element('button', label, 'chat-queue-action');
-            button.type = 'button';
-            button.addEventListener('click', () => cancelQueued(message.queue_operation, message.queue_conversation, restore));
-            entry.node.append(button);
-          }
-        }
         if (message.fragmentStart) {
           const restart = element('button', '从头读取');
           restart.type = 'button';

@@ -208,7 +208,7 @@ func TestNativeChatPanelWorkflow(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("Ctrl+Enter compatibility failed")
 	}
-	waitChatScript(t, surface, `[...document.querySelectorAll('.chat-delivery-status')].some(node=>node.textContent.includes('消息发送失败'))`)
+	waitChatScript(t, surface, `[...document.querySelectorAll('.chat-delivery-status')].some(node=>node.textContent.includes('消息未送达'))`)
 	evaluate(t, surface, `document.querySelector('#chat-new').click();true`)
 	waitChatScript(t, surface, `!document.querySelector('#chat-draft-decision').hidden`)
 	evaluate(t, surface, `document.querySelector('#chat-draft-cancel').click();true`)

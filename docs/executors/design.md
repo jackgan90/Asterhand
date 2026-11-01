@@ -1,5 +1,7 @@
 # 执行器与工具设计
 
+本机快捷输入的预注册脚本采用[独立本地命令启动器](local-commands.md)，与下述持久任务执行契约并列；不进入模型工具面、远端协议或任务恢复流程。
+
 范围：OpenClaw adapter、公共配置和目录保护；未接入具体 coding harness。验证方法见 [公共流程契约](../development/features/provider-neutral-flows/validation.md)。
 
 ## 当前契约

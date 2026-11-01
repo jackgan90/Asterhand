@@ -32,6 +32,8 @@ type remoteSurface struct {
 	waiters                                 map[uint64]chan hostipc.Message
 	onFailure                               func(error)
 	chat                                    *chatController
+	commands                                CommandHandler
+	commandSequence                         uint64
 }
 
 func startRemoteSurface(home, theme string, draft *Draft, launch hostLauncher, failed func(error), recovered ...bool) (*remoteSurface, error) {
@@ -144,6 +146,8 @@ func (s *remoteSurface) receive(m hostipc.Message) error {
 		return hostFailure("host_protocol_invalid")
 	}
 	switch m.Kind {
+	case hostipc.CommandCall:
+		return s.commandCall(m)
 	case hostipc.Edit:
 		return s.acceptEdit(m)
 	case hostipc.ChatCall:

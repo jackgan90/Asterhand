@@ -76,9 +76,9 @@ export const awaitingReply = turn => Boolean(turn && (turn.delivery === 'queued'
 export function turnStatus(turn, submitting = false) {
   if (submitting) return '正在回复';
   if (!turn) return 'Enter 发送 · Shift+Enter 换行';
-  if (turn.delivery === 'unknown') return '送达待确认，正在核对；草稿已保留';
-  if (turn.delivery === 'rejected') return '发送未被接受，草稿已保留';
-  const states = {completed: '', cancelled: '已停止', failed: '回复失败', interrupted: '运行已中断', unknown: '运行状态待核对'};
+  if (turn.delivery === 'unknown') return '送达待确认，正在核对';
+  if (turn.delivery === 'rejected') return '消息未送达';
+  const states = {completed: '', cancelled: '回复已停止', failed: '回复失败', interrupted: '运行已中断', unknown: '运行状态待核对'};
   const state = awaitingReply(turn) ? '正在回复' : states[turn.run] ?? '正在核对';
   return [state, turn.persistence === 'unknown' ? '回复保存状态待确认' : ''].filter(Boolean).join(' · ');
 }

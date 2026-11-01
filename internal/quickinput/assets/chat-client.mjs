@@ -19,7 +19,7 @@ export function conversationClient(bridge, editor, onEnvelope) {
   });
 
   function dispatch(action, fields) {
-    const priority = ['select','prepare','enqueue','queue','queue_item','queue_cancel','queue_pause','queue_resume'].includes(action);
+    const priority = ['select','prepare','enqueue','queue','queue_item','cancel'].includes(action);
     if (pending.size >= (priority ? 8 : 4)) return Promise.reject(Object.assign(new Error('会话入口正在处理请求'), {notDispatched: true}));
     if (action !== 'hello' && !target) return Promise.reject(Object.assign(new Error('请先连接本机助手'), {notDispatched: true}));
     const id = crypto.randomUUID();

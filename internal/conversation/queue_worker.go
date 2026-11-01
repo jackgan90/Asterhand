@@ -59,10 +59,11 @@ func (s *Service) nextQueued() *queuedOperation {
 		}
 		if !record.Unsettled {
 			entry.item.State = "failed"
-			if s.queuePaused != "manual" {
-				s.queuePaused = "failed"
-			}
 		}
+	}
+	if entry.item.State == "failed" {
+		s.settleQueueFailureLocked(entry)
+		return nil
 	}
 	if s.queuePaused != "" || s.active != nil || s.configuring || entry.item.State != "queued" {
 		return nil
@@ -97,9 +98,7 @@ func (s *Service) executeQueued(entry *queuedOperation) {
 		} else {
 			entry.item.State = "failed"
 			entry.item.Error = PublicError(err)
-			if s.queuePaused != "manual" {
-				s.queuePaused = "failed"
-			}
+			s.settleQueueFailureLocked(entry)
 		}
 		s.mu.Unlock()
 		return
@@ -125,31 +124,19 @@ func (s *Service) executeQueued(entry *queuedOperation) {
 	if turn != nil {
 		entry.turn = *turn
 	}
-	stop := s.queuePaused == "manual" && s.active != nil && s.active.Turn.Operation == request.Operation
 	if turn != nil && turn.Delivery == "accepted" {
 		s.queue[0] = nil
 		s.queue = s.queue[1:]
 	} else if turn != nil && turn.Delivery == "unknown" {
 		entry.item.State = "unknown"
-		if s.queuePaused != "manual" {
-			s.queuePaused = "unknown"
-		}
+		s.queuePaused = "unknown"
 	} else if PublicError(err).Code == "busy" {
 		entry.item.State = "queued"
 	} else {
 		entry.item.State = "failed"
 		entry.item.Error = PublicError(err)
-		if s.queuePaused != "manual" {
-			s.queuePaused = "failed"
-		}
+		s.settleQueueFailureLocked(entry)
 	}
 	s.wakeQueueLocked()
 	s.mu.Unlock()
-	// Stop can race a submit before its native run exists. Repeat only the stop,
-	// after submission returns, never the message itself.
-	if stop {
-		ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)
-		defer cancel()
-		_ = s.cancelTurn(ctx, request.Operation)
-	}
 }

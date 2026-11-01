@@ -8,18 +8,20 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackgan90/Asterhand/internal/conversation/wire"
+	commandswire "github.com/jackgan90/Asterhand/internal/localcommands/wire"
 	"github.com/jackgan90/Asterhand/internal/quickinput/hostipc"
 )
 
 type bridgeMessage struct {
-	Version  int           `json:"version"`
-	Kind     string        `json:"kind"`
-	Epoch    string        `json:"generation"`
-	Revision uint64        `json:"revision"`
-	Text     string        `json:"text"`
-	ID       string        `json:"id"`
-	Height   int           `json:"height,omitempty"`
-	Chat     *wire.Request `json:"chat,omitempty"`
+	Version  int                   `json:"version"`
+	Kind     string                `json:"kind"`
+	Epoch    string                `json:"generation"`
+	Revision uint64                `json:"revision"`
+	Text     string                `json:"text"`
+	ID       string                `json:"id"`
+	Height   int                   `json:"height,omitempty"`
+	Chat     *wire.Request         `json:"chat,omitempty"`
+	Command  *commandswire.Request `json:"command,omitempty"`
 }
 
 func decodeBridgeMessage(raw string) (bridgeMessage, error) {
@@ -34,6 +36,9 @@ func decodeBridgeMessage(raw string) (bridgeMessage, error) {
 	}
 	if d.Decode(new(any)) != io.EOF || message.Version != 1 {
 		return message, fmt.Errorf("桥消息格式或版本无效")
+	}
+	if message.Command != nil && message.Kind != "command" || message.Kind == "command" && message.Chat != nil {
+		return message, fmt.Errorf("命令桥字段无效")
 	}
 	return message, nil
 }

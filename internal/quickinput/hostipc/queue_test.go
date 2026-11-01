@@ -20,6 +20,11 @@ func TestQueueRecoveryFrameFitsMaximumEscapedInput(t *testing.T) {
 		state.Entries = append(state.Entries, item)
 	}
 	item := state.Entries[0]
+	for range 8 {
+		failed := item
+		failed.State = "failed"
+		state.Failures = append(state.Failures, failed)
+	}
 	item.Text = strings.Repeat("\x00", wire.MaxInputBytes)
 	message := Message{Version: Version, Session: "session-123456789", Kind: ChatResult, ChatID: "request-123456789",
 		ChatReply: &ChatReply{Response: wire.Response{Queue: state, QueueItem: &item}}}

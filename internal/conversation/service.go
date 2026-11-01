@@ -15,6 +15,7 @@ import (
 type Service struct {
 	queue         []*queuedOperation
 	queuePaused   string
+	queueFailures []*queuedOperation
 	queueWake     chan struct{}
 	queueStarted  bool
 	queueRevision uint64
@@ -148,11 +149,11 @@ func (s *Service) Call(ctx context.Context, request Request) (response Response,
 			response.Connection = runtime.Connection(ctx, request.Action == "connect")
 		}
 		return response, nil
-	case "prepare", "enqueue", "queue", "queue_item", "queue_cancel", "queue_pause", "queue_resume":
+	case "prepare", "enqueue", "queue", "queue_item":
 		if describeErr != nil && (request.Action == "prepare" || request.Action == "enqueue") {
 			return response, describeErr
 		}
-		return s.queueCall(ctx, request, response)
+		return s.queueCall(request, response)
 	case "hello":
 		return response, describeErr
 	case "list":
@@ -184,17 +185,10 @@ func (s *Service) readOrCancel(ctx context.Context, request Request, response Re
 		return response, err
 	}
 	if item.Conversation.State == "creating" && request.Action == "history" {
-		s.mu.Lock()
-		queued := s.queuedCreationLocked(item.Conversation.ID)
-		s.mu.Unlock()
-		if queued {
-			response.Conversation = &item.Conversation
-			return response, nil
-		}
-		item, err = s.finishCreation(ctx, item)
-		if err != nil {
-			return response, err
-		}
+		// Reading an unprepared or failed conversation never retries creation.
+		// A subsequent explicit send queues a new preparation with the same key.
+		response.Conversation = &item.Conversation
+		return response, nil
 	}
 	response.Conversation = &item.Conversation
 	if request.Operation != "" {
@@ -229,6 +223,9 @@ func (s *Service) readOrCancel(ctx context.Context, request Request, response Re
 	case "cancel":
 		if response.Turn == nil {
 			return response, nil
+		}
+		if response.Turn.Delivery != "accepted" {
+			return response, Fail("not_ready", "当前没有可停止的回复")
 		}
 		if err = s.cancelTurn(ctx, response.Turn.Operation); err != nil {
 			return response, err

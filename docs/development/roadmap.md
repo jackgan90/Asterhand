@@ -6,6 +6,8 @@
 
 | 能力 | 设计与维护入口 |
 |---|---|
+| 普通消息发送、异常气泡与独立停止回复（工程验证及本机用户验收通过） | [聊天发送与停止回复](features/chat-send-intent/plan.md) |
+| Web 管理本机脚本、快捷输入 `/` 列表与模糊搜索、普通用户独立启动（工程验证及本机用户验收通过） | [本地快捷命令](features/local-quick-commands/plan.md)、[验证说明](features/local-quick-commands/validation.md) |
 | 本地与远端自然语言文件任务、问答、取消 | [Windows 跨节点助手](features/windows-assistant/plan.md) |
 | 模型配置、执行器契约、依赖锁定 | [模型、运行时与依赖边界](features/provider-runtime-boundaries/plan.md) |
 | 无模型配置启动、按功能准入与可选模型工具诊断（工程验证、独立审计及本机聊天验收通过，其余专项见验证说明） | [按需模型配置](features/on-demand-model-readiness/plan.md)、[验证说明](features/on-demand-model-readiness/validation.md) |

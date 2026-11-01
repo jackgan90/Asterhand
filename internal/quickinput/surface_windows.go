@@ -83,6 +83,7 @@ type nativeSurface struct {
 	contentVisible                bool
 	icons                         [2]uintptr
 	chatSend                      func(hostipc.Message) error
+	commandSend                   func(hostipc.Message) error
 	onMessage                     func(string)
 	onFailure                     func(error)
 }

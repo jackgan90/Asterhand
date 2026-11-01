@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/jackgan90/Asterhand/internal/environment"
 	"github.com/jackgan90/Asterhand/internal/executor"
 	"github.com/jackgan90/Asterhand/internal/launch"
+	"github.com/jackgan90/Asterhand/internal/quickinput"
 )
 
 func main() {
@@ -31,6 +33,20 @@ func run() error {
 	if command == "version" {
 		fmt.Println(config.Version)
 		return nil
+	}
+	if command == "pick-local-script" {
+		if len(args) != 0 {
+			return fmt.Errorf("脚本选择不接受参数")
+		}
+		// The private parent pipe is kept open for the lifetime of the request.
+		go func() { _, _ = io.Copy(io.Discard, os.Stdin); os.Exit(0) }()
+		path, err := quickinput.RunScriptPicker()
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(struct {
+			Path string `json:"path"`
+		}{path})
 	}
 	if command == "bundle-check" {
 		f := flag.NewFlagSet(command, flag.ContinueOnError)

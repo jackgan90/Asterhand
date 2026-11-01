@@ -1,0 +1,99 @@
+package app
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+
+	"github.com/jackgan90/Asterhand/internal/desktop"
+	"github.com/jackgan90/Asterhand/internal/localcommands"
+	commandswire "github.com/jackgan90/Asterhand/internal/localcommands/wire"
+)
+
+// commandsAPI is only reachable after the normal local session/Origin/CSRF
+// checks. There is deliberately no HTTP launch route or remote API equivalent.
+func (a *App) commandsAPI(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/api/local-commands/browse" && r.Method == http.MethodPost {
+		a.browseCommandScript(w, r)
+		return
+	}
+	var result any
+	var err error
+	switch {
+	case r.URL.Path == "/api/local-commands" && r.Method == http.MethodGet:
+		result, err = a.Commands.Snapshot()
+	case r.URL.Path == "/api/local-commands" && r.Method == http.MethodPost:
+		var input localcommands.Mutation
+		if err = readCommand(w, r, &input); err == nil {
+			result, err = a.Commands.Save(input)
+		}
+	case r.URL.Path == "/api/local-commands/delete" && r.Method == http.MethodPost:
+		var input struct {
+			ID       string `json:"id"`
+			Revision string `json:"revision"`
+		}
+		if err = readCommand(w, r, &input); err == nil {
+			result, err = a.Commands.Delete(input.ID, input.Revision)
+		}
+	default:
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		public := localcommands.Failure(err).Error
+		status := http.StatusBadRequest
+		if public.Code == "conflict" || public.Code == "name_conflict" {
+			status = http.StatusConflict
+		}
+		if public.Code == "configuration" || public.Code == "unavailable" {
+			status = http.StatusServiceUnavailable
+		}
+		send(w, status, map[string]string{"error": public.Message, "code": public.Code})
+		return
+	}
+	send(w, http.StatusOK, result)
+}
+
+func readCommand(w http.ResponseWriter, r *http.Request, value any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 32*1024)
+	d := json.NewDecoder(r.Body)
+	d.DisallowUnknownFields()
+	if err := d.Decode(value); err != nil {
+		return err
+	}
+	if d.Decode(new(any)) != io.EOF {
+		return fmt.Errorf("请求包含多余内容")
+	}
+	return nil
+}
+
+func (a *App) commandCall(ctx context.Context, request commandswire.Request) commandswire.Response {
+	if err := request.Validate(); err != nil {
+		return localcommands.Failure(err)
+	}
+	a.mu.Lock()
+	stopping := a.stopping
+	address := a.webAddress
+	a.mu.Unlock()
+	if stopping {
+		return localcommands.Failure(fmt.Errorf("节点正在退出"))
+	}
+	switch request.Action {
+	case "list":
+		return a.Commands.List(request)
+	case "launch":
+		return a.Commands.Launch(ctx, request.ID, request.Revision)
+	case "settings":
+		if address == "" {
+			return localcommands.Failure(fmt.Errorf("Web 尚未就绪"))
+		}
+		fragment := url.Values{"login": {a.loginToken}, "commands": {request.ID}}
+		if err := desktop.Open("http://" + address + "/#" + fragment.Encode()); err != nil {
+			return localcommands.Failure(err)
+		}
+	}
+	return commandswire.Response{}
+}

@@ -16,6 +16,7 @@ import (
 	"github.com/jackgan90/Asterhand/internal/config"
 	"github.com/jackgan90/Asterhand/internal/conversation"
 	"github.com/jackgan90/Asterhand/internal/executor"
+	"github.com/jackgan90/Asterhand/internal/localcommands"
 	"github.com/jackgan90/Asterhand/internal/model"
 	"github.com/jackgan90/Asterhand/internal/peer"
 	"github.com/jackgan90/Asterhand/internal/quickinput"
@@ -34,6 +35,9 @@ type App struct {
 	Engine          *tasks.Engine
 	Input           *quickinput.Controller
 	Chat            *conversation.Service
+	Commands        *localcommands.Registry
+	pickScript      func(context.Context) (string, error)
+	commandPicking  bool
 	desktopRequests chan struct{}
 	loginToken      string
 	mu              sync.Mutex
@@ -91,6 +95,8 @@ func New(c *config.Manager, x executor.Executor) (*App, error) {
 	}
 	a.loginToken = string(b)
 	a.Input = quickinput.New(c.Home)
+	a.Commands = localcommands.Open(c.Home, quickinput.StartLocalCommand)
+	a.Input.SetCommandHandler(a.commandCall)
 	a.Chat = conversation.New(c.Get().NodeID, s, executor.NewConversationRuntime(c))
 	a.Input.SetConversationClient(conversation.Client{Target: a.Chat.Target(), Transport: a.Chat})
 	a.Chat.SetCompletionHandler(a.Input.ReplyCompleted)

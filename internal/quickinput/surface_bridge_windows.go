@@ -19,6 +19,7 @@ func NativeFactory(c *Controller) SurfaceFactory {
 		if err == nil {
 			s.mu.Lock()
 			s.chat = c.chat
+			s.commands = c.commands
 			s.mu.Unlock()
 			c.mu.Lock()
 			c.status.RuntimeVersion = s.runtime
@@ -89,6 +90,8 @@ func (s *nativeSurface) bridgeMessage(raw string) {
 		}
 	case "chat":
 		s.chatRequest(m)
+	case "command":
+		s.commandRequest(m)
 	}
 }
 

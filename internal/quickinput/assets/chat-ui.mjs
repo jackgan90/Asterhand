@@ -18,6 +18,7 @@ export function chatPanel(bridge, editor) {
   const sendButton = query('chat-send'), stopButton = query('chat-stop'), olderButton = query('chat-older');
   let selected = '', turn = null, pending = null, expanded = false, visible = false, ready = false;
   let sending = false, polling = false, loading = false, timer = null, selection = 0, nodeBusy = false;
+  let stoppingOperation = '';
   let createOperation = '', listOffset = 0;
   let creatingRequest = null;
   let draftDecision = null, historyLoaded = false, historyLoading = -1, readingOlder = false, refreshHistory = false;
@@ -27,24 +28,22 @@ export function chatPanel(bridge, editor) {
   const say = message => statusView.message(message);
   const sayTurn = (suffix = '') => {
     if (queue.enabled) {
-      if (queue.state.paused) {
-        const uncertain = queue.state.entries.find(item => item.state === 'unknown');
-        if (uncertain) return statusView.turn(uncertain.turn, suffix);
-        const failed = queue.state.entries.find(item => item.state === 'failed');
-        if (failed?.turn?.delivery === 'unknown') return say('消息送达仍未确认，运行已停止；请勿重复发送');
-        if (failed) return say(failed.error?.message ?? '消息发送失败');
-        return say(queue.state.active ? '正在停止…' : '已停止');
+      if (queue.state.active?.conversation_id === selected) {
+        if (stoppingOperation === queue.state.active.operation_id) return say('正在停止回复…');
+        return statusView.turn(queue.state.active, suffix);
       }
-      if (queue.state.active?.conversation_id === selected) return statusView.turn(queue.state.active, suffix);
       if (queue.awaitingReply(selected)) return statusView.turn(null, suffix, true);
+      const failed = queue.failure(selected);
+      if (failed?.turn) return statusView.turn(newerTurn(turn, failed.turn), suffix);
+      if (failed && !turn) return say(failed.error?.message ?? '会话准备失败');
     }
     statusView.turn(turn, suffix, sending && turn?.operation_id !== sendingOperation);
   };
   const updateButtons = () => {
     sendButton.disabled = !ready || sending || (!queue.enabled && (nodeBusy || unsettled(turn) || Boolean(outbox.pending(selected)))) || Boolean(draftDecision);
-    stopButton.hidden = queue.enabled ? !queue.waiting || queue.state.paused && !queue.state.active : !unsettled(turn);
-    const resume = query('chat-queue-resume');
-    if (resume) resume.hidden = !queue.state?.paused;
+    const active = queue.enabled ? queue.state.active : turn;
+    stopButton.hidden = active?.conversation_id !== selected || active?.delivery !== 'accepted' || !unsettled(active);
+    stopButton.disabled = Boolean(stoppingOperation);
     olderButton.hidden = !windowState.hasMore;
   };
 
@@ -68,7 +67,7 @@ export function chatPanel(bridge, editor) {
   const client = conversationClient(bridge, editor, envelope);
   const queue = operationQueue(client, outbox);
   const connection = connectionView(query('chat-connection'), client);
-  const render = messageRenderer(query('chat-messages'), {copy, expand: expandMessage, cancelQueued});
+  const render = messageRenderer(query('chat-messages'), {copy, expand: expandMessage});
 
   const atBottom = () => scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 48;
   const followsLatest = () => !readingOlder && atBottom();
@@ -202,6 +201,7 @@ export function chatPanel(bridge, editor) {
   }
 
   async function submit() {
+    if (editor.commandSubmit?.()) return;
     const snapshot = editor.snapshot();
     if (!snapshot || !snapshot.text.trim() || sending || (!queue.enabled && (nodeBusy || unsettled(turn) || outbox.pending(selected))) || draftDecision) return;
     const operation = crypto.randomUUID();
@@ -313,16 +313,6 @@ export function chatPanel(bridge, editor) {
         (entry.id === response.active_conversation ? queue.state?.active?.delivery === 'unknown' ? ' · 送达待确认' : ' · 正在回复' : '');
       button.addEventListener('click', () => { if (entry.id !== selected) requestSwitch(() => select(entry.id)); });
       list.append(button);
-      const creation = queue.state?.entries.find(item => item.kind === 'create' && item.conversation_id === entry.id);
-      if (creation?.state === 'failed') {
-        const cancel = document.createElement('button');
-        cancel.type = 'button'; cancel.textContent = '取消创建';
-        cancel.addEventListener('click', () => safely(async () => {
-          await client.call('queue_cancel', {conversation_id:entry.id, operation_id:creation.operation_id});
-          await showList(); sayTurn(); updateButtons();
-        }));
-        list.append(cancel);
-      }
     }
     listOffset += entries.length;
     if (entries.length === 50) {
@@ -371,22 +361,6 @@ export function chatPanel(bridge, editor) {
     editor.post('copy', payload);
   }
 
-  async function cancelQueued(operation, conversation, restore) {
-    const snapshot = editor.snapshot();
-    if (restore && (!snapshot || snapshot.text)) { say('请先处理输入框中的草稿，再取回待发消息'); return; }
-    try {
-      const reply = await client.call('queue_cancel', {operation_id:operation, conversation_id:conversation});
-      const entry = outbox.entries.get(operation);
-      if (entry) {
-        entry.text=reply.queue_item.text ?? entry.text; entry.queued=false; entry.queueState=''; entry.needsReceipt=false;
-        outbox.observe(reply.queue_item.turn);
-      }
-      if (restore && !editor.restoreQueued?.(reply.queue_item.text, snapshot.revision)) say('消息已取消，文本仍保留在气泡中，可复制');
-      else say(restore ? '已取回输入框' : '已取消待发消息');
-      paint(); updateButtons(); schedule();
-    } catch (error) { say(error.message); }
-  }
-
   async function safely(action) { try { await action(); } catch (error) { say(error.message); } }
   function requestSwitch(action) {
     if (sending) { say('消息正在发送，请稍后切换会话'); return; }
@@ -421,14 +395,17 @@ export function chatPanel(bridge, editor) {
   listen(query('chat-latest'), 'click', () => safely(async () => { await history(); scroll.scrollTop = scroll.scrollHeight; schedule(); }));
   listen(olderButton, 'click', () => safely(() => history(true)));
   listen(stopButton, 'click', () => safely(async () => {
-    if (queue.enabled) { await client.call('queue_pause'); sayTurn(); updateButtons(); schedule(); return; }
-    if (!selected || !turn) return;
-    say('正在请求停止…');
-    const response = await client.call('cancel', {conversation_id: selected, operation_id: turn.operation_id});
-    turn = newerTurn(turn, response.turn); sayTurn(); schedule();
-  }));
-  if (query('chat-queue-resume')) listen(query('chat-queue-resume'), 'click', () => safely(async () => {
-    await client.call('queue_resume'); sayTurn(); updateButtons(); schedule();
+    const active = queue.enabled ? queue.state.active : turn;
+    if (stoppingOperation || active?.conversation_id !== selected || active?.delivery !== 'accepted' || !unsettled(active)) return;
+    const id = selected, version = selection;
+    stoppingOperation = active.operation_id;
+    say('正在停止回复…'); updateButtons();
+    try {
+      const response = await client.call('cancel', {conversation_id: id, operation_id: active.operation_id});
+      if (id === selected && version === selection) turn = newerTurn(turn, response.turn);
+    } finally {
+      stoppingOperation = ''; sayTurn(); updateButtons(); schedule();
+    }
   }));
   editor.onSubmit(submit);
   const unsubscribe = bridge.subscribe(message => {

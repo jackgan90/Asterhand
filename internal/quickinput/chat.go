@@ -55,7 +55,7 @@ func (c *chatController) close() {
 
 func (c *chatController) dispatch(surface *remoteSurface, message hostipc.Message) {
 	request := *message.Chat
-	priority := request.Action == "select" || request.Action == "prepare" || request.Action == "enqueue" || request.Action == "queue" || request.Action == "queue_item" || request.Action == "queue_cancel" || request.Action == "queue_pause" || request.Action == "queue_resume"
+	priority := request.Action == "select" || request.Action == "prepare" || request.Action == "enqueue" || request.Action == "queue" || request.Action == "queue_item" || request.Action == "cancel"
 	read := request.Action == "history" || request.Action == "message" || request.Action == "reconcile"
 	c.mu.Lock()
 	if c.closing || c.inflight >= 8 || !priority && c.inflight >= 4 || read && c.reads >= 2 {
@@ -138,6 +138,9 @@ func (c *chatController) decorate(surface *remoteSurface, request wire.Request, 
 	}
 	if response.Queue != nil {
 		for _, entry := range response.Queue.Entries {
+			observe(entry.Turn)
+		}
+		for _, entry := range response.Queue.Failures {
 			observe(entry.Turn)
 		}
 		observe(response.Queue.Active)

@@ -36,7 +36,30 @@
   const frame = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   const measure = () => ['chat-scroll', 'chat-status'].map(id => document.getElementById(id).getBoundingClientRect().height);
   emit({kind: 'focus'}); await frame();
-  document.getElementById('chat-expand').click(); await frame();
+  // Expansion itself changes the viewport. Take the send baseline only after
+  // its exact native allocation is acknowledged and the renderer has caught up.
+  const host = window.chrome.webview, post = host.postMessage;
+  let resizeID = '', appliedHeight = 0;
+  const allocated = event => {
+    if (event.data.kind === 'layout_applied' && event.data.id === resizeID) appliedHeight = event.data.height;
+  };
+  host.postMessage = message => {
+    if (message.kind === 'resize') { resizeID = message.id; appliedHeight = 0; }
+    post.call(host, message);
+  };
+  host.addEventListener('message', allocated);
+  try {
+    document.getElementById('chat-expand').click();
+    const deadline = performance.now() + 5000;
+    do {
+      await frame();
+      if (appliedHeight > 0 && Math.abs(innerHeight - appliedHeight) <= 1) break;
+      if (performance.now() >= deadline) throw Error('expanded native allocation was not confirmed');
+    } while (true);
+  } finally {
+    host.postMessage = post;
+    host.removeEventListener('message', allocated);
+  }
   const baseline = measure(), measurements = [baseline], statuses = [];
   const expectWaiting = () => {
     const text = document.getElementById('chat-status').textContent;

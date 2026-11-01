@@ -19,7 +19,7 @@ type queuedSend struct {
 }
 type queuedRuntime struct {
 	fixtureRuntime
-	createError                           error
+	createError, prepareError             error
 	createGate, prepareGate, dispatchGate chan struct{}
 	prepared                              chan struct{}
 	calls                                 chan queuedSend
@@ -38,11 +38,11 @@ func waitQueueGate(ctx context.Context, gate chan struct{}) error {
 	}
 }
 func (r *queuedRuntime) Create(ctx context.Context, binding Binding) (Binding, error) {
-	if r.createError != nil {
-		return binding, r.createError
-	}
 	if err := waitQueueGate(ctx, r.createGate); err != nil {
 		return binding, err
+	}
+	if r.createError != nil {
+		return binding, r.createError
 	}
 	return r.fixtureRuntime.Create(ctx, binding)
 }
@@ -51,7 +51,10 @@ func (r *queuedRuntime) Prepare(ctx context.Context, _ Binding) error {
 	case r.prepared <- struct{}{}:
 	default:
 	}
-	return waitQueueGate(ctx, r.prepareGate)
+	if err := waitQueueGate(ctx, r.prepareGate); err != nil {
+		return err
+	}
+	return r.prepareError
 }
 func (r *queuedRuntime) Submit(ctx context.Context, binding Binding, submission Submission) (Receipt, error) {
 	r.calls <- queuedSend{binding, submission}
@@ -155,10 +158,10 @@ func TestQueueColdCreateReturnsImmediatelyAndPreservesCrossConversationFIFO(t *t
 	}
 }
 
-func TestQueueBoundsDedupCancellationAndMetadataOnlyRestart(t *testing.T) {
+func TestQueueBoundsDedupAndMetadataOnlyRestart(t *testing.T) {
 	s, r, records := queueFixture(t)
 	id := createFixture(t, s)
-	queueCallOK(t, s, Request{Action: "queue_pause"})
+	r.prepareGate = make(chan struct{})
 	requests := make([]Request, QueueMessageLimit)
 	for i := range requests {
 		requests[i] = queuedRequest(id, fmt.Sprintf("private-queue-text-%d", i))
@@ -182,9 +185,9 @@ func TestQueueBoundsDedupCancellationAndMetadataOnlyRestart(t *testing.T) {
 	if s.BeginStop(false) {
 		t.Fatal("exit discarded text without confirmation")
 	}
-	reply := queueCallOK(t, s, Request{Action: "queue_cancel", Operation: requests[0].Operation, Conversation: id})
-	if reply.QueueItem.Text != requests[0].Text || len(reply.Queue.Entries) != 7 {
-		t.Fatal("cancel lost text or changed other entries")
+	reply := queueCallOK(t, s, Request{Action: "queue_item", Operation: requests[0].Operation, Conversation: id})
+	if reply.QueueItem.Text != requests[0].Text || len(reply.Queue.Entries) != 8 {
+		t.Fatal("read changed queue custody")
 	}
 	for _, kind := range []string{"chat-intent", "chat-turn", "chat-conversation"} {
 		var raw []map[string]any
@@ -212,11 +215,11 @@ func TestQueueBoundsDedupCancellationAndMetadataOnlyRestart(t *testing.T) {
 	}
 }
 
-func TestCancelPreparingMessageDoesNotDispatchAndResumeIsExplicit(t *testing.T) {
+func TestPreparingMessagesCannotBeWithdrawnAndContinueAutomatically(t *testing.T) {
 	s, r, _ := queueFixture(t)
 	id := createFixture(t, s)
 	r.prepareGate = make(chan struct{})
-	first, second := queuedRequest(id, "cancel before dispatch"), queuedRequest(id, "keep for later")
+	first, second := queuedRequest(id, "already sent from user perspective"), queuedRequest(id, "next message")
 	queueCallOK(t, s, first)
 	select {
 	case <-r.prepared:
@@ -224,15 +227,23 @@ func TestCancelPreparingMessageDoesNotDispatchAndResumeIsExplicit(t *testing.T) 
 		t.Fatal("did not prepare")
 	}
 	queueCallOK(t, s, second)
-	queueCallOK(t, s, Request{Action: "queue_pause"})
-	queueCallOK(t, s, Request{Action: "queue_cancel", Conversation: id, Operation: first.Operation})
-	close(r.prepareGate)
-	if len(r.calls) != 0 {
-		t.Fatal("cancelled preparation dispatched")
+	for _, action := range []string{"queue_pause", "queue_resume", "queue_cancel", "cancel"} {
+		request := Request{Action: action, Target: s.Target()}
+		if action == "queue_cancel" || action == "cancel" {
+			request.Conversation, request.Operation = id, first.Operation
+		}
+		if _, err := s.Call(context.Background(), request); err == nil {
+			t.Fatalf("%s accepted during preparation", action)
+		}
 	}
-	queueCallOK(t, s, Request{Action: "queue_resume"})
+	close(r.prepareGate)
+	if got := waitQueueSend(t, r); got.submission.Text != first.Text {
+		t.Fatal("first user message was withdrawn")
+	}
+	awaitQueue(t, s, func(q *QueueState) bool { return q.Active != nil && q.Active.Delivery == "accepted" })
+	completeQueueTurn(t, s, r)
 	if got := waitQueueSend(t, r); got.submission.Text != second.Text {
-		t.Fatal("cancelled body sent")
+		t.Fatal("subsequent message required manual resume")
 	}
 }
 
@@ -245,10 +256,6 @@ func TestUnknownQueuedDispatchOnlyReconcilesAndDoesNotReplay(t *testing.T) {
 	queueCallOK(t, s, second)
 	waitQueueSend(t, r)
 	awaitQueue(t, s, func(q *QueueState) bool { return q.Paused && q.Entries[0].State == "unknown" })
-	request := Request{Action: "queue_resume", Target: s.Target()}
-	if _, err := s.Call(context.Background(), request); PublicError(err).Code != "busy" {
-		t.Fatal("unknown dispatch resumed")
-	}
 	response := queueCallOK(t, s, first)
 	if response.Turn.Delivery != "unknown" || len(r.calls) != 0 {
 		t.Fatal("duplicate unknown send replayed")
@@ -263,45 +270,53 @@ func TestUnknownQueuedDispatchOnlyReconcilesAndDoesNotReplay(t *testing.T) {
 	}
 }
 
-func TestQueuePauseRacingNativeDispatchRepeatsStopOnly(t *testing.T) {
+func TestStopReplyKeepsUserMessageAndDoesNotPauseNextSend(t *testing.T) {
 	s, r, _ := queueFixture(t)
 	id := createFixture(t, s)
-	r.dispatchGate = make(chan struct{})
-	queueCallOK(t, s, queuedRequest(id, "stop racing dispatch"))
+	first, second := queuedRequest(id, "stop this reply"), queuedRequest(id, "deliver next normally")
+	queueCallOK(t, s, first)
 	waitQueueSend(t, r)
-	queueCallOK(t, s, Request{Action: "queue_pause"})
-	close(r.dispatchGate)
-	awaitQueue(t, s, func(q *QueueState) bool { return q.Paused && len(q.Entries) == 0 })
-	deadline := time.After(time.Second)
-	for i := 0; i < 2; i++ {
-		select {
-		case <-r.cancels:
-		case <-deadline:
-			t.Fatal("stop was not repeated after admission")
-		}
+	active := awaitQueue(t, s, func(q *QueueState) bool { return q.Active != nil && q.Active.Delivery == "accepted" }).Active
+	queueCallOK(t, s, second)
+	stop := Request{Action: "cancel", Conversation: id, Operation: first.Operation}
+	queueCallOK(t, s, stop)
+	if got := <-r.cancels; got != active.ID {
+		t.Fatal("stopped wrong native turn")
 	}
-	if len(r.calls) != 0 {
-		t.Fatal("stop retried text")
+	r.mu.Lock()
+	r.observation = Observation{Accepted: true, Stopped: true, Run: "cancelled", Saved: true}
+	r.mu.Unlock()
+	queueCallOK(t, s, Request{Action: "reconcile", Conversation: id, Operation: first.Operation})
+	if got := waitQueueSend(t, r); got.submission.Text != second.Text {
+		t.Fatal("stop paused or replayed queued text")
+	}
+	awaitQueue(t, s, func(q *QueueState) bool {
+		return q.Active != nil && q.Active.Operation == second.Operation && q.Active.Delivery == "accepted"
+	})
+	queueCallOK(t, s, stop)
+	if len(r.cancels) != 0 {
+		t.Fatal("late stop affected new turn")
+	}
+	reply := queueCallOK(t, s, Request{Action: "queue_item", Conversation: id, Operation: first.Operation})
+	if reply.QueueItem.Turn.Delivery != "accepted" || reply.QueueItem.Turn.Run != "cancelled" || reply.Queue.Paused {
+		t.Fatal("stop withdrew user message or paused queue")
 	}
 }
 
-func TestFailedQueuedCreationCanReleaseConfigurationWithoutDroppingDependents(t *testing.T) {
+func TestFailedCreationSettlesDependentsAndNewSendPreparesSameConversation(t *testing.T) {
 	s, r, _ := queueFixture(t)
 	r.createError = Fail("unavailable", "fixture startup failure")
+	r.createGate = make(chan struct{})
 	operation := model.ID()
 	id := queueCallOK(t, s, Request{Action: "prepare", Operation: operation}).Conversation.ID
 	message := queuedRequest(id, "preserve on startup failure")
 	queueCallOK(t, s, message)
-	awaitQueue(t, s, func(q *QueueState) bool { return q.Paused && q.Entries[0].State == "failed" })
-	request := Request{Action: "queue_cancel", Target: s.Target(), Conversation: id, Operation: operation}
-	if _, err := s.Call(context.Background(), request); PublicError(err).Code != "busy" {
-		t.Fatal("creation removed while dependent text remained")
-	}
-	reply := queueCallOK(t, s, Request{Action: "queue_cancel", Conversation: id, Operation: message.Operation})
+	close(r.createGate)
+	awaitQueue(t, s, func(q *QueueState) bool { return len(q.Entries) == 0 && len(q.Failures) == 2 })
+	reply := queueCallOK(t, s, Request{Action: "queue_item", Conversation: id, Operation: message.Operation})
 	if reply.QueueItem.Text != message.Text || reply.QueueItem.Turn.Delivery != "rejected" {
 		t.Fatal("undispatched text was not recoverable")
 	}
-	queueCallOK(t, s, request)
 	release, err := s.BeginConfiguration()
 	if err != nil {
 		t.Fatal("failed startup permanently blocked settings", err)
@@ -310,9 +325,15 @@ func TestFailedQueuedCreationCanReleaseConfigurationWithoutDroppingDependents(t 
 	if len(r.calls) != 0 {
 		t.Fatal("startup failure dispatched text")
 	}
+	r.createError = nil
+	next := queuedRequest(id, "new send after configuration repair")
+	queueCallOK(t, s, next)
+	if got := waitQueueSend(t, r); got.submission.Text != next.Text {
+		t.Fatal("new send replayed failed message")
+	}
 }
 
-func TestRemovingStoppedUnknownQueueItemPreservesUnknownDelivery(t *testing.T) {
+func TestStoppedUnknownReceiptReleasesFIFOWithoutFabricatingRejection(t *testing.T) {
 	s, r, _ := queueFixture(t)
 	id := createFixture(t, s)
 	r.loseReply = true
@@ -326,8 +347,8 @@ func TestRemovingStoppedUnknownQueueItemPreservesUnknownDelivery(t *testing.T) {
 	if _, _, err := s.reconcile(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
-	awaitQueue(t, s, func(q *QueueState) bool { return q.Entries[0].State == "failed" })
-	response := queueCallOK(t, s, Request{Action: "queue_cancel", Conversation: id, Operation: request.Operation})
+	awaitQueue(t, s, func(q *QueueState) bool { return len(q.Entries) == 0 && len(q.Failures) == 1 })
+	response := queueCallOK(t, s, Request{Action: "queue_item", Conversation: id, Operation: request.Operation})
 	if response.QueueItem.Turn.Delivery != "unknown" {
 		t.Fatal("removal fabricated rejection")
 	}

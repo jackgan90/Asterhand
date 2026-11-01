@@ -39,11 +39,14 @@ export function domFixture() {
     if (!elements.has(id)) elements.set(id, new Element("div", document));
     return elements.get(id);
   };
-  document.querySelector = selector => selector === ".question input:focus" ? document.activeElement : select(selector);
+  // Optional feature panels are absent in the base fixture. Dedicated tests
+  // explicitly create them with select() before mounting their controllers.
+  const optional = new Set(['#local-commands', '#command-panel', '#command-list']);
+  document.querySelector = selector => optional.has(selector) && !elements.has(selector) ? null : selector === ".question input:focus" ? document.activeElement : select(selector);
   document.querySelectorAll = () => [];
   document.createElement = tag => new Element(tag, document);
   document.createTextNode = text => ({textContent:text});
-  document.getElementById = id => select("#"+id);
+  document.getElementById = id => document.querySelector("#"+id);
   document.documentElement = {dataset:{}};
   for (const id of ["#target", "#project", "#desktop-key"]) select(id).tagName = "SELECT";
   for (const [id, names] of Object.entries({

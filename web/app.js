@@ -7,6 +7,7 @@ import {nodeController} from "./node-controller.mjs";
 import {nodeSettings} from "./node-settings.mjs";
 import {taskController} from "./task-controller.mjs";
 import {taskView} from "./task-view.mjs";
+import {localCommands} from "./local-commands.mjs";
 
 export function mountApp() {
   const client = apiClient(), actions = browserActions(), notices = noticeView($("#notice"));
@@ -24,6 +25,8 @@ export function mountApp() {
     try { await fn(); } catch (error) { if (scope.active) notice(error.message); }
   }
   const desktop = desktopSettings(client.api, client.post, {listen, session});
+  const commands = localCommands({...client, listen, session, guarded, actions});
+  let commandTarget = new URLSearchParams(location.hash.slice(1)).get('commands');
   const nodes = nodeController({...client, session, guarded, notice, actions, listen, isSubmitting:() => tasks?.submitting() || false});
   const settings = nodeSettings({...client, session, desktop, guarded, notice, listen, refreshPeers:nodes.refresh});
   const view = taskView({guarded, submissionChanged:nodes.updateSubmission, callbacks:{
@@ -49,6 +52,10 @@ export function mountApp() {
       await tasks.refresh(scope);
       if (!scope.active) return;
       await settings.resume();
+      if (scope.active && commandTarget !== null) {
+        const id = commandTarget; commandTarget = null;
+        try { await commands.open(id); } catch (error) { notice(error.message); }
+      }
     } catch (error) {
       if (scope.active) {
         $("#login").hidden = false;
@@ -59,7 +66,7 @@ export function mountApp() {
     }
   }
   lifecycle = appLifecycle({client, initialize, refreshPeers:nodes.refresh, refreshTasks:tasks.refresh, connection,
-    stopped:() => { settings.stop(); desktop.stop(); notices.stop(); },
+    stopped:() => { settings.stop(); desktop.stop(); commands.stop(); notices.stop(); },
     failed:error => { if (!error.message.includes("登录链接")) notice(error.message); }});
   for (const element of document.querySelectorAll("[data-close]"))
     listen(element, "click", () => document.getElementById(element.dataset.close).close());

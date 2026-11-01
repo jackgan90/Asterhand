@@ -1,5 +1,7 @@
 # 测试入口
 
+本地快捷命令的注册合并、启动参数、独立进程、IPC 去重、真实 WebView2 列表及 Web CRUD 检查见[本地命令验证](../docs/development/features/local-quick-commands/validation.md)。交互终端和原生界面专项显式启用，不调用模型。
+
 收起态输入框自动高度的真实折行、删除回缩、十行滚动、可调预留行与原生窗口验证，见[自动高度验证](../docs/development/features/compact-input-auto-height/validation.md)。几何 fixture 只验证事件/策略，真实 WebView2 与实体桌面边界分开记录。
 
 聊天三态标签、冷启动连接、隐藏恢复以及真实 OpenClaw 在本机模拟模型返回 401 时的零额外探测验证，见[连接状态计划](../docs/development/features/chat-connection-status/plan.md)。

@@ -12,7 +12,7 @@ const binding = {runtime: 'openclaw', generation: 'generation-0123456789', key: 
 
 // Exercise the production command handler with only its private Gateway replaced.
 // A successful send is never repeated, even when the follow-up read fails.
-test('submit confirms missing-sequence acknowledgements by durable evidence and preserves unknown failures', async () => {
+test('submit preserves durable receipts and stop targets the reply without withdrawing input', async () => {
   const root = mkdtempSync(join(tmpdir(), 'aster-receipt-'));
   try {
     for (const name of ['main.mjs', 'projection.mjs', 'prompt-state.mjs', 'connection.mjs']) copyFileSync(new URL(name, source), join(root, name));
@@ -27,6 +27,7 @@ test('submit confirms missing-sequence acknowledgements by durable evidence and 
         async start() {} async ensureConnected() {}
         async rpc(method, params) {
           record(method, params);
+          if (method === 'chat.abort') return {ok: true, aborted: true, runIds: [params.runId]};
           if (method !== 'chat.send') throw Error('unexpected RPC');
           return {runId: params.idempotencyKey, status: 'started',
             ...(process.env.RECEIPT_CASE === 'sequence' ? {messageSeq: 1} : {})};
@@ -76,6 +77,9 @@ test('submit confirms missing-sequence acknowledgements by durable evidence and 
         const reads = calls.filter(item => item.method === 'chat.history');
         assert.equal(reads.length, scenario === 'sequence' ? 1 : 2, scenario);
         if (scenario !== 'sequence') assert.deepEqual(reads[1].params.inputRunIds, [run]);
+        assert.deepEqual(await call({id: '3', action: 'cancel', binding, run}), {id: '3', result: {}});
+        const aborted = JSON.parse(readFileSync(join(root, 'calls.json'), 'utf8')).filter(item => item.method === 'chat.abort');
+        assert.deepEqual(aborted, [{method: 'chat.abort', params: {sessionKey: 'agent:main:asterhand:' + binding.key, runId: run}}]);
       } finally {
         child.kill(); await exited;
       }

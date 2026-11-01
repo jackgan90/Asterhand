@@ -32,6 +32,10 @@ func (a *App) info(projects []string) map[string]any {
 	return map[string]any{"node_id": c.NodeID, "name": c.Name, "version": config.Version, "ready": c.ModelVerified, "capabilities": executor.ConfiguredCapabilities(a.Config, c), "projects": visible, "endpoint": c.Endpoint, "model": c.LLM.Model, "agent_runtime": c.AgentRuntime, "source_sha256": config.SourceDigest, "bundle_identity": executor.BundleIdentity(), "network_warning": network.ConnectionWarning(c.Endpoint, c.PeerListen, a.peerAddress), "restart_required": !network.ListenerMatches(c.PeerListen, a.peerAddress)}
 }
 func (a *App) api(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/api/local-commands") {
+		a.commandsAPI(w, r)
+		return
+	}
 	if strings.HasPrefix(r.URL.Path, "/api/desktop/") {
 		a.desktopAPI(w, r)
 		return

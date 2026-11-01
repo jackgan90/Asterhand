@@ -74,4 +74,3 @@ footer { flex: none; padding: 8px 18px; font-size: 11px; }
 }
 
 .chat-delivery-status { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
-.chat-queue-action { margin: 6px 6px 0 0; font-size: 12px; }

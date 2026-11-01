@@ -14,6 +14,7 @@
       >
       <div id="connection">正在连接本机节点</div>
       <button id="settings-open" class="quiet">节点设置</button>
+      <button id="commands-open" class="quiet">本地命令</button>
     </header>
     <div id="notice" class="notice" role="status" hidden></div>
     <section id="login" class="panel narrow" hidden>
@@ -203,6 +204,33 @@
         <button data-close="detail" class="quiet">关闭</button>
       </div>
       <div id="detail-content"></div>
+    </dialog>
+    <dialog id="local-commands">
+      <div class="dialog-title"><div><p class="eyebrow">快捷入口</p><h2>本地命令</h2></div><button id="commands-close" class="quiet" type="button">关闭</button></div>
+      <p>在快捷输入中键入 / 选择命令。每次确认独立启动一次，脚本由当前用户运行。</p>
+      <div class="commands-management">
+        <section class="commands-sidebar" aria-label="已注册命令">
+          <input id="commands-search" aria-label="搜索英文名或别名" placeholder="搜索英文名或别名">
+          <div class="actions"><button id="command-new" type="button">新建</button><button id="commands-refresh" type="button" class="quiet">刷新</button></div>
+          <small id="command-count"></small><div id="registered-commands"></div>
+        </section>
+        <form id="command-form">
+          <h3 id="command-form-title">新建命令</h3>
+          <label>英文名<input name="name" required maxlength="64" pattern="[A-Za-z][A-Za-z0-9_\-]*" placeholder="backup"></label>
+          <label>别名（可选，每行一个）<textarea name="aliases" rows="2" placeholder="备份"></textarea></label>
+          <label>功能描述（可选）<input name="description" maxlength="512"></label>
+          <label for="command-script">脚本绝对路径</label>
+          <div class="command-script-path"><input id="command-script" name="script" required placeholder="C:\Scripts\backup.ps1"><button id="command-browse" type="button" class="quiet">Browse</button></div>
+          <small>支持 .bat、.cmd 和 Windows PowerShell 5.1 .ps1。直接引用本机文件；文件内容修改后，下次执行使用更新内容。</small>
+          <label>工作目录（可选）<input name="directory" placeholder="留空使用脚本所在目录"></label>
+          <label>启动方式<select name="window"><option value="background">后台运行</option><option value="terminal">打开终端</option></select></label>
+          <div class="command-argument-title">固定参数</div><div id="command-arguments"></div>
+          <button id="command-add-argument" type="button" class="quiet">＋ 添加参数</button>
+          <small>每项一个参数，空值表示空参数；含空格时无需自行加引号。批处理参数含字面双引号时请改用 .ps1。需要交互或查看输出请选择终端模式。</small>
+          <div class="actions"><button type="submit">保存命令</button><button id="command-delete" type="button" class="quiet" hidden>删除命令</button></div>
+        </form>
+      </div>
+      <div id="commands-status" class="status-box" role="status"></div>
     </dialog>
     <footer>ASTERHAND / 个人设备助手 <span id="version"></span></footer>
   </body>

@@ -1,0 +1,53 @@
+package quickinput
+
+import (
+	"context"
+	"time"
+
+	commandswire "github.com/jackgan90/Asterhand/internal/localcommands/wire"
+	"github.com/jackgan90/Asterhand/internal/quickinput/hostipc"
+)
+
+type CommandHandler func(context.Context, commandswire.Request) commandswire.Response
+
+// SetCommandHandler is configured before attaching the desktop surface.
+func (c *Controller) SetCommandHandler(handler CommandHandler) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.commands = handler
+}
+
+func (s *remoteSurface) commandCall(message hostipc.Message) error {
+	s.mu.Lock()
+	valid := !s.closing && s.err == nil && message.Epoch == s.epoch
+	handler := s.commands
+	duplicate := false
+	request := *message.Command
+	if valid && request.Action == "launch" {
+		duplicate = request.Sequence <= s.commandSequence
+		if !duplicate {
+			s.commandSequence = request.Sequence
+		}
+	}
+	s.mu.Unlock()
+	if !valid {
+		return hostFailure("host_protocol_invalid")
+	}
+	respond := func(response commandswire.Response) {
+		_ = s.send(hostipc.Message{Kind: hostipc.CommandResult, CommandID: message.CommandID, CommandReply: &response})
+	}
+	if duplicate {
+		respond(commandswire.Response{Error: &commandswire.Error{Code: "duplicate", Message: "该启动请求已处理，请勿自动重发"}})
+		return nil
+	}
+	if handler == nil {
+		respond(commandswire.Response{Error: &commandswire.Error{Code: "unavailable", Message: "本地命令功能未就绪"}})
+		return nil
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		respond(handler(ctx, request))
+	}()
+	return nil
+}

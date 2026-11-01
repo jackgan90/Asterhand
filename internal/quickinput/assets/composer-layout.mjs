@@ -37,15 +37,38 @@ function measureText(input, mirror, style) {
   return {line, rows: Math.max(1, Math.round((mirror.scrollHeight - padding) / line))};
 }
 
-function auxiliaryHeight(main, input) {
+function auxiliaryHeight(main, input, desired = true) {
   const style = window.getComputedStyle(main);
   let height = verticalEdges(style);
   for (const child of main.children) {
     if (child === input || child.hidden) continue;
     const childStyle = window.getComputedStyle(child);
-    if (childStyle.display !== 'none') height += child.getBoundingClientRect().height + verticalMargins(childStyle);
+    if (childStyle.display !== 'none') {
+      const commandHeight = desired && child.id === 'command-panel' ? Number(child.dataset.desiredHeight) : 0;
+      height += (commandHeight || child.getBoundingClientRect().height) + verticalMargins(childStyle);
+    }
   }
   return height;
+}
+
+function fitCommandList(main, input, editorHeight, expanded, settled) {
+  const panel = document.getElementById('command-panel'), list = document.getElementById('command-list');
+  if (!panel || panel.hidden || !list) return;
+  panel.dataset.layoutSettled = String(settled);
+  // The old compact viewport is not a work-area limit. Keep the intended
+  // list extent until the current native allocation reaches the renderer.
+  if (!settled) { list.style.maxHeight = '448px'; return; }
+  let fixed = verticalEdges(window.getComputedStyle(main)) + editorHeight + verticalMargins(window.getComputedStyle(input));
+  for (const child of main.children) {
+    if (child === input || child.hidden) continue;
+    const style = window.getComputedStyle(child);
+    if (style.display === 'none') continue;
+    if (child === panel) {
+      fixed += panel.querySelector('.command-toolbar').getBoundingClientRect().height + verticalEdges(style) + verticalMargins(style);
+    } else if (expanded && child.id === 'chat-panel') fixed += 140 + verticalMargins(style);
+    else fixed += child.getBoundingClientRect().height + verticalMargins(style);
+  }
+  list.style.maxHeight = `${Math.max(40, Math.min(448, window.innerHeight - fixed))}px`;
 }
 
 export class ComposerLayout {
@@ -119,6 +142,15 @@ export class ComposerLayout {
     this.resize(height, String(++this.resizeID));
   }
 
+  fitCommands(editorHeight) {
+    // The current request's reply and matching renderer viewport must both
+    // arrive. An older shrink can still be in flight even when content fits.
+    const applied = this.appliedHeight !== null && Math.abs(window.innerHeight - this.appliedHeight) <= 1;
+    if (applied) this.awaitingAllocation = false;
+    fitCommandList(this.main, this.input, editorHeight, this.expanded, !this.awaitingAllocation);
+    return applied;
+  }
+
   schedule(editing = false) {
     if (this.disposed) return;
     this.followEnd ||= editing;
@@ -137,25 +169,27 @@ export class ComposerLayout {
       input.style.removeProperty('max-height');
       input.style.removeProperty('overflow-y');
       this.requestHeight(height);
+      this.fitCommands(104);
     } else {
       const style = window.getComputedStyle(input);
       const {line, rows} = measureText(input, this.mirror, style);
-      const chrome = auxiliaryHeight(this.main, input) + verticalMargins(style);
+      const desiredChrome = auxiliaryHeight(this.main, input) + verticalMargins(style);
       const editorHeight = Math.ceil(compactRows(input.value, rows, this.extraRows) * line + verticalEdges(style));
       // Desired height must not depend on the (possibly work-area-clamped)
       // viewport. Only the actual editor allocation is constrained by it.
-      height = Math.ceil(chrome + editorHeight);
+      height = Math.ceil(desiredChrome + editorHeight);
       this.requestHeight(height);
-      const available = Math.max(1, window.innerHeight - chrome);
+      const applied = this.fitCommands(editorHeight);
+      const chrome = auxiliaryHeight(this.main, input, false) + verticalMargins(style);
+      // A newly visible command list occupies space before the window grows.
+      // Retain the editor's existing allocation so its focus underline cannot
+      // jump upward; a matching native allocation still applies real limits.
+      const commandPending = this.awaitingAllocation && document.getElementById('command-panel')?.hidden === false;
+      const retainedHeight = commandPending ? input.getBoundingClientRect().height : 0;
+      const available = Math.max(1, window.innerHeight - chrome, retainedHeight);
       const top = input.scrollTop;
       input.style.height = `${editorHeight}px`;
       input.style.maxHeight = `${available}px`;
-      // A growing window temporarily retains its old viewport. Only a host-
-      // confirmed, matching viewport proves a real work-area height limit.
-      const applied = this.appliedHeight !== null && Math.abs(window.innerHeight - this.appliedHeight) <= 1;
-      // An older, larger viewport can fit temporarily while a prior shrink is
-      // still in flight. Only the current request's matched reply settles it.
-      if (applied) this.awaitingAllocation = false;
       const contentHeight = Math.ceil(rows * line + verticalEdges(style));
       const overflows = contentHeight > available + 1;
       // A new request does not undo an already confirmed limit. Keep its

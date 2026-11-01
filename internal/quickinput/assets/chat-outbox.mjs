@@ -47,13 +47,17 @@ export class ChatOutbox {
   }
 
   queued(item) {
-    if (!this.entries.has(item.operation_id)) this.begin(item.operation_id, item.conversation_id, item.text ?? '');
+    if (!this.entries.has(item.operation_id)) {
+      this.begin(item.operation_id, item.conversation_id, item.text ?? '');
+      const entry = this.entries.get(item.operation_id);
+      if (entry && item.turn?.started_at) entry.timestamp = item.turn.started_at;
+    }
     const entry = this.entries.get(item.operation_id);
     if (!entry || entry.conversation !== item.conversation_id) return;
     if (item.text !== undefined) entry.text = item.text;
     this.observe(item.turn);
     entry.queueState = item.state === 'settled' ? '' : item.state;
-    entry.queued = ['queued','preparing','failed'].includes(item.state);
+    entry.queued = ['queued','preparing'].includes(item.state);
     entry.dispatched = ['sending','unknown'].includes(item.state);
   }
 
@@ -79,10 +83,9 @@ export class ChatOutbox {
   }
 
   merge(messages, conversation) {
-    const entries = [...this.entries.values()].filter(entry => entry.conversation === conversation);
-    const decorate = (message, entry) => ({...message, ui_id: 'pending-' + entry.operation, delivery_status: status(entry),
-      queue_operation: entry.queued && entry.queueRecovery ? entry.operation : undefined, queue_conversation: entry.conversation,
-      queue_restore: entry.delivery !== 'unknown'});
+    const entries = [...this.entries.values()].filter(entry => entry.conversation === conversation)
+      .sort((a,b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+    const decorate = (message, entry) => ({...message, ui_id: 'pending-' + entry.operation, delivery_status: status(entry)});
     const result = messages.map(message => {
       const entry = entries.find(item => this.matches(item, message));
       return entry ? decorate(message, entry) : message;
@@ -99,8 +102,7 @@ export class ChatOutbox {
 
 function status(entry) {
   if (entry.delivery === 'unknown') return ['interrupted','cancelled','failed'].includes(entry.run) ? '消息送达仍未确认，运行已停止；请勿重复发送' : '送达待确认，正在核对';
-  if (entry.queueState === 'failed') return '消息发送失败';
-  if (entry.delivery === 'rejected') return '消息发送失败';
   if (entry.delivery === 'accepted' && ['failed', 'interrupted'].includes(entry.run)) return '消息已送达，回复失败';
+  if (entry.delivery === 'rejected' || entry.queueState === 'failed') return '消息未送达';
   return '';
 }

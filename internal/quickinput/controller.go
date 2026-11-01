@@ -79,6 +79,7 @@ type Controller struct {
 	record            *recording
 	draft             Draft
 	chat              *chatController
+	commands          CommandHandler
 	readyAt           time.Time
 	recoveryUsed      bool
 	pendingActivation activationIntent

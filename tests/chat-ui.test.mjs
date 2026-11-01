@@ -35,7 +35,7 @@ class Node {
 function harness(queued = false) {
   const elements = new Map();
   const ids=['chat-panel','chat-scroll','chat-status','chat-conversations','chat-send','chat-stop','chat-older','chat-messages',
-    'chat-draft-decision','chat-draft-cancel','chat-draft-discard','chat-expand','chat-conversation-name','chat-history','chat-new','chat-refresh','chat-latest','chat-pin','chat-queue-resume','chat-connection'];
+    'chat-draft-decision','chat-draft-cancel','chat-draft-discard','chat-expand','chat-conversation-name','chat-history','chat-new','chat-refresh','chat-latest','chat-pin','chat-connection'];
   for(const id of ids) elements.set(id,new Node());
   Object.defineProperty(elements.get('chat-scroll'),'scrollHeight',{get:()=>elements.get('chat-messages').children.length*10});
   globalThis.document={getElementById:id=>elements.get(id),createElement:tag=>new Node(tag),
@@ -53,7 +53,7 @@ function harness(queued = false) {
   const holdActions=new Set(), overrides=new Map();
   let running=true, draft='', revision=1, total=100, reset=false;
   let queueRevision=0;
-  const queueState={entries:[],paused:false,limit:8};
+  const queueState={entries:[],failures:[],paused:false,limit:8};
   const turn=()=>({id:'turn-00000000001',operation_id:'operation-000001',conversation_id:A,delivery:'accepted',
     run:running?'running':'completed',persistence:running?'pending':'saved',assistant_message_id:running?'':'final-message'});
   let staged=null;
@@ -77,11 +77,9 @@ function harness(queued = false) {
           response.turn={id:request.operation_id,operation_id:request.operation_id,conversation_id:request.conversation_id,delivery:'queued',run:'queued'};
           queueState.entries.push({kind:'send',state:'queued',operation_id:request.operation_id,conversation_id:request.conversation_id,text:request.text,turn:response.turn});break;
         }
-        case 'queue_item': response.queue_item=queueState.entries.find(item=>item.operation_id===request.operation_id);break;
-        case 'queue_cancel': response.queue_item=queueState.entries.find(item=>item.operation_id===request.operation_id);
-          queueState.entries=queueState.entries.filter(item=>item.operation_id!==request.operation_id);break;
-        case 'queue_pause': queueState.paused=true;break;
-        case 'queue_resume': queueState.paused=false;break;
+        case 'queue_item': response.queue_item=[...queueState.entries,...queueState.failures].find(item=>item.operation_id===request.operation_id);break;
+        case 'cancel':
+          response.turn={...queueState.active,run:'cancelled'};queueState.active=null;break;
         case 'history':
           response.conversation={id:request.conversation_id,state:'ready'};
           response.turn=request.conversation_id===A?turn():null;
@@ -91,7 +89,8 @@ function harness(queued = false) {
         case 'reconcile': response.turn=turn();break;
         case 'submit': response.turn={...turn(),conversation_id:request.conversation_id,operation_id:request.operation_id};break;
       }
-      if(queued)response.queue={...queueState,entries:queueState.entries.map(({text,...item})=>item),revision:++queueRevision};
+      if(queued)response.queue={...queueState,entries:queueState.entries.map(({text,...item})=>item),
+        failures:queueState.failures.map(({text,...item})=>item),revision:++queueRevision};
       Object.assign(response, overrides.get(request.action)?.(request, response));
       const send = (extra={}, envelope={}) => bridge.emit({kind:'chat_result',id:value.id,reply:{...(queued && request.action==='enqueue' && !response.error ? {clear_sequence:request.draft_revision} : {}),...envelope,response:{...response,...extra}}});
       if(holdActions.has(request.action)) held.push({request,send});
@@ -209,11 +208,12 @@ test('startup, preparation and accepted generation keep one ordinary bubble and 
       assert.equal(status.textContent,'正在回复...');
       assert.equal(status.children[1].hidden,false);
       assert.doesNotMatch(bubble.textContent,/待发送|取回编辑|取消发送|正在准备/);
-      assert.equal(h.elements.get('chat-queue-resume').hidden,true);
+      assert.equal(h.elements.has('chat-queue-resume'),false);
     };
     for(const phase of ['queued','preparing','sending']) {
       entry.state=phase;
       await h.tick();assertWaiting();
+      assert.equal(h.elements.get('chat-stop').hidden,true);
     }
     const accepted={...entry.turn,id:'native-turn',delivery:'accepted',run:'running',user_message_id:'native-user'};
     h.queueState.entries=[];h.queueState.active=accepted;
@@ -221,6 +221,7 @@ test('startup, preparation and accepted generation keep one ordinary bubble and 
     h.override('reconcile',()=>({turn:accepted}));
     h.override('history',()=>({turn:accepted,page:{messages:[{id:'native-user',role:'user',blocks:[{type:'text',text:'one smooth message'}]}]}}));
     await h.tick();assertWaiting();
+    assert.equal(h.elements.get('chat-stop').hidden,false);
     assert.equal(rows.children.filter(row=>row.textContent.includes('one smooth message')).length,1);
     assert.equal(h.requests.filter(request=>request.action==='enqueue').length,1);
   } finally {h.close();}
@@ -237,44 +238,44 @@ test('a new empty conversation does not inherit another conversation startup sta
   } finally {h.close();}
 });
 
-test('recovery controls appear only after a real startup failure and disappear on retry',async()=>{
+test('startup failure stays on the message without recall controls and new sends remain available',async()=>{
   const h=harness(true);
   try {
     h.setRunning(false);await h.open();await h.elements.get('chat-new').fire('click');await flush();
     h.setDraft('retain on actual failure');await h.editor.submit();await flush();
     const rows=h.elements.get('chat-messages'),status=h.elements.get('chat-status');
     assert.doesNotMatch(rows.textContent,/取回编辑|取消发送/);
-    const creation=h.queueState.entries.find(item=>item.kind==='create');
-    creation.state='failed';creation.error={message:'连接失败，请重试'};h.queueState.paused=true;
+    const failed=h.queueState.entries.find(item=>item.kind==='send');
+    failed.state='failed';failed.turn={...failed.turn,delivery:'rejected',run:'failed'};
+    h.queueState.failures=[failed];h.queueState.entries=[];
     await h.tick();
-    assert.equal(status.textContent,'连接失败，请重试');
+    assert.equal(status.textContent,'消息未送达');
     assert.equal(status.children[1].hidden,true);
-    assert.match(rows.textContent,/取回编辑/);
-    assert.match(rows.textContent,/取消发送/);
-    creation.state='preparing';h.queueState.paused=false;
-    await h.tick();
+    assert.match(rows.textContent,/retain on actual failure[\s\S]*消息未送达/);
+    assert.doesNotMatch(rows.textContent,/取回编辑|取消发送|继续发送|移出队列/);
+    h.setDraft('new message after failure');await h.editor.submit();await flush();
     assert.equal(status.textContent,'正在回复...');
     assert.doesNotMatch(rows.textContent,/取回编辑|取消发送/);
-    assert.equal(h.requests.filter(request=>request.action==='enqueue').length,1);
+    assert.equal(h.requests.filter(request=>request.action==='enqueue').length,2);
   } finally {h.close();}
 });
 
-test('queued messages survive hiding and explicit pause requires resume',async()=>{
+test('queued sends have no stop control and preserve delivery after hiding and new sends',async()=>{
   const h=harness(true);
   try {
     h.setRunning(false);await h.open();h.setDraft('keep while hidden');await h.editor.submit();await flush();
+    assert.equal(h.elements.get('chat-stop').hidden,true);
     await h.elements.get('chat-stop').fire('click');await flush();
-    assert.equal(h.queueState.paused,true);
-    assert.equal(h.elements.get('chat-status').textContent,'已停止');
+    assert.equal(h.requests.some(request=>request.action==='cancel'),false);
+    assert.equal(h.elements.get('chat-status').textContent,'正在回复...');
     assert.doesNotMatch(h.elements.get('chat-messages').textContent,/取回编辑|取消发送/);
-    assert.equal(h.elements.get('chat-queue-resume').hidden,false);
     h.bridge.emit({kind:'visibility',visible:false});
     h.bridge.emit({kind:'visibility',visible:true});await h.tick();
-    assert.equal(h.queueState.paused,true);
-    assert.match(h.elements.get('chat-messages').textContent,/keep while hidden/);
-    await h.elements.get('chat-queue-resume').fire('click');await flush();
     assert.equal(h.queueState.paused,false);
-    assert.equal(h.requests.filter(request=>request.action==='enqueue').length,1);
+    assert.match(h.elements.get('chat-messages').textContent,/keep while hidden/);
+    h.setDraft('new message');await h.editor.submit();await flush();
+    assert.equal(h.requests.filter(request=>request.action==='enqueue').length,2);
+    assert.equal(h.requests.some(request=>['queue_pause','queue_resume','queue_cancel'].includes(request.action)),false);
   } finally {h.close();}
 });
 
@@ -286,6 +287,43 @@ test('queue admission failure restores only the submitted draft',async()=>{
     h.setDraft('overflow draft');await h.editor.submit();await flush();
     assert.equal(h.editor.snapshot().text,'overflow draft');
     assert.match(h.elements.get('chat-status').textContent,/队列已满/);
+  } finally {h.close();}
+});
+
+test('stop reply targets only the accepted turn and leaves subsequent sends active',async()=>{
+  const h=harness(true);
+  try {
+    h.setRunning(false);await h.open();h.setDraft('preserve this user message');await h.editor.submit();await flush();
+    const entry=h.queueState.entries[0];
+    const active={...entry.turn,delivery:'accepted',run:'running',user_message_id:'stop-user'};
+    h.queueState.entries=[];h.queueState.active=active;
+    h.override('queue_item',()=>({queue_item:{...entry,state:'settled',turn:active}}));
+    h.override('reconcile',()=>({turn:active}));
+    await h.tick();
+    assert.equal(h.elements.get('chat-stop').hidden,false);
+    h.hold('cancel');
+    const stopped=h.elements.get('chat-stop').fire('click');await flush();
+    assert.equal(h.elements.get('chat-stop').disabled,true);
+    h.reply('cancel');await stopped;await flush();
+    assert.equal(h.requests.find(request=>request.action==='cancel').operation_id,active.operation_id);
+    assert.match(h.elements.get('chat-messages').textContent,/preserve this user message/);
+    h.setDraft('next message after stop');await h.editor.submit();await flush();
+    assert.equal(h.elements.get('chat-status').textContent,'正在回复...');
+    assert.equal(h.elements.get('chat-stop').hidden,true);
+    assert.equal(h.requests.filter(request=>request.action==='enqueue').length,2);
+    assert.equal(h.requests.some(request=>['queue_pause','queue_resume','queue_cancel'].includes(request.action)),false);
+  } finally {h.close();}
+});
+
+test('a running reply in another conversation does not expose its stop button',async()=>{
+  const h=harness(true);
+  try {
+    h.setRunning(false);await h.open();
+    h.queueState.active={operation_id:'other-running',conversation_id:B,delivery:'accepted',run:'running'};
+    h.setDraft('message in A');await h.editor.submit();await flush();
+    assert.equal(h.elements.get('chat-stop').hidden,true);
+    await h.elements.get('chat-stop').fire('click');await flush();
+    assert.equal(h.requests.some(request=>request.action==='cancel'),false);
   } finally {h.close();}
 });
 
@@ -514,7 +552,7 @@ test('rejected sends attach an error to the local bubble and keep the draft',asy
     h.setRunning(false);await h.open();h.setDraft('keep my text');h.hold('submit');
     const submitted=h.editor.submit();await flush();
     h.reply('submit',{error:{code:'rejected',message:'request rejected'},turn:undefined});await submitted;
-    assert.match(h.elements.get('chat-messages').textContent,/keep my text[\s\S]*消息发送失败/);
+    assert.match(h.elements.get('chat-messages').textContent,/keep my text[\s\S]*消息未送达/);
     assert.equal(h.editor.snapshot().text,'keep my text');
   } finally {h.close();}
 });
@@ -588,7 +626,7 @@ test('first conversation creation consumes the composer and restores it on expli
     assert.equal(h.requests.filter(r=>r.action==='submit').length,0);
     h.reply('create',{error:{code:'rejected',message:'creation failed'}});await submitted;
     assert.equal(h.editor.snapshot().text,'first conversation');
-    assert.match(h.elements.get('chat-messages').textContent,/消息发送失败/);
+    assert.match(h.elements.get('chat-messages').textContent,/消息未送达/);
   } finally {h.close();}
 });
 

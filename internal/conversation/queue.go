@@ -1,7 +1,6 @@
 package conversation
 
 import (
-	"context"
 	"time"
 
 	"github.com/jackgan90/Asterhand/internal/model"
@@ -49,7 +48,7 @@ func (s *Service) recoverQueueIntents() {
 	}
 }
 
-func (s *Service) queueCall(ctx context.Context, request Request, response Response) (Response, error) {
+func (s *Service) queueCall(request Request, response Response) (Response, error) {
 	switch request.Action {
 	case "prepare":
 		item, err := s.prepareQueued(request)
@@ -59,35 +58,7 @@ func (s *Service) queueCall(ctx context.Context, request Request, response Respo
 		turn, err := s.enqueue(request)
 		response.Turn = turn
 		return response, err
-	case "queue_pause":
-		s.mu.Lock()
-		s.queuePaused = "manual"
-		operation := ""
-		if s.active != nil {
-			operation = s.active.Turn.Operation
-		}
-		s.mu.Unlock()
-		if operation != "" {
-			return response, s.cancelTurn(ctx, operation)
-		}
-		return response, nil
-	case "queue_resume":
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if len(s.queue) > 0 && s.queue[0].item.State == "unknown" {
-			return response, Fail("busy", "先核对已发消息，队列不会重复发送")
-		}
-		if len(s.queue) > 0 && s.queue[0].item.State == "failed" {
-			if s.queue[0].item.Kind == "send" {
-				if _, err := s.catalog.turn(s.queue[0].request.Operation); err == nil || !isMissing(err) {
-					return response, Fail("busy", "请先取回或移除失败消息，再继续队列")
-				}
-			}
-			s.queue[0].item.State = "queued"
-		}
-		s.queuePaused = ""
-		s.wakeQueueLocked()
-	case "queue_item", "queue_cancel":
+	case "queue_item":
 		return s.readQueueItem(request, response)
 	}
 	return response, nil
@@ -96,47 +67,19 @@ func (s *Service) queueCall(ctx context.Context, request Request, response Respo
 func (s *Service) readQueueItem(request Request, response Response) (Response, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i, entry := range s.queue {
+	for _, entry := range append(append([]*queuedOperation{}, s.queue...), s.queueFailures...) {
 		if entry.item.Operation != request.Operation || entry.item.Conversation != request.Conversation {
 			continue
 		}
-		if entry.item.Kind != "send" && request.Action != "queue_cancel" {
+		if entry.item.Kind != "send" {
 			return response, Fail("invalid_request", "请选择待发消息")
 		}
 		item := s.queueItemLocked(entry)
 		item.Text = entry.request.Text
-		if request.Action == "queue_cancel" {
-			if entry.item.State == "sending" || entry.item.State == "unknown" {
-				return response, Fail("busy", "消息已开始派发，请先停止并核对")
-			}
-			if entry.item.Kind == "create" {
-				for _, dependent := range s.queue {
-					if dependent.item.Kind == "send" && dependent.item.Conversation == entry.item.Conversation {
-						return response, Fail("busy", "请先取回或取消该会话的待发消息")
-					}
-				}
-			} else {
-				if err := s.rejectQueuedLocked(entry); err != nil {
-					return response, err
-				}
-			}
-			copy(s.queue[i:], s.queue[i+1:])
-			s.queue[len(s.queue)-1] = nil
-			s.queue = s.queue[:len(s.queue)-1]
-			item.State = "cancelled"
-			if item.Turn != nil && item.Turn.Delivery == "queued" {
-				item.Turn.Delivery, item.Turn.Run = "rejected", "cancelled"
-				item.Turn.UpdatedAt = time.Now().UTC()
-			}
-			s.wakeQueueLocked()
-		}
 		response.QueueItem = &item
 		return response, nil
 	}
-	if request.Action == "queue_item" {
-		return s.finishedQueueItemLocked(request, response)
-	}
-	return response, Fail("not_found", "该消息已离开待发队列，请刷新状态")
+	return s.finishedQueueItemLocked(request, response)
 }
 
 func (s *Service) prepareQueued(request Request) (Conversation, error) {
@@ -214,16 +157,21 @@ func (s *Service) enqueue(request Request) (*Turn, error) {
 			bytes += len(entry.request.Text)
 		}
 	}
-	if count >= QueueMessageLimit || bytes > QueueBodyLimit || len(s.queue) >= queueOperationLimit {
-		return nil, Fail("queue_full", "待发队列已满，当前草稿已保留")
+	needsCreation := item.Conversation.State != "ready" && !s.queuedCreationLocked(item.Conversation.ID)
+	operations := len(s.queue) + 1
+	if needsCreation {
+		operations++
 	}
-	if item.Conversation.State != "ready" && !s.queuedCreationLocked(item.Conversation.ID) {
-		return nil, Fail("not_ready", "请先完成该会话创建")
+	if count >= QueueMessageLimit || bytes > QueueBodyLimit || operations > queueOperationLimit {
+		return nil, Fail("queue_full", "待发队列已满，当前草稿已保留")
 	}
 	now := time.Now().UTC()
 	turn := Turn{ID: model.ID(), Operation: request.Operation, Conversation: request.Conversation, Delivery: "queued", Run: "queued", Persistence: "pending", Provider: descriptor.Provider, Model: descriptor.Model, StartedAt: now, UpdatedAt: now}
 	if err := s.catalog.store.Put("chat-intent", request.Operation, queueIntent{Digest: requestDigest(request), Turn: turn}); err != nil {
 		return nil, err
+	}
+	if needsCreation {
+		s.queue = append(s.queue, &queuedOperation{item: QueueItem{Operation: model.ID(), Conversation: request.Conversation, Kind: "create", State: "queued"}})
 	}
 	s.queue = append(s.queue, &queuedOperation{request: request, turn: turn, item: QueueItem{Operation: request.Operation, Conversation: request.Conversation, Kind: "send", State: "queued"}})
 	s.wakeQueueLocked()
@@ -253,6 +201,9 @@ func (s *Service) queueSnapshotLocked() *QueueState {
 	state := &QueueState{Revision: s.queueRevision, Entries: make([]QueueItem, 0, len(s.queue)), Paused: s.queuePaused != "", Limit: QueueMessageLimit}
 	for _, entry := range s.queue {
 		state.Entries = append(state.Entries, s.queueItemLocked(entry))
+	}
+	for _, entry := range s.queueFailures {
+		state.Failures = append(state.Failures, s.queueItemLocked(entry))
 	}
 	if s.active != nil {
 		turn := s.active.Turn

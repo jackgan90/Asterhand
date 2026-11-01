@@ -129,7 +129,7 @@ test('outbox merges by identity, preserves distinct equal text, and separates de
   box.fail('second',true,{});
   assert.match(box.merge([native],'A')[1].delivery_status,/送达待确认/);
   box.observe({operation_id:'second',conversation_id:'A',id:'turn2',delivery:'rejected',run:'failed'});
-  assert.match(box.merge([native],'A')[1].delivery_status,/消息发送失败/);
+  assert.match(box.merge([native],'A')[1].delivery_status,/消息未送达/);
   assert.equal(box.merge([], 'B').length,1);
   for(let i=0;i<20;i++)box.begin('op'+i,'A','x'.repeat(16000));
   assert.equal(box.entries.size,16);

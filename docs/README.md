@@ -22,11 +22,15 @@
 
 ## 其他入口
 
+- [聊天发送与停止回复](development/features/chat-send-intent/plan.md)：用户消息统一展示，异常按消息提示，停止当前回复后后续消息继续发送。
+
+- [本地快捷命令](development/features/local-quick-commands/plan.md)、[命令设计](executors/local-commands.md)、[验证说明](development/features/local-quick-commands/validation.md)：Web 注册 bat/cmd/ps1，快捷输入 `/` 搜索并独立启动，无需模型配置。
+
 - [收起态快捷输入框自动高度](development/features/compact-input-auto-height/plan.md)、[验证说明](development/features/compact-input-auto-height/validation.md)：单行起步、按实际折行增高与删除回缩、十行滚动上限，默认恰好容纳；工程验证、独立复审及本机输入体验用户验收通过，专项边界见验证说明。
 
 - [聊天连接状态](development/features/chat-connection-status/plan.md)：对话 ID 后的三态提示、主题字色和不调用模型的连接观察。
 - [聊天运行时启动诊断与恢复](development/features/chat-startup-recovery/plan.md)：并发请求共享启动、请求超时与恢复生命周期分离及有界诊断。
-- [聊天操作队列](development/features/chat-operation-queue/plan.md)：启动期间即时收下消息、顺序执行、取消与暂停、宿主重建和退出边界。
+- [聊天操作队列](development/features/chat-operation-queue/plan.md)：启动期间即时收下消息、顺序执行、失败离队、停止回复后继续发送，以及宿主重建和退出边界。
 
 - [聊天发送稳定性与后台完成提醒](development/features/chat-completion-attention/plan.md)：固定状态区与任务栏高亮闪烁。
 

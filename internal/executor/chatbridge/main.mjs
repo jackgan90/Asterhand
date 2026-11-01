@@ -120,7 +120,9 @@ async function handle(command) {
     case 'cancel': {
       if (!validID(command.run)) throw failure('invalid_request', '轮次身份无效');
       await readHistory(binding, {limit: 1});
-      await gateway.rpc('chat.abort', {sessionKey: sessionKey(binding), runId: command.run, discardPendingInput: true});
+      // Stop this reply without withdrawing its accepted user input. Native
+      // discardPendingInput is a queued-input operation and skips running turns.
+      await gateway.rpc('chat.abort', {sessionKey: sessionKey(binding), runId: command.run});
       return {};
     }
     default: throw failure('unsupported', '运行时不支持此会话操作');

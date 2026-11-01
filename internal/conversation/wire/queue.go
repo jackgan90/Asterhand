@@ -15,6 +15,7 @@ type QueueItem struct {
 type QueueState struct {
 	Revision uint64      `json:"revision"`
 	Entries  []QueueItem `json:"entries"`
+	Failures []QueueItem `json:"failures,omitempty"`
 	Paused   bool        `json:"paused"`
 	Limit    int         `json:"limit"`
 	Active   *Turn       `json:"active,omitempty"`

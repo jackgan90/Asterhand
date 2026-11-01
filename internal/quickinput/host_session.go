@@ -2,11 +2,11 @@ package quickinput
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
 	"github.com/jackgan90/Asterhand/internal/config"
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/model"
 	"github.com/jackgan90/Asterhand/internal/quickinput/hostipc"
 )
@@ -49,7 +49,7 @@ func startRemoteSurface(home, theme string, draft *Draft, launch hostLauncher, f
 	go s.readLoop()
 	go func() { <-process.Exited(); s.finish(hostFailure("host_exited")) }()
 	notice := len(recovered) != 0 && recovered[0]
-	err = s.send(hostipc.Message{Kind: hostipc.Initialize, Home: home, Theme: theme, Text: text, Revision: revision, Epoch: epoch, AppVersion: config.Version, Source: config.SourceDigest, Recovered: notice})
+	err = s.send(hostipc.Message{Kind: hostipc.Initialize, Home: home, Theme: theme, Locale: i18n.Effective(), Text: text, Revision: revision, Epoch: epoch, AppVersion: config.Version, Source: config.SourceDigest, Recovered: notice})
 	if err == nil {
 		select {
 		case err = <-s.ready:
@@ -61,7 +61,7 @@ func startRemoteSurface(home, theme string, draft *Draft, launch hostLauncher, f
 	}
 	if err != nil {
 		if closeErr := s.Close(); closeErr != nil {
-			return s, fmt.Errorf("%v；%w", err, closeErr)
+			return s, i18n.Wrap("err.quickinput.combined_close", map[string]string{"first": err.Error(), "second": closeErr.Error()}, closeErr)
 		}
 		return nil, err
 	}
@@ -250,7 +250,7 @@ func (s *remoteSurface) call(ctx context.Context, m hostipc.Message, expected ho
 	s.mu.Lock()
 	if s.closing || len(s.waiters) >= 8 {
 		s.mu.Unlock()
-		return fmt.Errorf("输入界面正在处理其他操作")
+		return i18n.Err("err.quickinput.surface_busy")
 	}
 	s.request++
 	m.Request = s.request
@@ -279,11 +279,20 @@ func (s *remoteSurface) call(ctx context.Context, m hostipc.Message, expected ho
 
 func (s *remoteSurface) Update(theme string) error {
 	if theme != "star" && theme != "frost" {
-		return fmt.Errorf("主题无效")
+		return i18n.Err("err.quickinput.invalid_theme")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	return s.call(ctx, hostipc.Message{Kind: hostipc.Theme, Theme: theme}, hostipc.State)
+}
+
+func (s *remoteSurface) UpdateLocale(locale string) error {
+	if !i18n.ValidLocale(locale) {
+		return i18n.Err("err.quickinput.prefs_invalid_locale")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return s.call(ctx, hostipc.Message{Kind: hostipc.Locale, Locale: locale}, hostipc.State)
 }
 
 func (s *remoteSurface) Snapshot(ctx context.Context) error {
@@ -311,22 +320,22 @@ func (s *remoteSurface) Close() error {
 }
 
 func hostFailure(code string) error {
-	details := map[string]string{
-		"focus_denied":                  "系统拒绝激活输入框，请从托盘重试",
-		"host_exited":                   "输入宿主已退出",
-		"host_disconnected":             "输入宿主通信中断",
-		"host_start_timeout":            "输入宿主初始化超时，请重试",
-		"host_queue_full":               "输入宿主消息队列已满",
-		"host_protocol_invalid":         "输入宿主协议校验失败",
-		"runtime_unavailable":           "WebView2 Runtime 不可用，请运行安装器补齐",
-		"runtime_override":              "WebView2 存在外部启动参数或目录策略覆盖，快捷输入已停用；请检查 WebView2 策略",
-		"runtime_initialization_failed": "WebView2 初始化失败，请重试并查看运行时诊断",
-		"renderer_failed":               "WebView2 渲染进程中断",
-		"snapshot_failed":               "请先完成输入法候选，再重试",
+	keys := map[string]string{
+		"focus_denied":                  "err.quickinput.focus_denied_tray",
+		"host_exited":                   "err.quickinput.host_exited",
+		"host_disconnected":             "err.quickinput.host_disconnected",
+		"host_start_timeout":            "err.quickinput.host_start_timeout",
+		"host_queue_full":               "err.quickinput.host_queue_full",
+		"host_protocol_invalid":         "err.quickinput.host_protocol_invalid",
+		"runtime_unavailable":           "err.quickinput.runtime_unavailable",
+		"runtime_override":              "err.quickinput.runtime_override",
+		"runtime_initialization_failed": "err.quickinput.runtime_init_failed",
+		"renderer_failed":               "err.quickinput.renderer_failed",
+		"snapshot_failed":               "err.quickinput.snapshot_ime",
 	}
-	detail, ok := details[code]
+	key, ok := keys[code]
 	if !ok {
-		code, detail = "host_protocol_invalid", details["host_protocol_invalid"]
+		code, key = "host_protocol_invalid", keys["host_protocol_invalid"]
 	}
-	return &RegistrationError{code, detail}
+	return &RegistrationError{Code: code, Detail: i18n.T(i18n.Effective(), key), Key: key}
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackgan90/Asterhand/internal/config"
 	"github.com/jackgan90/Asterhand/internal/executor"
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/model"
 	"github.com/jackgan90/Asterhand/internal/store"
 )
@@ -50,27 +51,34 @@ func (e *Engine) Notify() {
 }
 func (e *Engine) Accept(origin string, r model.Request) (model.Job, error) {
 	if len(r.RequestID) < 8 || len(r.RequestID) > 100 || len(r.Goal) == 0 || len(r.Goal) > 16000 {
-		return model.Job{}, errors.New("请求 ID 或任务长度无效")
+		return model.Job{}, i18n.Err("err.tasks.invalid_request_bounds")
 	}
 	if r.Mode != "route" && r.Mode != "execute" {
-		return model.Job{}, errors.New("不支持的任务模式")
+		return model.Job{}, i18n.Err("err.tasks.unsupported_mode")
 	}
 	t, err := time.Parse(time.RFC3339Nano, r.StartBefore)
 	if err != nil {
-		return model.Job{}, errors.New("启动截止时间无效")
+		return model.Job{}, i18n.Err("err.tasks.invalid_start_before")
 	}
 	if t.After(time.Now().Add(24 * time.Hour)) {
-		return model.Job{}, errors.New("启动截止时间最多 24 小时")
+		return model.Job{}, i18n.Err("err.tasks.start_before_too_far")
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.stopping {
-		return model.Job{}, errors.New("节点正在退出，暂不接收新任务")
+		return model.Job{}, i18n.Err("err.tasks.stopping_no_accept")
 	}
 	j, err := e.Store.AcceptChecked(e.Config.Get().NodeID, origin, r, func() error {
 		if err := executor.RequireTaskConfiguration(e.Config, e.Config.Get()); err != nil {
-			return &model.TaskRejection{Code: model.TaskConfigurationUnavailable, Message: err.Error(),
-				RequestID: r.RequestID, RequestDigest: model.Hash(r)}
+			msg, key, args := i18n.LocalizeError(i18n.Effective(), err)
+			return &model.TaskRejection{
+				Code:          model.TaskConfigurationUnavailable,
+				Message:       msg,
+				MessageKey:    key,
+				MessageArgs:   args,
+				RequestID:     r.RequestID,
+				RequestDigest: model.Hash(r),
+			}
 		}
 		if r.Mode == "execute" {
 			_, err := e.project(r.ProjectID)
@@ -105,7 +113,9 @@ func (e *Engine) Recover() error {
 		}
 		_, err := e.Store.ChangeControl(j.ID, "recovery", func(j *model.Job) (any, error) {
 			j.State = "reconciliation_required"
-			j.Error = "节点上次运行期间中断。保留执行记录，检查文件和运行时现场后在本机处置。"
+			j.ErrorKey = "err.tasks.recovery_interrupted"
+			j.ErrorArgs = nil
+			j.Error = i18n.T(i18n.Effective(), j.ErrorKey)
 			if j.Interaction != nil {
 				j.Interaction.State = "invalidated"
 			}
@@ -153,7 +163,7 @@ func (e *Engine) Run(ctx context.Context) error {
 func (e *Engine) execute(parent context.Context, j model.Job) error {
 	deadline, _ := time.Parse(time.RFC3339Nano, j.Request.StartBefore)
 	if !time.Now().Before(deadline) {
-		return e.finish(j.ID, "failed", "任务在启动前已过期", "")
+		return e.finishErr(j.ID, "failed", i18n.Err("err.tasks.expired_before_start"), "")
 	}
 	ctx, cancel := context.WithTimeout(parent, 2*time.Hour)
 	defer cancel()
@@ -178,7 +188,7 @@ func (e *Engine) execute(parent context.Context, j model.Job) error {
 	if err != nil || j.Attempt != a.attempt {
 		e.mu.Unlock()
 		if errors.Is(err, store.ErrEventLimit) {
-			return e.finish(j.ID, "failed", err.Error(), "")
+			return e.finishErr(j.ID, "failed", err, "")
 		}
 		return err
 	}
@@ -203,17 +213,17 @@ func (e *Engine) execute(parent context.Context, j model.Job) error {
 	}
 	for _, op := range operations {
 		if op.JobID == j.ID && op.Attempt == a.attempt && op.State == "prepared" {
-			return e.finish(j.ID, "reconciliation_required", "文件操作的最终结果尚未确认，请检查现场和操作日志", result.Final)
+			return e.finishErr(j.ID, "reconciliation_required", i18n.Err("err.tasks.file_op_unconfirmed"), result.Final)
 		}
 	}
 	if current.State == "cancel_requested" {
-		return e.finish(j.ID, "cancelled", "", result.Final)
+		return e.finishErr(j.ID, "cancelled", nil, result.Final)
 	}
 	if parent.Err() != nil {
-		return e.finish(j.ID, "reconciliation_required", "节点正在退出，执行结果需要核对", "")
+		return e.finishErr(j.ID, "reconciliation_required", i18n.Err("err.tasks.stopping_reconcile"), "")
 	}
 	if runErr != nil {
-		return e.finish(j.ID, "failed", runErr.Error(), result.Final)
+		return e.finishErr(j.ID, "failed", runErr, result.Final)
 	}
 	state := "completed_unverified"
 	if len(current.Artifacts) > 0 {
@@ -222,7 +232,7 @@ func (e *Engine) execute(parent context.Context, j model.Job) error {
 	if current.RemoteID != "" {
 		state = "succeeded"
 	}
-	return e.finish(j.ID, state, "", result.Final)
+	return e.finishErr(j.ID, state, nil, result.Final)
 }
 func (e *Engine) enforceExecutionBudget(ctx context.Context, cancel context.CancelFunc, id string) {
 	tick := time.NewTicker(time.Second)
@@ -272,6 +282,19 @@ func (e *Engine) routePrompt(j model.Job) string {
 	return fmt.Sprintf("Routing only. Known authorized nodes: %s. Selected/default node ID: %s; project ID: %s. Explicit selector: %t. For an action, call asterhand_submit with the full goal and exact target_id/project_id. Preserve instructions to ask the user before writing: file-detail questions belong to the executing node, so forward them without asking here. If the user names a known node and the selector is only the default, use that named node. If the selector is explicit and contradicts the text, ask the user to select the intended node and resubmit; do not submit a conflicting task. Ask when a name is ambiguous or unknown. Ordinary questions can be answered directly without submission. Never perform file actions here. User request:\n%s", b, j.Request.Target, j.Request.ProjectID, j.Request.TargetExplicit, j.Request.Goal)
 }
 func (e *Engine) finish(id, state, reason, result string) error {
+	var reasonErr error
+	if reason != "" {
+		reasonErr = errors.New(reason)
+	}
+	return e.finishErr(id, state, reasonErr, result)
+}
+
+func (e *Engine) finishErr(id, state string, reasonErr error, result string) error {
+	var reason, reasonKey string
+	var reasonArgs map[string]string
+	if reasonErr != nil {
+		reason, reasonKey, reasonArgs = i18n.LocalizeError(i18n.Effective(), reasonErr)
+	}
 	if len(reason) > 4000 {
 		reason = reason[:4000]
 	}
@@ -283,10 +306,12 @@ func (e *Engine) finish(id, state, reason, result string) error {
 			return nil, store.ErrUnchanged
 		}
 		if j.State == "cancel_requested" && state != "reconciliation_required" {
-			state, reason = "cancelled", ""
+			state, reason, reasonKey, reasonArgs = "cancelled", "", "", nil
 		}
 		j.State = state
 		j.Error = reason
+		j.ErrorKey = reasonKey
+		j.ErrorArgs = reasonArgs
 		j.Result = result
 		j.Execution = state
 		if len(j.Artifacts) > 0 {
@@ -307,10 +332,10 @@ func (e *Engine) Cancel(id string) (model.Job, error) {
 			return nil, store.ErrUnchanged
 		}
 		if model.Terminal(j.State) {
-			return nil, errors.New("任务已经结束")
+			return nil, i18n.Err("err.tasks.already_finished")
 		}
 		if j.State == "reconciliation_required" {
-			return nil, errors.New("先在本机处置待核对任务")
+			return nil, i18n.Err("err.tasks.reconcile_first")
 		}
 		if j.State == "queued" {
 			j.State = "cancelled"
@@ -333,14 +358,16 @@ func (e *Engine) Cancel(id string) (model.Job, error) {
 }
 func (e *Engine) Resolve(id, reason string) (model.Job, error) {
 	if len(reason) < 5 {
-		return model.Job{}, errors.New("请填写核对现场和处置理由")
+		return model.Job{}, i18n.Err("err.tasks.resolve_reason_short")
 	}
 	return e.Store.ChangeControl(id, "manually_resolved", func(j *model.Job) (any, error) {
 		if j.State != "reconciliation_required" {
-			return nil, errors.New("任务不在待核对状态")
+			return nil, i18n.Err("err.tasks.not_reconciling")
 		}
 		j.State = "failed"
 		j.Error = reason
+		j.ErrorKey = ""
+		j.ErrorArgs = nil
 		j.Execution = "unknown_manually_closed"
 		e.Notify()
 		return reason, nil
@@ -352,5 +379,5 @@ func (e *Engine) project(id string) (config.Project, error) {
 			return p, nil
 		}
 	}
-	return config.Project{}, errors.New("执行节点未授权此项目")
+	return config.Project{}, i18n.Err("err.tasks.project_unauthorized")
 }

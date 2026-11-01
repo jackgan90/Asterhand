@@ -5,16 +5,17 @@ package quickinput
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"syscall"
 	"time"
 	"unicode/utf16"
 	"unsafe"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/localcommands"
 	"golang.org/x/sys/windows"
 )
@@ -26,7 +27,7 @@ func PickLocalCommandScript(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return pickScriptProcess(ctx, executable, "pick-local-script")
+	return pickScriptProcess(ctx, executable, "pick-local-script", "--locale", i18n.Effective())
 }
 
 func pickScriptProcess(ctx context.Context, executable string, args ...string) (string, error) {
@@ -64,13 +65,13 @@ func pickScriptProcess(ctx context.Context, executable string, args ...string) (
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		return "", fmt.Errorf("无法打开脚本选择窗口：%w", err)
+		return "", i18n.Wrap("err.quickinput.picker_open_failed", nil, err)
 	}
 	var result struct {
 		Path string `json:"path"`
 	}
 	if len(output) > 16*1024 || json.Unmarshal(output, &result) != nil {
-		return "", fmt.Errorf("脚本选择结果无效")
+		return "", i18n.Err("err.quickinput.picker_invalid_result")
 	}
 	if result.Path == "" {
 		return "", nil
@@ -96,7 +97,13 @@ type scriptOpenFileName struct {
 }
 
 // RunScriptPicker is called only by the helper entry point before node startup.
-func RunScriptPicker() (string, error) {
+func RunScriptPicker(locale string) (string, error) {
+	if locale != "" {
+		if !i18n.ValidLocale(locale) {
+			return "", i18n.Err("err.cli.locale_invalid")
+		}
+		i18n.SetDefaultPreference(locale)
+	}
 	if err := verifyHostToken(windows.GetCurrentProcessToken()); err != nil {
 		return "", err
 	}
@@ -112,8 +119,9 @@ func showScriptPicker(ready func(uintptr)) (string, error) {
 	defer runtime.UnlockOSThread()
 	monitor := foregroundMonitor()
 	buffer := make([]uint16, 32768)
-	filter := utf16.Encode([]rune("本地脚本 (*.bat;*.cmd;*.ps1)\x00*.bat;*.cmd;*.ps1\x00\x00"))
-	title, _ := windows.UTF16PtrFromString("选择本地命令脚本")
+	loc := i18n.Effective()
+	filter := utf16.Encode([]rune(i18n.T(loc, "desktop.picker.filter_label") + "\x00*.bat;*.cmd;*.ps1\x00\x00"))
+	title, _ := windows.UTF16PtrFromString(i18n.T(loc, "desktop.picker.title"))
 	const fileMustExist, pathMustExist, noChangeDir = 0x1000, 0x800, 0x8
 	const explorer, hideReadOnly, noRecent, enableHook = 0x80000, 0x4, 0x2000000, 0x20
 	options := scriptOpenFileName{Size: uint32(unsafe.Sizeof(scriptOpenFileName{})), Filter: &filter[0], FilterIndex: 1,
@@ -138,7 +146,7 @@ func showScriptPicker(ready func(uintptr)) (string, error) {
 	if ok == 0 {
 		code, _, _ := dialog.NewProc("CommDlgExtendedError").Call()
 		if code != 0 {
-			return "", fmt.Errorf("文件选择窗口失败，Windows 错误 %d", code)
+			return "", i18n.ErrArgs("err.quickinput.picker_win_error", map[string]string{"code": strconv.FormatUint(uint64(code), 10)})
 		}
 		return "", nil
 	}

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/jackgan90/Asterhand/internal/model"
@@ -37,7 +38,7 @@ func TestDefinitiveRejectionSurvivesRestoreRestartAndLateSubmission(t *testing.T
 	checks := 0
 	_, err = s.AcceptChecked("owner", "origin", r, func() error { checks++; return nil })
 	var actual *model.TaskRejection
-	if !errors.As(err, &actual) || *actual != *want || checks != 0 {
+	if !errors.As(err, &actual) || !reflect.DeepEqual(actual, want) || checks != 0 {
 		t.Fatal("late copy could be admitted", err, checks)
 	}
 	if err := s.Cancel("origin", r.RequestID); err != nil {

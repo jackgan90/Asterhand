@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/model"
 	"github.com/jackgan90/Asterhand/internal/store"
 )
@@ -18,7 +19,7 @@ func (m *Manager) Refresh(ctx context.Context, id, address string) (map[string]a
 		return nil, err
 	}
 	if p.Revoked {
-		return nil, errors.New("此 peer 已撤销")
+		return nil, i18n.Err("err.app.peer_revoked")
 	}
 	candidate := p
 	if address != "" {
@@ -36,7 +37,7 @@ func (m *Manager) Refresh(ctx context.Context, id, address string) (map[string]a
 			return nil, err
 		}
 		if strings.TrimRight(info["endpoint"].(string), "/") != advertised {
-			return nil, errors.New("节点地址在校验期间变化，请稍后重试")
+			return nil, i18n.Err("err.peer.address_changed_during_verify")
 		}
 	}
 	name := info["name"].(string)
@@ -46,7 +47,7 @@ func (m *Manager) Refresh(ctx context.Context, id, address string) (map[string]a
 			return nil, err
 		}
 		if current.Revoked || current.Certificate != p.Certificate || current.InboundHash != p.InboundHash {
-			return nil, errors.New("配对身份或授权已变化，请重新检查节点")
+			return nil, i18n.Err("err.peer.identity_changed")
 		}
 		if current.Name == name && current.Endpoint == advertised {
 			return nil, store.ErrUnchanged
@@ -68,7 +69,7 @@ func observe(ctx context.Context, p model.Peer) (map[string]any, error) {
 	name, nameOK := info["name"].(string)
 	address, addressOK := info["endpoint"].(string)
 	if info["node_id"] != p.ID || !nameOK || strings.TrimSpace(name) == "" || len(name) > 80 || !addressOK || len(address) > 2048 {
-		return nil, errors.New("节点元数据与已配对身份不符")
+		return nil, i18n.Err("err.peer.metadata_mismatch")
 	}
 	if err := endpoint(address); err != nil {
 		return nil, err

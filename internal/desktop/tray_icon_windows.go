@@ -5,11 +5,11 @@ package desktop
 import (
 	_ "embed"
 	"encoding/binary"
-	"errors"
-	"fmt"
 	"log"
 	"unicode/utf16"
 	"unsafe"
+
+	"github.com/jackgan90/Asterhand/internal/i18n"
 )
 
 //go:embed assets/tray.ico
@@ -19,11 +19,11 @@ var trayICO []byte
 // is embedded at build time, but bounds are still checked before passing to Win32.
 func iconFrame(data []byte, size int) ([]byte, error) {
 	if len(data) < 6 || binary.LittleEndian.Uint16(data[2:]) != 1 {
-		return nil, errors.New("无效的托盘 ICO")
+		return nil, i18n.Err("err.desktop.invalid_ico")
 	}
 	count := int(binary.LittleEndian.Uint16(data[4:]))
 	if count == 0 || count > (len(data)-6)/16 {
-		return nil, errors.New("托盘 ICO 目录不完整")
+		return nil, i18n.Err("err.desktop.incomplete_ico")
 	}
 	best, distance := -1, int(^uint(0)>>1)
 	for i := 0; i < count; i++ {
@@ -44,7 +44,7 @@ func iconFrame(data []byte, size int) ([]byte, error) {
 	length := uint64(binary.LittleEndian.Uint32(entry[8:]))
 	offset := uint64(binary.LittleEndian.Uint32(entry[12:]))
 	if length == 0 || offset < uint64(6+count*16) || offset+length > uint64(len(data)) {
-		return nil, errors.New("托盘 ICO 图像超出资源范围")
+		return nil, i18n.Err("err.desktop.ico_out_of_bounds")
 	}
 	return data[offset : offset+length], nil
 }
@@ -80,7 +80,7 @@ func (t *Tray) reloadIcon() error {
 	}
 	icon, _, err := createIcon.Call(uintptr(unsafe.Pointer(&frame[0])), uintptr(len(frame)), 1, 0x00030000, uintptr(size), uintptr(size), 0)
 	if icon == 0 {
-		return fmt.Errorf("加载托盘图标失败: %w", err)
+		return i18n.Wrap("err.desktop.load_icon_failed", nil, err)
 	}
 	old := t.icon
 	t.icon, t.iconSize = icon, size
@@ -93,7 +93,7 @@ func (t *Tray) reloadIcon() error {
 
 func (t *Tray) refreshIcon() {
 	if err := t.reloadIcon(); err != nil {
-		log.Printf("刷新托盘图标失败: %v", err)
+		log.Printf("%s", i18n.T(t.options.locale(), "err.desktop.refresh_icon_failed", map[string]string{"err": err.Error()}))
 	}
 	t.lastTip = ""
 	t.updateIcon()
@@ -106,8 +106,9 @@ func (t *Tray) iconData() notifyIconData {
 }
 
 func (t *Tray) updateIcon() {
+	loc := t.options.locale()
 	state := t.options.State()
-	tip := "Asterhand · " + state.Name + " — " + state.text()
+	tip := i18n.T(loc, "desktop.tray.tooltip", map[string]string{"name": state.Name, "state": state.textFor(loc)})
 	if t.registered && tip == t.lastTip {
 		return
 	}

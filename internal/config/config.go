@@ -9,23 +9,33 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/llm"
 	"github.com/jackgan90/Asterhand/internal/model"
 )
 
 const Version = "0.1.0-alpha.1"
 
+const legacyDefaultWorkspaceName = "授权目录"
+
 // SourceDigest is supplied by the candidate builder and binds live evidence to source.
 var SourceDigest = "development"
 
 type Project struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Root string `json:"root"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	NameCustom bool   `json:"name_custom,omitempty"`
+	Root       string `json:"root"`
 }
+
+func DefaultWorkspaceProject(root string) Project {
+	return Project{ID: "workspace", Name: legacyDefaultWorkspaceName, Root: root}
+}
+
 type Config struct {
 	NodeID                 string                     `json:"node_id"`
 	Name                   string                     `json:"name"`
+	NameDefault            bool                       `json:"name_default,omitempty"`
 	WebListen              string                     `json:"web_listen"`
 	PeerListen             string                     `json:"peer_listen"`
 	Endpoint               string                     `json:"endpoint"`
@@ -83,13 +93,19 @@ func Open(home string) (*Manager, error) {
 	if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	m.cfg = Config{NodeID: model.ID(), Name: "我的节点", WebListen: "127.0.0.1:17432", PeerListen: "0.0.0.0:17433"}
+	m.cfg = Config{
+		NodeID:      model.ID(),
+		Name:        i18n.T(i18n.Effective(), "common.default_node_name"),
+		NameDefault: true,
+		WebListen:   "127.0.0.1:17432",
+		PeerListen:  "0.0.0.0:17433",
+	}
 	return m, m.Save(m.cfg)
 }
 func validateHome(path string) error {
 	user, _ := os.UserHomeDir()
 	if filepath.Dir(path) == path || path == user {
-		return errors.New("节点数据目录必须是独立的应用目录")
+		return i18n.Err("err.config.dedicated_dir_required")
 	}
 	if _, err := os.Stat(filepath.Join(path, "config.json")); err == nil {
 		return nil
@@ -102,7 +118,7 @@ func validateHome(path string) error {
 		switch entry.Name() {
 		case "startup.txt", "error.txt", "process.pid", "startup.log", "error.log", "launcher.log", "service.lock", "launch-state.json":
 		default:
-			return errors.New("此目录已有其他内容，请选择空目录或已有 Asterhand 数据目录")
+			return i18n.Err("err.config.dir_not_empty")
 		}
 	}
 	return nil
@@ -171,7 +187,7 @@ func Unseal(secret string) (string, error) {
 		return "", nil
 	}
 	if len(secret) < 7 || secret[:7] != "sealed:" {
-		return "", errors.New("凭据格式无效，请重新配对")
+		return "", i18n.Err("err.config.credential_corrupt")
 	}
 	b, err := base64.RawStdEncoding.DecodeString(secret[7:])
 	if err != nil {

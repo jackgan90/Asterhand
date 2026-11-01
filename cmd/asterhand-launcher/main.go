@@ -7,16 +7,19 @@ import (
 	"path/filepath"
 
 	"github.com/jackgan90/Asterhand/internal/desktop"
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/launch"
 )
 
 func main() {
-	noBrowser := flag.Bool("no-browser", false, "启动节点但不打开浏览器")
-	quiet := flag.Bool("quiet", false, "失败只返回非零状态，不弹出对话框")
+	loc := i18n.Effective()
+	noBrowser := flag.Bool("no-browser", false, i18n.T(loc, "desktop.launcher.flag.no_browser"))
+	quiet := flag.Bool("quiet", false, i18n.T(loc, "desktop.launcher.flag.quiet"))
 	flag.Parse()
 	executable, err := os.Executable()
 	if err == nil {
 		path := filepath.Join(filepath.Dir(executable), "installation.json")
+		launch.ApplyInstallationLocale(path)
 		err = launch.Run(path, *noBrowser)
 		if err != nil {
 			logs := launch.LogError(path, err)

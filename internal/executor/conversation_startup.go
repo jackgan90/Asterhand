@@ -51,9 +51,9 @@ func (r *ConversationRuntime) ensure(ctx context.Context, binding conversation.B
 			// Recheck configuration and ownership after waiting; settings may have
 			// changed while a read-only request was starting the previous runtime.
 		case <-ctx.Done():
-			return nil, conversation.Fail("unavailable", "聊天运行时仍在启动，草稿已保留，请稍后重试")
+			return nil, conversation.FailKey("unavailable", "err.conv.runtime.starting_draft_kept")
 		case <-r.ctx.Done():
-			return nil, conversation.Fail("unavailable", "会话运行时已关闭")
+			return nil, conversation.FailKey("unavailable", "err.conv.runtime.closed")
 		}
 	}
 }
@@ -65,18 +65,18 @@ func (r *ConversationRuntime) beginStartup(ctx context.Context, binding conversa
 	case <-ctx.Done():
 		return nil, nil, ctx.Err()
 	case <-r.ctx.Done():
-		return nil, nil, conversation.Fail("unavailable", "会话运行时已关闭")
+		return nil, nil, conversation.FailKey("unavailable", "err.conv.runtime.closed")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
 	if r.ctx.Err() != nil {
-		return nil, nil, conversation.Fail("unavailable", "会话运行时已关闭")
+		return nil, nil, conversation.FailKey("unavailable", "err.conv.runtime.closed")
 	}
 	c := r.config.Get()
 	options, err := clawOptions(c)
 	if err != nil || binding.Runtime != "openclaw" || c.AgentRuntime != "openclaw" || binding.Generation != chatBindingID() {
-		return nil, nil, conversation.Fail("binding_changed", "原会话的运行时绑定不可用，请恢复原配置")
+		return nil, nil, conversation.FailKey("binding_changed", "err.conv.runtime.binding_unavailable")
 	}
 	provider, err := openClawProvider(c)
 	if err != nil {
@@ -113,7 +113,7 @@ func (r *ConversationRuntime) runStartup(attempt *chatStartup, c config.Config, 
 		err = process.close()
 		if err == nil {
 			process = nil
-			err = conversation.Fail("unavailable", "会话运行时已关闭")
+			err = conversation.FailKey("unavailable", "err.conv.runtime.closed")
 		}
 	}
 	if process != nil {

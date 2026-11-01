@@ -5,11 +5,12 @@ import {ChatOutbox} from './chat-outbox.mjs';
 import {replyStatusView} from './chat-status.mjs';
 import {operationQueue} from './chat-queue.mjs';
 import {connectionView} from './chat-connection.mjs';
+import {formatDateTime, localizeError, onLocaleChange, t} from './i18n.mjs';
 
 export function chatPanel(bridge, editor) {
   const query = id => document.getElementById(id);
   const panel = query('chat-panel'), scroll = query('chat-scroll'), status = query('chat-status');
-  if (!panel) return {dispose() {}};
+  if (!panel) return {relocalize() {}, dispose() {}};
   const windowState = new ChatWindow();
   const outbox = new ChatOutbox();
   let sendingOperation = '';
@@ -19,24 +20,42 @@ export function chatPanel(bridge, editor) {
   let selected = '', turn = null, pending = null, expanded = false, visible = false, ready = false;
   let sending = false, polling = false, loading = false, timer = null, selection = 0, nodeBusy = false;
   let stoppingOperation = '';
-  let createOperation = '', listOffset = 0;
+  let createOperation = '', listOffset = 0, lastListState = null;
   let creatingRequest = null;
   let draftDecision = null, historyLoaded = false, historyLoading = -1, readingOlder = false, refreshHistory = false;
+  let lastStatus = {kind: 'key', key: 'quickinput.chat_hint'};
   const cleanup = [];
   const listen = (node, name, fn) => { node.addEventListener(name, fn); cleanup.push(() => node.removeEventListener(name, fn)); };
   const statusView = replyStatusView(status);
-  const say = message => statusView.message(message);
-  const sayTurn = (suffix = '') => {
+  statusView.message(t('quickinput.chat_hint'));
+  const sayKey = (key, args) => {
+    lastStatus = {kind: 'key', key, args};
+    return statusView.message(t(key, args));
+  };
+  const sayError = (err, fallbackKey = '') => {
+    lastStatus = {kind: 'error', err, fallbackKey};
+    return statusView.message(localizeError(err, fallbackKey));
+  };
+  const sayTurn = (suffixKey = '') => {
+    const suffix = suffixKey ? t(suffixKey) : '';
     if (queue.enabled) {
       if (queue.state.active?.conversation_id === selected) {
-        if (stoppingOperation === queue.state.active.operation_id) return say('正在停止回复…');
+        if (stoppingOperation === queue.state.active.operation_id) return sayKey('quickinput.ui.stopping');
+        lastStatus = {kind: 'turn', suffixKey};
         return statusView.turn(queue.state.active, suffix);
       }
-      if (queue.awaitingReply(selected)) return statusView.turn(null, suffix, true);
+      if (queue.awaitingReply(selected)) {
+        lastStatus = {kind: 'turn', suffixKey};
+        return statusView.turn(null, suffix, true);
+      }
       const failed = queue.failure(selected);
-      if (failed?.turn) return statusView.turn(newerTurn(turn, failed.turn), suffix);
-      if (failed && !turn) return say(failed.error?.message ?? '会话准备失败');
+      if (failed?.turn) {
+        lastStatus = {kind: 'turn', suffixKey};
+        return statusView.turn(newerTurn(turn, failed.turn), suffix);
+      }
+      if (failed && !turn) return sayError(failed.error, 'quickinput.ui.prepare_failed');
     }
+    lastStatus = {kind: 'turn', suffixKey};
     statusView.turn(turn, suffix, sending && turn?.operation_id !== sendingOperation);
   };
   const updateButtons = () => {
@@ -92,7 +111,7 @@ export function chatPanel(bridge, editor) {
   function setExpanded(value) {
     expanded = value;
     panel.hidden = !value;
-    query('chat-expand').textContent = value ? '收起 ▾' : '展开 ▴';
+    query('chat-expand').textContent = t(value ? 'quickinput.collapse' : 'quickinput.expand');
     query('chat-expand').setAttribute('aria-expanded', String(value));
     editor.setExpanded(value);
     connection.visible(visible && expanded && ready);
@@ -107,7 +126,7 @@ export function chatPanel(bridge, editor) {
 
   async function connectOnce() {
     loading = true;
-    if (sending) sayTurn(); else say('正在连接本机助手…');
+    if (sending) sayTurn(); else sayKey('quickinput.ui.connecting');
     try {
       const hello = await client.call('hello');
       ready = true;
@@ -124,8 +143,8 @@ export function chatPanel(bridge, editor) {
       if (restored && restored !== selected) await select(restored);
       else if (selected && expanded) await history();
       else if (sending) sayTurn();
-      else say(hello.can_send ? '输入内容，开始新对话' : '请先在本机设置配置模型；已有历史可继续查看');
-    } catch (error) { if (!ready) connection.unavailable(); say(error.message); }
+      else sayKey(hello.can_send ? 'quickinput.ui.start_new_hint' : 'quickinput.ui.configure_model_hint');
+    } catch (error) { if (!ready) connection.unavailable(); sayError(error); }
     finally { loading = false; updateButtons(); schedule(); }
   }
 
@@ -139,7 +158,8 @@ export function chatPanel(bridge, editor) {
     readingOlder = false;
     windowState.clear();
     list.hidden = true;
-    query('chat-conversation-name').textContent = '对话 ' + id.slice(0, 8);
+    query('chat-conversation-name').removeAttribute?.('data-i18n');
+    query('chat-conversation-name').textContent = t('quickinput.conversation_label', {id: id.slice(0, 8)});
     paint();
     if (queue.enabled) sayTurn();
     if (queue.enabled) void safely(() => client.call('select', {conversation_id:id}));
@@ -176,7 +196,7 @@ export function chatPanel(bridge, editor) {
       refreshHistory = false;
       readingOlder = older && !response.page?.reset;
       windowState.apply(response.page ?? {messages: []}, older);
-      if (response.page?.reset && !sending) say('历史已变化，已重新读取最新消息');
+      if (response.page?.reset && !sending) sayKey('quickinput.ui.history_reset');
       else sayTurn();
       paint(readingOlder);
       updateButtons();
@@ -195,7 +215,9 @@ export function chatPanel(bridge, editor) {
   async function createOnce() {
     createOperation ||= crypto.randomUUID();
     const response = await client.call(queue.enabled ? 'prepare' : 'create', {operation_id: createOperation});
-    if (!queue.enabled && response.conversation?.state !== 'ready') throw new Error('会话正在创建，请稍后刷新核对');
+    if (!queue.enabled && response.conversation?.state !== 'ready') {
+      throw Object.assign(new Error(t('quickinput.ui.creating_check')), {messageKey: 'quickinput.ui.creating_check'});
+    }
     createOperation = '';
     await select(response.conversation.id);
   }
@@ -212,7 +234,7 @@ export function chatPanel(bridge, editor) {
     if (!outbox.begin(operation, selected, snapshot.text)) {
       editor.restoreSubmission(operation);
       sendingOperation = ''; sending = false;
-      say('请先处理已有待发消息，当前草稿已保留');
+      sayKey('quickinput.ui.pending_queue_full');
       updateButtons(); return;
     }
     readingOlder = false;
@@ -243,7 +265,7 @@ export function chatPanel(bridge, editor) {
       outbox.observe(error.response?.turn);
       if (outbox.fail(operation, dispatched, error) === 'rejected') editor.restoreSubmission(operation);
       if (error.response?.turn?.conversation_id === selected) turn = newerTurn(turn, error.response.turn);
-      say(error.message);
+      sayError(error);
       paint();
     } finally { sendingOperation = ''; sending = false; updateButtons(); schedule(); }
   }
@@ -293,11 +315,34 @@ export function chatPanel(bridge, editor) {
       if (refreshHistory || turn && (turn.assistant_message_id !== previous?.assistant_message_id || !unsettled(turn) && unsettled(previous))) {
         if (!expanded) { historyLoaded = false; refreshHistory = true; }
         else if (follow) await history();
-        else sayTurn('点击“回到最新”查看回复');
+        else sayTurn('quickinput.ui.jump_latest_hint');
       }
       if (turn && !unsettled(turn)) pending = null;
-    } catch (error) { say(error.message); }
+    } catch (error) { sayError(error); }
     finally { polling = false; updateButtons(); schedule(); }
+  }
+
+  function renderList() {
+    if (!lastListState) return;
+    const {entries, activeConversation, hasMore} = lastListState;
+    list.replaceChildren();
+    for (const entry of entries) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      const suffix = entry.id === activeConversation
+        ? t(queue.state?.active?.delivery === 'unknown' ? 'quickinput.ui.list_unknown_suffix' : 'quickinput.ui.list_replying_suffix')
+        : '';
+      button.textContent = formatDateTime(entry.updated_at) + ' · ' + entry.id.slice(0, 8) + suffix;
+      button.addEventListener('click', () => { if (entry.id !== selected) requestSwitch(() => select(entry.id)); });
+      list.append(button);
+    }
+    if (hasMore) {
+      const moreButton = document.createElement('button');
+      moreButton.id = 'chat-list-more'; moreButton.type = 'button'; moreButton.textContent = t('quickinput.ui.more_conversations');
+      moreButton.addEventListener('click', () => safely(() => showList(true)));
+      list.append(moreButton);
+    }
+    if (!list.children.length) list.textContent = t('quickinput.ui.no_conversations');
   }
 
   async function showList(more = false) {
@@ -305,23 +350,9 @@ export function chatPanel(bridge, editor) {
     if (!more) listOffset = 0;
     const response = await client.call('list', {offset: listOffset});
     const entries = response.conversations ?? [];
-    list.replaceChildren();
-    for (const entry of entries) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = new Date(entry.updated_at).toLocaleString() + ' · ' + entry.id.slice(0, 8) +
-        (entry.id === response.active_conversation ? queue.state?.active?.delivery === 'unknown' ? ' · 送达待确认' : ' · 正在回复' : '');
-      button.addEventListener('click', () => { if (entry.id !== selected) requestSwitch(() => select(entry.id)); });
-      list.append(button);
-    }
     listOffset += entries.length;
-    if (entries.length === 50) {
-      const moreButton = document.createElement('button');
-      moreButton.id = 'chat-list-more'; moreButton.type = 'button'; moreButton.textContent = '更多会话';
-      moreButton.addEventListener('click', () => safely(() => showList(true)));
-      list.append(moreButton);
-    }
-    if (!list.children.length) list.textContent = '暂无历史会话';
+    lastListState = {entries, activeConversation: response.active_conversation, hasMore: entries.length === 50};
+    renderList();
     list.hidden = false;
   }
 
@@ -331,7 +362,7 @@ export function chatPanel(bridge, editor) {
     const encoder = new TextEncoder();
     const start = restart ? 0 : windowState.messages.find(message => message.id === messageID)?.fragmentNext ?? 0;
     let text = '', offset = start, more = true, bytes = 0;
-    say('正在读取完整消息…');
+    sayKey('quickinput.ui.reading_full');
     try {
       while (more && version === selection) {
         const response = await client.call('message', {conversation_id: id, message_id: messageID, offset});
@@ -342,30 +373,32 @@ export function chatPanel(bridge, editor) {
         text += fragment.text;
         bytes += size;
         more = fragment.has_more;
-        if (more && fragment.next_offset <= offset) throw new Error('消息分片未前进，请刷新');
+        if (more && fragment.next_offset <= offset) {
+          throw Object.assign(new Error(t('quickinput.ui.fragment_stalled')), {messageKey: 'quickinput.ui.fragment_stalled'});
+        }
         offset = fragment.next_offset;
       }
       windowState.replace(messageID, text, more, start, more ? offset : 0);
       paint();
-      if (more) say('已达到当前窗口文本上限，可继续读取后续片段；原始消息保留在运行时');
+      if (more) sayKey('quickinput.ui.fragment_window_cap');
       else sayTurn();
-    } catch (error) { say(error.message); }
+    } catch (error) { sayError(error); }
   }
 
   function copy(text) {
     const payload = {text};
     if (new TextEncoder().encode(text).length > 64 * 1024 || new TextEncoder().encode(JSON.stringify(payload)).length > 120 * 1024) {
-      say('内容超过按钮复制上限，请选中文字后按 Ctrl+C');
+      sayKey('quickinput.ui.copy_limit');
       return;
     }
     editor.post('copy', payload);
   }
 
-  async function safely(action) { try { await action(); } catch (error) { say(error.message); } }
+  async function safely(action) { try { await action(); } catch (error) { sayError(error); } }
   function requestSwitch(action) {
-    if (sending) { say('消息正在发送，请稍后切换会话'); return; }
+    if (sending) { sayKey('quickinput.ui.sending_wait_switch'); return; }
     const snapshot = editor.snapshot();
-    if (!snapshot) { say('请先完成当前输入法组合，再切换会话'); return; }
+    if (!snapshot) { sayKey('quickinput.ui.ime_wait_switch'); return; }
     if (!snapshot.text) { void safely(action); return; }
     draftDecision = {action, revision: snapshot.revision};
     query('chat-draft-decision').hidden = false;
@@ -383,7 +416,7 @@ export function chatPanel(bridge, editor) {
     dismissDecision();
     if (!decision) return;
     if (!snapshot || snapshot.revision !== decision.revision || !editor.clearIfRevision(decision.revision)) {
-      say('草稿已变化，请重新选择要切换的会话'); return;
+      sayKey('quickinput.ui.draft_changed_reselect'); return;
     }
     void safely(decision.action);
   });
@@ -399,7 +432,7 @@ export function chatPanel(bridge, editor) {
     if (stoppingOperation || active?.conversation_id !== selected || active?.delivery !== 'accepted' || !unsettled(active)) return;
     const id = selected, version = selection;
     stoppingOperation = active.operation_id;
-    say('正在停止回复…'); updateButtons();
+    sayKey('quickinput.ui.stopping'); updateButtons();
     try {
       const response = await client.call('cancel', {conversation_id: id, operation_id: active.operation_id});
       if (id === selected && version === selection) turn = newerTurn(turn, response.turn);
@@ -407,6 +440,19 @@ export function chatPanel(bridge, editor) {
       stoppingOperation = ''; sayTurn(); updateButtons(); schedule();
     }
   }));
+  function relocalize() {
+    query('chat-expand').textContent = t(expanded ? 'quickinput.collapse' : 'quickinput.expand');
+    query('chat-conversation-name').textContent = selected
+      ? t('quickinput.conversation_label', {id: selected.slice(0, 8)})
+      : t('quickinput.default_assistant');
+    connection.relocalize();
+    render.relocalize();
+    if (!list.hidden && lastListState) renderList();
+    if (lastStatus?.kind === 'key') sayKey(lastStatus.key, lastStatus.args);
+    else if (lastStatus?.kind === 'error') sayError(lastStatus.err, lastStatus.fallbackKey);
+    else sayTurn(lastStatus?.suffixKey || '');
+  }
+  const unsubscribeLocale = onLocaleChange(relocalize);
   editor.onSubmit(submit);
   const unsubscribe = bridge.subscribe(message => {
     if (message.kind === 'focus' || message.kind === 'visibility' && message.visible) {
@@ -423,7 +469,7 @@ export function chatPanel(bridge, editor) {
     }
   });
   updateButtons();
-  function dispose() { clearTimeout(timer); connection.dispose(); statusView.dispose(); render.dispose(); unsubscribe(); client.dispose(); cleanup.forEach(remove => remove()); }
+  function dispose() { clearTimeout(timer); unsubscribeLocale(); connection.dispose(); statusView.dispose(); render.dispose(); unsubscribe(); client.dispose(); cleanup.forEach(remove => remove()); }
   listen(window, 'pagehide', dispose);
-  return {dispose};
+  return {relocalize, dispose};
 }

@@ -13,3 +13,6 @@
 internal/quickinput/assets/vendor/** -text
 # The generated inventory is repository metadata, not a pinned upstream asset.
 internal/quickinput/assets/vendor/**/manifest.json text eol=lf
+# Deterministic generated i18n catalog modules are verified byte-for-byte with LF.
+web/i18n-catalog.mjs text eol=lf
+internal/quickinput/assets/i18n-catalog.mjs text eol=lf

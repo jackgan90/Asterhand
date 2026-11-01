@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/jackgan90/Asterhand/internal/config"
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/packaging"
 )
 
@@ -109,7 +109,7 @@ func (o *OpenClaw) Check(ctx context.Context, c config.Config) (map[string]any, 
 		_, err := os.Stat(path)
 		checks[name] = map[string]any{"path": filepath.Clean(path), "exists": err == nil}
 		if err != nil {
-			issues = append(issues, name+" 未安装")
+			issues = append(issues, i18n.T(i18n.Effective(), "err.executor.component_missing", map[string]string{"name": name}))
 		}
 	}
 	if len(issues) > 0 {
@@ -125,7 +125,7 @@ func (o *OpenClaw) Check(ctx context.Context, c config.Config) (map[string]any, 
 	version, err := cmd.Output()
 	checks["node_version"] = strings.TrimSpace(string(version))
 	if err != nil || strings.TrimSpace(string(version)) != "v"+catalog.Node.Version {
-		issues = append(issues, "Node.js 版本与发布清单不符")
+		issues = append(issues, i18n.T(i18n.Effective(), "err.executor.node_version_mismatch"))
 	}
 	packages := map[string]struct{ Path, Version string }{
 		"openclaw": {filepath.Join(filepath.Dir(options.EntryPath), "package.json"), component.Version},
@@ -137,7 +137,7 @@ func (o *OpenClaw) Check(ctx context.Context, c config.Config) (map[string]any, 
 			Version string `json:"version"`
 		}
 		if err != nil || json.Unmarshal(b, &pkg) != nil || pkg.Version != p.Version {
-			issues = append(issues, fmt.Sprintf("%s 版本与发布清单不符", name))
+			issues = append(issues, i18n.T(i18n.Effective(), "err.executor.component_version_mismatch", map[string]string{"name": name}))
 		}
 		checks[name+"_version"] = pkg.Version
 	}

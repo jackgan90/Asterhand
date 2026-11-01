@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/model"
 )
 
@@ -15,7 +16,7 @@ func recordRejection(tx *sql.Tx, key string, request model.Request, err error) e
 		return err
 	}
 	if !rejection.Matches(request) || rejection.Message == "" {
-		return errors.New("任务拒绝记录与请求不匹配")
+		return i18n.Err("err.store.rejection_mismatch")
 	}
 	if err := put(tx, "task-rejection", key, rejection); err != nil {
 		return err

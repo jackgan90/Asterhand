@@ -2,6 +2,6 @@
 
 package quickinput
 
-import "fmt"
+import "github.com/jackgan90/Asterhand/internal/i18n"
 
-func RunInputHost([]string) error { return fmt.Errorf("当前平台不支持原生快捷输入宿主") }
+func RunInputHost([]string) error { return i18n.Err("err.quickinput.host_platform_unsupported") }

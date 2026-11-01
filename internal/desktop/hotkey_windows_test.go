@@ -89,6 +89,7 @@ type hotkeySurface struct{ toggled chan struct{} }
 
 func (s *hotkeySurface) Toggle()                        { s.toggled <- struct{}{} }
 func (s *hotkeySurface) Update(string) error            { return nil }
+func (s *hotkeySurface) UpdateLocale(string) error      { return nil }
 func (s *hotkeySurface) Snapshot(context.Context) error { return nil }
 func (s *hotkeySurface) Close() error                   { return nil }
 

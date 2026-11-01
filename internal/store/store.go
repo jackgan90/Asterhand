@@ -4,17 +4,18 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"strconv"
 	"sync"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/model"
 	_ "modernc.org/sqlite"
 )
 
-var ErrConflict = errors.New("相同请求 ID 的内容不同")
-var ErrNotFound = errors.New("记录不存在")
-var ErrEventLimit = errors.New("任务普通事件预算已满，停止新操作")
-var ErrUnchanged = errors.New("记录已处于目标状态")
+var ErrConflict = i18n.Err("err.store.conflict")
+var ErrNotFound = i18n.Err("err.store.not_found")
+var ErrEventLimit = i18n.Err("err.store.event_limit")
+var ErrUnchanged = i18n.Err("err.store.unchanged")
 
 const EventLimit = 4096
 const ControlEventReserve = 16
@@ -38,7 +39,7 @@ func Open(path string) (*Store, error) {
 	}
 	if schema > SchemaVersion {
 		db.Close()
-		return nil, fmt.Errorf("数据库版本 %d 高于当前支持版本 %d，请使用较新的 Asterhand", schema, SchemaVersion)
+		return nil, i18n.ErrArgs("err.store.schema_newer", map[string]string{"schema": strconv.Itoa(schema), "supported": strconv.Itoa(SchemaVersion)})
 	}
 	_, err = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
 	CREATE TABLE IF NOT EXISTS records(kind TEXT NOT NULL, id TEXT NOT NULL, body BLOB NOT NULL, PRIMARY KEY(kind,id));
@@ -139,7 +140,7 @@ func event(tx *sql.Tx, j *model.Job, typ string, data any) error {
 		return err
 	}
 	if len(b) > 64*1024 {
-		return errors.New("事件超过 64 KiB 上限")
+		return i18n.Err("err.store.event_oversized")
 	}
 	_, err = tx.Exec("INSERT INTO events(job,seq,body) VALUES(?,?,?)", j.ID, j.Seq, b)
 	if err != nil {
@@ -262,7 +263,7 @@ func (s *Store) Cancel(origin, request string) error {
 }
 func (s *Store) Events(id string, after int64) ([]model.Event, error) {
 	if after < 0 {
-		return nil, fmt.Errorf("无效游标")
+		return nil, i18n.Err("err.store.invalid_cursor")
 	}
 	rows, err := s.db.Query("SELECT body FROM events WHERE job=? AND seq>? ORDER BY seq LIMIT 200", id, after)
 	if err != nil {

@@ -37,11 +37,11 @@ func (s *remoteSurface) commandCall(message hostipc.Message) error {
 		_ = s.send(hostipc.Message{Kind: hostipc.CommandResult, CommandID: message.CommandID, CommandReply: &response})
 	}
 	if duplicate {
-		respond(commandswire.Response{Error: &commandswire.Error{Code: "duplicate", Message: "该启动请求已处理，请勿自动重发"}})
+		respond(commandswire.Response{Error: commandswire.FailKey("duplicate", "err.quickinput.cmd_duplicate")})
 		return nil
 	}
 	if handler == nil {
-		respond(commandswire.Response{Error: &commandswire.Error{Code: "unavailable", Message: "本地命令功能未就绪"}})
+		respond(commandswire.Response{Error: commandswire.FailKey("unavailable", "err.quickinput.cmd_not_ready")})
 		return nil
 	}
 	go func() {

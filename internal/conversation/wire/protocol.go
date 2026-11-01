@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/prompt"
 )
 
@@ -35,14 +36,16 @@ type Capabilities struct {
 // Descriptor describes the currently configured logical runtime, not a process.
 // Binding changes only when the runtime/storage identity changes.
 type Descriptor struct {
-	ID           string
-	Binding      string
-	Provider     string
-	Model        string
-	CanSend      bool
-	SendError    string
-	Capabilities Capabilities
-	Prompt       prompt.Application
+	ID            string
+	Binding       string
+	Provider      string
+	Model         string
+	CanSend       bool
+	SendError     string
+	SendErrorKey  string
+	SendErrorArgs map[string]string
+	Capabilities  Capabilities
+	Prompt        prompt.Application
 }
 
 type Conversation struct {
@@ -138,20 +141,70 @@ type Response struct {
 }
 
 type Error struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code        string            `json:"code"`
+	Message     string            `json:"message"`
+	MessageKey  string            `json:"message_key,omitempty"`
+	MessageArgs map[string]string `json:"message_args,omitempty"`
 }
 
-func (e *Error) Error() string { return e.Message }
+func (e *Error) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.MessageKey != "" {
+		return i18n.LocalizeMessage(i18n.Effective(), e.MessageKey, e.MessageArgs, e.Message)
+	}
+	return e.Message
+}
 
-func Fail(code, message string) error { return &Error{Code: code, Message: message} }
+func (e *Error) I18nKey() (string, map[string]string) {
+	if e == nil {
+		return "", nil
+	}
+	return e.MessageKey, i18n.CloneArgs(e.MessageArgs)
+}
+
+func Fail(code, message string) error {
+	if i18n.HasKey(message) {
+		return FailKey(code, message)
+	}
+	return &Error{Code: code, Message: message}
+}
+
+func FailKey(code, key string, args ...map[string]string) error {
+	var params map[string]string
+	if len(args) > 0 {
+		params = i18n.CloneArgs(args[0])
+	}
+	return &Error{
+		Code:        code,
+		Message:     i18n.T(i18n.Effective(), key, params),
+		MessageKey:  key,
+		MessageArgs: params,
+	}
+}
 
 func PublicError(err error) *Error {
 	var known *Error
 	if errors.As(err, &known) {
-		return known
+		out := *known
+		out.Message = out.Error()
+		out.MessageArgs = i18n.CloneArgs(known.MessageArgs)
+		return &out
 	}
-	return &Error{Code: "unavailable", Message: "会话服务暂不可用，请刷新核对状态"}
+	if key, args, ok := i18n.ErrorDetails(err); ok {
+		return &Error{
+			Code:        "unavailable",
+			Message:     i18n.LocalizeMessage(i18n.Effective(), key, args, err.Error()),
+			MessageKey:  key,
+			MessageArgs: args,
+		}
+	}
+	return &Error{
+		Code:       "unavailable",
+		Message:    i18n.T(i18n.Effective(), "err.conv.wire.unavailable"),
+		MessageKey: "err.conv.wire.unavailable",
+	}
 }
 
 func ValidID(id string) bool {
@@ -168,43 +221,43 @@ func ValidID(id string) bool {
 
 func (r Request) Validate() error {
 	if len(r.Cursor) > 2048 || r.Offset < 0 || r.Offset > 32*1024*1024 {
-		return Fail("invalid_request", "会话分页参数无效")
+		return FailKey("invalid_request", "err.conv.wire.invalid_page")
 	}
 	if r.Action == "hello" {
 		if r.Target != (Target{}) {
-			return Fail("invalid_request", "初始化请求包含目标")
+			return FailKey("invalid_request", "err.conv.wire.hello_has_target")
 		}
 	} else if !ValidID(r.Target.Node) || r.Target.Role != DefaultRole {
-		return Fail("invalid_target", "会话目标无效")
+		return FailKey("invalid_target", "err.conv.wire.invalid_target")
 	}
 	needsConversation := r.Action == "select" || r.Action == "history" || r.Action == "message" || r.Action == "submit" || r.Action == "enqueue" || r.Action == "queue_item" || r.Action == "reconcile" || r.Action == "cancel"
 	needsOperation := r.Action == "create" || r.Action == "prepare" || r.Action == "submit" || r.Action == "enqueue" || r.Action == "queue_item"
 	if (needsConversation && !ValidID(r.Conversation)) || (!needsConversation && r.Conversation != "") ||
 		(needsOperation && !ValidID(r.Operation)) || (r.Operation != "" && !ValidID(r.Operation)) {
-		return Fail("invalid_request", "会话或操作身份无效")
+		return FailKey("invalid_request", "err.conv.wire.invalid_ids")
 	}
 	if r.Action != "submit" && r.Action != "enqueue" && (r.Text != "" || r.DraftRevision != 0) || r.Action != "message" && r.Message != "" ||
 		r.Action != "history" && r.Action != "message" && r.Action != "list" && r.Offset != 0 || r.Action != "history" && r.Cursor != "" {
-		return Fail("invalid_request", "请求包含其他操作的字段")
+		return FailKey("invalid_request", "err.conv.wire.extra_fields")
 	}
 	if r.Operation != "" && !needsOperation && r.Action != "reconcile" && r.Action != "cancel" {
-		return Fail("invalid_request", "请求包含多余操作身份")
+		return FailKey("invalid_request", "err.conv.wire.extra_op_id")
 	}
 	switch r.Action {
 	case "hello", "list", "connect", "connection", "select", "create", "prepare", "history", "reconcile", "cancel", "queue", "queue_item":
 	case "message":
 		if !ValidID(r.Message) {
-			return Fail("invalid_request", "消息身份无效")
+			return FailKey("invalid_request", "err.conv.wire.invalid_message_id")
 		}
 	case "submit", "enqueue":
 		if strings.TrimSpace(r.Text) == "" || len(r.Text) > MaxInputBytes || !utf8.ValidString(r.Text) || strings.ContainsRune(r.Text, '\r') {
-			return Fail("invalid_text", "请输入有效文本，最多 16,000 UTF-8 字节")
+			return FailKey("invalid_text", "err.conv.wire.invalid_text")
 		}
 		if strings.HasPrefix(strings.TrimSpace(r.Text), "/") {
-			return Fail("command_not_allowed", "聊天入口不执行斜杠命令，草稿已保留")
+			return FailKey("command_not_allowed", "err.conv.wire.slash_not_allowed")
 		}
 	default:
-		return Fail("unsupported", "不支持此会话操作")
+		return FailKey("unsupported", "err.conv.unsupported_action")
 	}
 	return nil
 }
@@ -222,7 +275,7 @@ type Client struct {
 
 func (c Client) Call(ctx context.Context, r Request) (Response, error) {
 	if r.Action != "hello" && r.Target != c.Target {
-		return Response{}, Fail("wrong_target", "请求不属于当前节点或角色")
+		return Response{}, FailKey("wrong_target", "err.conv.wire.wrong_target")
 	}
 	return c.Transport.Call(ctx, r)
 }

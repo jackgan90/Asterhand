@@ -2,7 +2,10 @@
 // It owns no task state and never uses a remote control endpoint to stop a node.
 package desktop
 
-import "github.com/jackgan90/Asterhand/internal/quickinput"
+import (
+	"github.com/jackgan90/Asterhand/internal/i18n"
+	"github.com/jackgan90/Asterhand/internal/quickinput"
+)
 
 type State struct {
 	Name     string
@@ -18,9 +21,22 @@ type Options struct {
 	Input        *quickinput.Controller
 }
 
-func (s State) text() string {
-	if s.Stopping {
-		return "正在退出"
+func (o Options) locale() string {
+	if o.Input != nil {
+		if loc := o.Input.Status().EffectiveLocale; i18n.ValidLocale(loc) {
+			return loc
+		}
 	}
-	return "节点运行中"
+	return i18n.Effective()
+}
+
+func (s State) textFor(locale string) string {
+	if s.Stopping {
+		return i18n.T(locale, "desktop.state.stopping")
+	}
+	return i18n.T(locale, "desktop.state.running")
+}
+
+func (s State) text() string {
+	return s.textFor(i18n.Effective())
 }

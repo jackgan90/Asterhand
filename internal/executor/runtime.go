@@ -2,12 +2,12 @@ package executor
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	"regexp"
 	"slices"
 
 	"github.com/jackgan90/Asterhand/internal/config"
+	"github.com/jackgan90/Asterhand/internal/i18n"
 )
 
 type Capabilities struct {
@@ -46,7 +46,7 @@ func RuntimeFor(id string, c *config.Manager) (Runtime, error) {
 	case "openclaw":
 		return &OpenClaw{Config: c}, nil
 	default:
-		return nil, fmt.Errorf("agent runtime 未安装: %s", id)
+		return nil, i18n.ErrArgs("err.executor.runtime_missing", map[string]string{"id": id})
 	}
 }
 func Available() []Descriptor { return []Descriptor{(&OpenClaw{}).Describe()} }
@@ -59,7 +59,7 @@ func ValidateSelection(c config.Config) error {
 		return err
 	}
 	if !slices.Contains(adapter.Describe().Providers, c.LLM.Provider) {
-		return fmt.Errorf("所选 runtime 不支持模型 provider: %s", c.LLM.Provider)
+		return i18n.ErrArgs("err.executor.runtime_provider_unsupported", map[string]string{"provider": c.LLM.Provider})
 	}
 	return adapter.Validate(c)
 }
@@ -85,14 +85,14 @@ var runID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 func validateRun(r Run) error {
 	if !runID.MatchString(r.ID) || r.Token == "" {
-		return fmt.Errorf("无效 attempt ID 或回调 token")
+		return i18n.Err("err.executor.invalid_attempt_token")
 	}
 	if r.Mode != "route" && r.Mode != "execute" && r.Mode != "probe" {
-		return fmt.Errorf("不支持的执行模式: %s", r.Mode)
+		return i18n.ErrArgs("err.executor.unsupported_exec_mode", map[string]string{"mode": r.Mode})
 	}
 	u, err := url.Parse(r.Callback)
 	if err != nil || u.Scheme != "http" || (u.Hostname() != "127.0.0.1" && u.Hostname() != "::1") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "/internal/tool" {
-		return fmt.Errorf("工具回调必须是本机受认证端点")
+		return i18n.Err("err.executor.callback_must_be_local")
 	}
 	return nil
 }

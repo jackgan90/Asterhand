@@ -1,9 +1,9 @@
 package quickinput
 
 import (
-	"fmt"
 	"sync"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/quickinput/hostipc"
 )
 
@@ -19,7 +19,7 @@ type Draft struct {
 func (d *Draft) Read() (string, uint64) { d.mu.Lock(); defer d.mu.Unlock(); return d.text, d.revision }
 func (d *Draft) Update(text string, revision uint64) error {
 	if !hostipc.ValidText(text) {
-		return fmt.Errorf("草稿需要有效 Unicode、LF 换行且不超过 16,000 UTF-8 字节")
+		return i18n.Err("err.quickinput.invalid_draft")
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -27,7 +27,7 @@ func (d *Draft) Update(text string, revision uint64) error {
 		if revision == d.revision && text == d.text {
 			return nil
 		}
-		return fmt.Errorf("忽略过期草稿版本")
+		return i18n.Err("err.quickinput.stale_draft")
 	}
 	d.text, d.revision = text, revision
 	return nil

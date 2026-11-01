@@ -100,3 +100,10 @@ Web 维护性回归分为可注入客户端与生命周期、模拟 DOM 操作�
 快捷输入覆盖本地配置事务故障、注册冲突、录制租约、草稿版本与字节边界、认证 API、静态模块入包、真实 WebView2 与隔离供应商安装边界。桌面测试须显式启用；普通回归不将桌面 skipped 计为通过。入口和成本预算见[快捷输入验证](../development/features/global-hotkey-quick-input/validation.md)。
 
 Go 用真实 HTTP/TLS 双实例验证改名不撤销模型就绪、单向地址通知恢复、身份/固定证书/撤销/不可达地址拒绝以及监听变更提示。MIME 测试强制 Windows 风格的 text/plain 文件关联，覆盖 GET/HEAD 和 nosniff；慢连接测试覆盖 2.2 秒信息响应与 6 秒元数据回查。JS 验证新远端任务在 18 条历史本机任务之前、路由转执行保持排序并去重，以及空输入/未就绪/实际提交中的按钮状态。真实双机升级后的双向任务和名字传播仍单独验收，单机 fixture 不替代该结果。
+
+## 国际化契约与守卫回归
+
+国际化回归分为静态守卫层、语言状态与故障隔离层、无损局部刷新层及升级兼容层：
+- **静态守卫层**：`scripts/sync-i18n.mjs --check`、`tests/i18n-guard.test.mjs` 与 `internal/i18n/guard_test.go` 基于 `internal/i18n/guard-rules.json` 校验注册表与词表对称性、`disallow_cjk` 语种脚本约束、全栈双向键引用、HTML 静态绑定及受检源码 UI 字面量，并模拟第三语言扩展（含汉字语种）免改代码通过验证。
+- **语言状态与故障隔离层**：覆盖系统优先/浏览器次选/`en-US` 回退、未登录 `sessionStorage` 隔离、`POST /api/desktop/locale` 在无交互桌面/宿主失败/热键冲突/录制租约下的独立提交、跨页面并发 `formBaseline` 保护、写盘后响应丢失对账，以及延迟旧请求在服务端被 `expected_revision` 以 `409` 拦截的确定性时序。
+- **无损局部刷新与升级兼容层**：验证任务问答输入、本地命令编辑、热键录制、IME 组合、多行草稿、历史分页、流式回复与默认设备名未编辑保存期间切换语言不丢失状态且不重跑数学公式排版；验证旧版 `desktop-settings.json`、`config.json`、SQLite `Job`/`Outbox`、旧节点 `/v1/*` 响应与 `TaskRejection` 摘要证明的双向兼容。

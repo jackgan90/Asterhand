@@ -29,5 +29,8 @@ const FragmentBytes = wire.FragmentBytes
 const TurnTimeout = wire.TurnTimeout
 
 func Fail(code, message string) error { return wire.Fail(code, message) }
-func PublicError(err error) *Error    { return wire.PublicError(err) }
-func ValidID(id string) bool          { return wire.ValidID(id) }
+func FailKey(code, key string, args ...map[string]string) error {
+	return wire.FailKey(code, key, args...)
+}
+func PublicError(err error) *Error { return wire.PublicError(err) }
+func ValidID(id string) bool       { return wire.ValidID(id) }

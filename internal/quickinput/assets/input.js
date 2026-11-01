@@ -4,6 +4,7 @@ import {chatPanel} from "./chat-ui.mjs";
 import {ComposerLayout} from "./composer-layout.mjs";
 import {commandPanel} from "./command-ui.mjs";
 import {quotedCommand} from "./command-model.mjs";
+import {applyI18n, localizeMessage, onLocaleChange, setLocale, t} from "./i18n.mjs";
 export function inputEditor(bridge) {
   const cleanup = [];
   const listen = (target, event, callback) => {
@@ -13,19 +14,37 @@ export function inputEditor(bridge) {
   const input = document.querySelector("#input"), status = document.querySelector("#status");
   input.disabled = true;
   let generation = "", revision = 0, composing = false, previous = "", pendingSnapshot = "";
-  let staged = null;
+  let staged = null, statusState = null;
   let submit = () => {};
   let compositionEndedAt = -Infinity;
   const send = (kind, extra = {}) => bridge.send({version:1,kind,generation,...extra});
   const layout = new ComposerLayout(input, (height, id) => { if (generation) send('resize', {height, id}); });
   let commands;
+  function setStatusKey(key) {
+    statusState = key ? {kind:"key", key} : null;
+    status.textContent = key ? t(key) : "";
+  }
+  function setStatusHostError(message) {
+    statusState = {
+      kind:"host",
+      key:message.message_key || "",
+      args:message.message_args,
+      raw:message.message || "",
+    };
+    status.textContent = localizeMessage(statusState.key, statusState.args, statusState.raw);
+  }
+  function relocalizeStatus() {
+    if (!statusState) return;
+    if (statusState.kind === "key") status.textContent = t(statusState.key);
+    else status.textContent = localizeMessage(statusState.key, statusState.args, statusState.raw);
+  }
   function commit(edited = false) {
     if (!generation) return;
     const text = normalizeNewlines(input.value);
     if (!validDraft(text)) {
       input.value = staged ? "" : previous;
       layout.schedule();
-      status.textContent = "本次编辑超出 16,000 UTF-8 字节，已保留原草稿";
+      setStatusKey("quickinput.input_over_limit_kept");
       if (pendingSnapshot) { send("snapshot",{id:pendingSnapshot,text:previous,revision}); pendingSnapshot = ""; }
       return;
     }
@@ -36,7 +55,7 @@ export function inputEditor(bridge) {
     if (!staged && (changedAfterSend || text !== previous)) {
       previous = text; revision++; send("draft_updated",{text,revision});
     }
-    status.textContent = "";
+    setStatusKey("");
     layout.schedule(edited);
     if (pendingSnapshot) { send("snapshot",{id:pendingSnapshot,text:previous,revision}); pendingSnapshot = ""; }
     commands?.changed();
@@ -47,13 +66,13 @@ export function inputEditor(bridge) {
   listen(input, "beforeinput", event => {
     if (composing || event.isComposing || !event.inputType.startsWith("insert") || event.data === null) return;
     if (!validDraft(insertedText(input.value,input.selectionStart,input.selectionEnd,event.data))) {
-      event.preventDefault(); status.textContent = "本次编辑超出 16,000 UTF-8 字节";
+      event.preventDefault(); setStatusKey("quickinput.input_over_limit");
     }
   });
   listen(input, "paste", event => {
     const text = event.clipboardData.getData("text/plain");
     if (!validDraft(insertedText(input.value,input.selectionStart,input.selectionEnd,text))) {
-      event.preventDefault(); status.textContent = "粘贴内容超出 16,000 UTF-8 字节，原草稿和剪贴板已保留";
+      event.preventDefault(); setStatusKey("quickinput.paste_over_limit");
     }
   });
   listen(input, "keydown", event => {
@@ -68,31 +87,40 @@ export function inputEditor(bridge) {
   });
   listen(document, "dragover", event => event.preventDefault());
   listen(document, "drop", event => event.preventDefault());
+  const unsubscribeLocale = onLocaleChange(() => {
+    applyI18n(document);
+    relocalizeStatus();
+    commands?.relocalize();
+    if (generation) layout.schedule();
+  });
   const unsubscribe = bridge.subscribe(message => {
     switch (message.kind) {
       case "init":
         generation = message.generation; revision = message.revision; staged = null;
         input.value = previous = message.text; document.documentElement.dataset.theme = message.theme;
+        if (message.locale) setLocale(message.locale);
+        applyI18n(document);
         input.disabled = false;
         layout.flush();
         send("initialized");
         break;
       case "theme": document.documentElement.dataset.theme = message.theme; layout.schedule(); break;
+      case "locale": if (message.locale) setLocale(message.locale); break;
       case "layout_applied":
         if (message.generation === generation) layout.applied(message.id, message.height);
         break;
       case "visibility": layout.setVisible(message.visible); break;
       case "focus": layout.setVisible(true); input.focus(); break;
       case "snapshot": pendingSnapshot = message.id; if (!composing) commit(); break;
-      case "error": status.textContent = message.message; break;
+      case "error": setStatusHostError(message); break;
     }
   });
   commands = commandPanel(bridge, {input, post:send, changed:() => layout.schedule(), sendText:() => {
     const text = quotedCommand(input.value);
-    if (composing || !validDraft(text)) { status.textContent = '请先完成输入法候选，或缩短待引用文本'; return; }
+    if (composing || !validDraft(text)) { setStatusKey("quickinput.ime_or_quote_limit"); return; }
     input.value = text; commit(true); commands.changed(); submit();
   }});
-  function dispose() { unsubscribe(); commands.dispose(); layout.dispose(); for (const remove of cleanup) remove(); }
+  function dispose() { unsubscribeLocale(); unsubscribe(); commands.dispose(); layout.dispose(); for (const remove of cleanup) remove(); }
   listen(window, "pagehide", dispose);
   send("ready");
   return {

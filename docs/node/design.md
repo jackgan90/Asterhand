@@ -65,6 +65,8 @@ peer 授权针对本机 workspace 项目；只有任务 origin 能读取或回�
 
 节点在线表示认证通信可达；`capabilities.chat` 和 `capabilities.model_tasks` 表示当前本地必要配置条件，字段为 available/code/detail，不承诺外部模型 API 在线。项目授权单独返回并在目标执行处校验。旧 ready 保持手动模型工具诊断通过的含义；新 UI 仅对没有 capabilities 的旧节点使用 ready 后备规则。离线缓存是最后确认条件，最终准入由目标节点决定。基础节点和配对不要求模型凭据，托盘显示节点运行状态。
 
+公开能力诊断（`Availability`）、网络提示（`network.Status`）与节点 HTTP 错误响应在保留原有 `code`/`detail`/`error` 兜底文本的同时，可选附带 `message_key` 与非敏感 `message_args`，新旧版本跨节点通信天然忽略未知扩展字段并安全回退原文。全新初始化节点在 `config.json` 中记录 `name_default: true` 并按系统语言写入初始名称，未编辑名称保存其他配置时不清除默认标记；升级前已有配置一律保留原持久名称。内置 `"workspace"` 项目通过 `name_custom` 区分默认展示译名与用户自定义名称，保存节点设置时按项目 `ID` 保留既有自定义名称。
+
 取舍见 [ADR-NODE-003](adr/003-verified-peer-metadata.md)。
 
 节点探测在 TLS 固定证书之外核对响应 node_id；有效信息更新显示名。已配对节点每 20 秒向原 peer 地址发送本机 ID 与 endpoint 通知，接收方先校验已有 peer 凭据及声明 ID，再用原固定证书和原出站凭据回查候选地址。确认响应身份及公布地址一致后，仅在原记录上原子修改 name/endpoint；项目范围、密封 token、证书、撤销位均保留。不可达、身份不符、已撤销或验证途中证书变化均拒绝更新；双方同时失去可达地址仍需要用户重新配置或配对，不做全网发现。

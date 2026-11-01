@@ -3,10 +3,10 @@
 package quickinput
 
 import (
-	"fmt"
 	"runtime"
 	"unsafe"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"golang.org/x/sys/windows"
 )
 
@@ -14,7 +14,7 @@ func tokenInfo(token windows.Token, class uint32) ([]byte, error) {
 	var size uint32
 	_ = windows.GetTokenInformation(token, class, nil, 0, &size)
 	if size == 0 || size > 1024*1024 {
-		return nil, fmt.Errorf("无法读取宿主令牌")
+		return nil, i18n.Err("err.quickinput.token_read_failed")
 	}
 	data := make([]byte, size)
 	err := windows.GetTokenInformation(token, class, &data[0], size, &size)
@@ -27,7 +27,7 @@ func verifyHostToken(token windows.Token) error {
 		return err
 	}
 	if *(*uint32)(unsafe.Pointer(&elevation[0])) != 0 {
-		return fmt.Errorf("输入宿主必须使用非提权令牌")
+		return i18n.Err("err.quickinput.token_unelevated_required")
 	}
 	label, err := tokenInfo(token, windows.TokenIntegrityLevel)
 	if err != nil {
@@ -36,14 +36,14 @@ func verifyHostToken(token windows.Token) error {
 	defer runtime.KeepAlive(label)
 	il := (*windows.Tokenmandatorylabel)(unsafe.Pointer(&label[0]))
 	if il.Label.Sid.String() != "S-1-16-8192" {
-		return fmt.Errorf("输入宿主必须使用 Medium 完整性级别")
+		return i18n.Err("err.quickinput.token_medium_il")
 	}
 	user, err := token.GetTokenUser()
 	if err != nil {
 		return err
 	}
 	if user.User.Sid.IsWellKnown(windows.WinLocalSystemSid) {
-		return fmt.Errorf("SYSTEM 不支持快捷输入")
+		return i18n.Err("err.quickinput.system_unsupported")
 	}
 	groups, err := token.GetTokenGroups()
 	if err != nil {
@@ -51,7 +51,7 @@ func verifyHostToken(token windows.Token) error {
 	}
 	for _, group := range groups.AllGroups() {
 		if group.Sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) && (group.Attributes&windows.SE_GROUP_ENABLED != 0 || group.Attributes&windows.SE_GROUP_USE_FOR_DENY_ONLY == 0) {
-			return fmt.Errorf("输入宿主的 Administrators 组仍可授予权限")
+			return i18n.Err("err.quickinput.token_admin_enabled")
 		}
 	}
 	return nil
@@ -70,7 +70,7 @@ func restrictedHostToken() (windows.Token, error) {
 		return 0, err
 	}
 	if user.User.Sid.IsWellKnown(windows.WinLocalSystemSid) {
-		return 0, fmt.Errorf("SYSTEM 不支持快捷输入")
+		return 0, i18n.Err("err.quickinput.system_unsupported")
 	}
 	if !original.IsElevated() {
 		return 0, verifyHostToken(original)
@@ -85,7 +85,7 @@ func restrictedHostToken() (windows.Token, error) {
 	ok, _, callErr := windows.NewLazySystemDLL("advapi32.dll").NewProc("CreateRestrictedToken").Call(uintptr(original), disableMaxPrivilegeAndLUA, 1, uintptr(unsafe.Pointer(&disable)), 0, 0, 0, 0, uintptr(unsafe.Pointer(&token)))
 	runtime.KeepAlive(admins)
 	if ok == 0 {
-		return 0, fmt.Errorf("创建受限输入令牌失败: %w", callErr)
+		return 0, i18n.Wrap("err.quickinput.restricted_token_failed", map[string]string{"err": callErr.Error()}, callErr)
 	}
 	if err = configureHostToken(token, user.User.Sid.String()); err != nil {
 		token.Close()
@@ -127,7 +127,7 @@ func configureHostToken(token windows.Token, userSID string) error {
 	// DISABLE_MAX_PRIVILEGE retains only SeChangeNotifyPrivilege (LUID 23).
 	for _, p := range (*windows.Tokenprivileges)(unsafe.Pointer(&privileges[0])).AllPrivileges() {
 		if p.Luid.HighPart != 0 || p.Luid.LowPart != 23 {
-			return fmt.Errorf("受限输入令牌保留了额外特权")
+			return i18n.Err("err.quickinput.token_extra_privs")
 		}
 	}
 	return nil

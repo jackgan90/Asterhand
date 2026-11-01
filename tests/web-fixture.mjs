@@ -19,8 +19,11 @@ export class Element extends EventTarget {
   }
   replaceChildren(...elements) { this.children = []; if (this.tagName === "SELECT") this.value = ""; this.append(...elements); }
   setAttribute(key, value) { this.attributes[key] = value; }
-  focus() { this.document.activeElement = this; this.dispatchEvent(new Event("focus")); }
-  blur() { this.document.activeElement = null; this.dispatchEvent(new Event("blur")); }
+  getAttribute(key) { return this.attributes[key] ?? null; }
+  hasAttribute(key) { return Object.hasOwn(this.attributes, key); }
+  setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; }
+  focus() { this.document.activeElement = this; this.dispatchEvent(new Event("focus")); this.onfocus?.(); }
+  blur() { this.document.activeElement = null; this.dispatchEvent(new Event("blur")); this.onblur?.(); }
   showModal() { this.open = true; }
   close() { this.open = false; this.dispatchEvent(new Event("close")); }
   reset() { for (const field of Object.values(this.elements)) field.value = ""; }
@@ -48,7 +51,7 @@ export function domFixture() {
   document.createTextNode = text => ({textContent:text});
   document.getElementById = id => document.querySelector("#"+id);
   document.documentElement = {dataset:{}};
-  for (const id of ["#target", "#project", "#desktop-key"]) select(id).tagName = "SELECT";
+  for (const id of ["#target", "#project", "#desktop-key", "#locale-select", "#settings-locale"]) select(id).tagName = "SELECT";
   for (const [id, names] of Object.entries({
     "#desktop-form":["ctrl","alt","shift","key","enabled","theme"],
     "#settings-form":["name","endpoint","peer_listen","agent_runtime","provider","model","credential_ref","root","key","delete_key"],

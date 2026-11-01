@@ -72,7 +72,7 @@ func (s *Service) readQueueItem(request Request, response Response) (Response, e
 			continue
 		}
 		if entry.item.Kind != "send" {
-			return response, Fail("invalid_request", "请选择待发消息")
+			return response, FailKey("invalid_request", "err.conv.select_queued")
 		}
 		item := s.queueItemLocked(entry)
 		item.Text = entry.request.Text
@@ -86,7 +86,7 @@ func (s *Service) prepareQueued(request Request) (Conversation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.stopping || s.configuring {
-		return Conversation{}, Fail("busy", "节点正在退出或修改配置")
+		return Conversation{}, FailKey("busy", "err.conv.busy_stopping_or_config")
 	}
 	descriptor, err := s.runtime.Describe()
 	if err != nil {
@@ -103,7 +103,7 @@ func (s *Service) prepareQueued(request Request) (Conversation, error) {
 		return item.Conversation, nil
 	}
 	if len(s.queue) >= queueOperationLimit {
-		return Conversation{}, Fail("queue_full", "操作队列已满，请先处理已有操作")
+		return Conversation{}, FailKey("queue_full", "err.conv.queue_full_handle_existing")
 	}
 	if err = s.catalog.saveConversation(item); err != nil {
 		return Conversation{}, err
@@ -118,7 +118,7 @@ func (s *Service) enqueue(request Request) (*Turn, error) {
 	defer s.mu.Unlock()
 	if record, err := s.catalog.turn(request.Operation); err == nil {
 		if record.Digest != requestDigest(request) {
-			return nil, Fail("conflict", "操作身份已绑定其他消息")
+			return nil, FailKey("conflict", "err.conv.op_bound_other")
 		}
 		return &record.Turn, nil
 	} else if !isMissing(err) {
@@ -127,28 +127,34 @@ func (s *Service) enqueue(request Request) (*Turn, error) {
 	var old queueIntent
 	if err := s.catalog.store.Get("chat-intent", request.Operation, &old); err == nil {
 		if old.Digest != requestDigest(request) {
-			return nil, Fail("conflict", "操作身份已绑定其他消息")
+			return nil, FailKey("conflict", "err.conv.op_bound_other")
 		}
 		return &old.Turn, nil
 	} else if !isMissing(err) {
 		return nil, err
 	}
 	if s.stopping || s.configuring {
-		return nil, Fail("busy", "节点正在退出或修改配置，草稿已保留")
+		return nil, FailKey("busy", "err.conv.busy_draft_kept")
 	}
 	descriptor, err := s.runtime.Describe()
 	if err != nil {
 		return nil, err
 	}
 	if !descriptor.CanSend {
-		return nil, Fail("not_configured", descriptor.SendError)
+		if descriptor.SendErrorKey != "" {
+			return nil, FailKey("not_configured", descriptor.SendErrorKey, descriptor.SendErrorArgs)
+		}
+		if descriptor.SendError != "" {
+			return nil, Fail("not_configured", descriptor.SendError)
+		}
+		return nil, FailKey("not_configured", "err.conv.configure_key_first")
 	}
 	item, err := s.catalog.conversation(request.Conversation)
 	if err != nil {
 		return nil, err
 	}
 	if item.Binding.Runtime != descriptor.ID || item.Binding.Generation != descriptor.Binding {
-		return nil, Fail("binding_changed", "会话绑定已变化，请恢复配置或新建会话")
+		return nil, FailKey("binding_changed", "err.conv.binding_changed_new")
 	}
 	count, bytes := 0, len(request.Text)
 	for _, entry := range s.queue {
@@ -163,7 +169,7 @@ func (s *Service) enqueue(request Request) (*Turn, error) {
 		operations++
 	}
 	if count >= QueueMessageLimit || bytes > QueueBodyLimit || operations > queueOperationLimit {
-		return nil, Fail("queue_full", "待发队列已满，当前草稿已保留")
+		return nil, FailKey("queue_full", "err.conv.send_queue_full")
 	}
 	now := time.Now().UTC()
 	turn := Turn{ID: model.ID(), Operation: request.Operation, Conversation: request.Conversation, Delivery: "queued", Run: "queued", Persistence: "pending", Provider: descriptor.Provider, Model: descriptor.Model, StartedAt: now, UpdatedAt: now}
@@ -221,7 +227,7 @@ func (s *Service) finishedQueueItemLocked(request Request, response Response) (R
 		turn = intent.Turn
 	}
 	if err != nil || turn.Conversation != request.Conversation {
-		return response, Fail("not_found", "操作不属于此会话")
+		return response, FailKey("not_found", "err.conv.op_wrong_conversation")
 	}
 	response.QueueItem = &QueueItem{Operation: request.Operation, Conversation: request.Conversation, Kind: "send", State: "settled", Turn: &turn}
 	return response, nil

@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {desktopSettings} from "../web/desktop-settings.mjs";
+import {setLocale} from "../web/i18n.mjs";
 import {domFixture, deferred} from "./web-fixture.mjs";
+
+setLocale("zh-CN");
 
 function fixture(post) {
   class Element {

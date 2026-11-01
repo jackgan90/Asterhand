@@ -1,4 +1,5 @@
 import {bodyBytes, newerTurn} from './chat-model.mjs';
+import {t} from './i18n.mjs';
 
 // Presentation snapshots only. Native history remains the durable authority.
 // Presentation keeps a bounded set of queued, in-flight and recent snapshots.
@@ -85,7 +86,15 @@ export class ChatOutbox {
   merge(messages, conversation) {
     const entries = [...this.entries.values()].filter(entry => entry.conversation === conversation)
       .sort((a,b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
-    const decorate = (message, entry) => ({...message, ui_id: 'pending-' + entry.operation, delivery_status: status(entry)});
+    const decorate = (message, entry) => {
+      const key = statusKey(entry);
+      return {
+        ...message,
+        ui_id: 'pending-' + entry.operation,
+        delivery_status_key: key,
+        delivery_status: key ? t(key) : '',
+      };
+    };
     const result = messages.map(message => {
       const entry = entries.find(item => this.matches(item, message));
       return entry ? decorate(message, entry) : message;
@@ -100,9 +109,17 @@ export class ChatOutbox {
   }
 }
 
-function status(entry) {
-  if (entry.delivery === 'unknown') return ['interrupted','cancelled','failed'].includes(entry.run) ? '消息送达仍未确认，运行已停止；请勿重复发送' : '送达待确认，正在核对';
-  if (entry.delivery === 'accepted' && ['failed', 'interrupted'].includes(entry.run)) return '消息已送达，回复失败';
-  if (entry.delivery === 'rejected' || entry.queueState === 'failed') return '消息未送达';
+function statusKey(entry) {
+  if (entry.delivery === 'unknown') {
+    return ['interrupted', 'cancelled', 'failed'].includes(entry.run)
+      ? 'quickinput.outbox.unknown_stopped'
+      : 'quickinput.turn.delivery_unknown';
+  }
+  if (entry.delivery === 'accepted' && ['failed', 'interrupted'].includes(entry.run)) {
+    return 'quickinput.outbox.accepted_failed';
+  }
+  if (entry.delivery === 'rejected' || entry.queueState === 'failed') {
+    return 'quickinput.turn.rejected';
+  }
   return '';
 }

@@ -6,21 +6,27 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/quickinput"
 )
+
+func desktopErr(status int, key string) *quickinput.Error {
+	return &quickinput.Error{Status: status, Message: i18n.T(i18n.Effective(), key), Key: key}
+}
 
 // This router inherits local Host, session, Origin and CSRF checks. It never
 // routes through general node settings or peer metadata.
 func (a *App) desktopAPI(w http.ResponseWriter, r *http.Request) {
+	reqLocale := a.requestLocale(r)
 	if r.URL.Path == "/api/desktop/settings" && r.Method == http.MethodGet {
-		send(w, 200, a.Input.Status())
+		send(w, 200, a.Input.Status().Localize(reqLocale))
 		return
 	}
 	select {
 	case a.desktopRequests <- struct{}{}:
 		defer func() { <-a.desktopRequests }()
 	default:
-		fail(w, 429, errors.New("桌面设置操作过多，请稍后重试"))
+		a.fail(w, r, 429, i18n.Err("err.app.desktop_rate_limited"))
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -33,7 +39,26 @@ func (a *App) desktopAPI(w http.ResponseWriter, r *http.Request) {
 	case "/api/desktop/settings":
 		var change quickinput.Change
 		if err = readDesktop(w, r, &change); err == nil {
-			result, err = a.Input.Apply(r.Context(), change)
+			var st quickinput.Status
+			st, err = a.Input.Apply(r.Context(), change)
+			if err == nil {
+				a.notifyRefresh()
+				outLocale := reqLocale
+				if change.Locale != nil {
+					outLocale = st.EffectiveLocale
+				}
+				result = st.Localize(outLocale)
+			}
+		}
+	case "/api/desktop/locale":
+		var change quickinput.LocaleChange
+		if err = readDesktop(w, r, &change); err == nil {
+			var st quickinput.Status
+			st, err = a.Input.SetLocale(r.Context(), change)
+			if err == nil {
+				a.notifyRefresh()
+				result = st.Localize(st.EffectiveLocale)
+			}
 		}
 	case "/api/desktop/check":
 		var input struct {
@@ -41,12 +66,16 @@ func (a *App) desktopAPI(w http.ResponseWriter, r *http.Request) {
 		}
 		if err = readDesktop(w, r, &input); err == nil {
 			err = a.Input.Check(input.Binding)
-			result = a.Input.Status()
+			result = a.Input.Status().Localize(reqLocale)
 		}
 	case "/api/desktop/retry":
 		var input struct{}
 		if err = readDesktop(w, r, &input); err == nil {
-			result, err = a.Input.Retry()
+			var st quickinput.Status
+			st, err = a.Input.Retry()
+			if err == nil {
+				result = st.Localize(reqLocale)
+			}
 		}
 	case "/api/desktop/recording/start":
 		var input struct {
@@ -55,7 +84,7 @@ func (a *App) desktopAPI(w http.ResponseWriter, r *http.Request) {
 		if err = readDesktop(w, r, &input); err == nil {
 			s, _ := a.authorize(r)
 			if len(input.Page) < 8 || len(input.Page) > 100 {
-				err = &quickinput.Error{Status: 400, Message: "页面 ID 无效"}
+				err = desktopErr(400, "err.app.invalid_page_id")
 			} else {
 				result, err = a.Input.StartRecording(s.csrf+":"+input.Page, s.expires)
 			}
@@ -74,19 +103,25 @@ func (a *App) desktopAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		status := 503
-		var inputError *quickinput.Error
-		var registrationError *quickinput.RegistrationError
-		if errors.As(err, &inputError) {
-			status = inputError.Status
-		}
-		if errors.As(err, &registrationError) && registrationError.Code == "conflict" {
-			status = 409
-		}
-		send(w, status, map[string]any{"error": err.Error(), "desktop": a.Input.Status()})
+		a.sendDesktopError(w, reqLocale, err)
 		return
 	}
 	send(w, 200, result)
+}
+
+func (a *App) sendDesktopError(w http.ResponseWriter, reqLocale string, err error) {
+	status := 503
+	var inputError *quickinput.Error
+	var registrationError *quickinput.RegistrationError
+	if errors.As(err, &inputError) {
+		status = inputError.Status
+	}
+	if errors.As(err, &registrationError) && registrationError.Code == "conflict" {
+		status = 409
+	}
+	payload := errorPayload(reqLocale, err)
+	payload["desktop"] = a.Input.Status().Localize(reqLocale)
+	send(w, status, payload)
 }
 
 func readDesktop(w http.ResponseWriter, r *http.Request, value any) error {
@@ -97,7 +132,7 @@ func readDesktop(w http.ResponseWriter, r *http.Request, value any) error {
 		return &quickinput.Error{Status: 400, Message: err.Error()}
 	}
 	if err := d.Decode(new(any)); err != io.EOF {
-		return &quickinput.Error{Status: 400, Message: "请求包含多余内容"}
+		return desktopErr(400, "err.http.extra_body")
 	}
 	return nil
 }

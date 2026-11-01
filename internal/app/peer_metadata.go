@@ -2,11 +2,11 @@ package app
 
 import (
 	"context"
-	"errors"
 	"net"
 	"net/http"
 	"time"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/model"
 	"github.com/jackgan90/Asterhand/internal/network"
 	"github.com/jackgan90/Asterhand/internal/peer"
@@ -73,22 +73,22 @@ func (a *App) receiveMetadata(w http.ResponseWriter, r *http.Request, p model.Pe
 	}
 	var input peerMetadata
 	if err := read(w, r, &input); err != nil {
-		fail(w, 400, err)
+		a.fail(w, r, 400, err)
 		return
 	}
 	if input.NodeID != p.ID || input.Endpoint == "" || len(input.Endpoint) > 2048 {
-		fail(w, 403, errors.New("元数据只能更新已认证的原节点"))
+		a.fail(w, r, 403, i18n.Err("err.app.metadata_origin_mismatch"))
 		return
 	}
 	host, _, _ := net.SplitHostPort(r.RemoteAddr)
 	if ip := net.ParseIP(host); ip != nil && !ip.IsLoopback() && network.LoopbackEndpoint(input.Endpoint) {
-		fail(w, 400, errors.New("远端节点不能公布本机回环地址"))
+		a.fail(w, r, 400, i18n.Err("err.app.metadata_loopback_forbidden"))
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), peerProbeTimeout)
 	defer cancel()
 	if _, err := a.Peers.Refresh(ctx, p.ID, input.Endpoint); err != nil {
-		fail(w, 409, err)
+		a.fail(w, r, 409, err)
 		return
 	}
 	send(w, 200, map[string]bool{"updated": true})

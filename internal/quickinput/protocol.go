@@ -2,12 +2,12 @@ package quickinput
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/jackgan90/Asterhand/internal/conversation/wire"
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	commandswire "github.com/jackgan90/Asterhand/internal/localcommands/wire"
 	"github.com/jackgan90/Asterhand/internal/quickinput/hostipc"
 )
@@ -27,7 +27,7 @@ type bridgeMessage struct {
 func decodeBridgeMessage(raw string) (bridgeMessage, error) {
 	var message bridgeMessage
 	if len(raw) > 128*1024 || !utf8.ValidString(raw) || !pairedSurrogates(raw) {
-		return message, fmt.Errorf("桥消息大小或 Unicode 无效")
+		return message, i18n.Err("err.quickinput.bridge_size_unicode")
 	}
 	d := json.NewDecoder(strings.NewReader(raw))
 	d.DisallowUnknownFields()
@@ -35,10 +35,10 @@ func decodeBridgeMessage(raw string) (bridgeMessage, error) {
 		return message, err
 	}
 	if d.Decode(new(any)) != io.EOF || message.Version != 1 {
-		return message, fmt.Errorf("桥消息格式或版本无效")
+		return message, i18n.Err("err.quickinput.bridge_schema")
 	}
 	if message.Command != nil && message.Kind != "command" || message.Kind == "command" && message.Chat != nil {
-		return message, fmt.Errorf("命令桥字段无效")
+		return message, i18n.Err("err.quickinput.bridge_cmd_fields")
 	}
 	return message, nil
 }

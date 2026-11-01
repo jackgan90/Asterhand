@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {setLocale} from "../web/i18n.mjs";
 import { taskViews, submissionState, modelTaskStatus } from "../web/view-model.mjs";
+
+setLocale("zh-CN");
 
 const job = (id, created, owner = "A") => ({id, created, owner, state:"succeeded", request:{goal:id}});
 test("new remote task stays first across routing, delivery, completion and refresh", () => {

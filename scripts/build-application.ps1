@@ -47,9 +47,16 @@ function Copy-ApplicationLicenses {
 try {
     foreach ($entry in $buildEnvironment.GetEnumerator()) {
         $savedEnvironment[$entry.Key] = [Environment]::GetEnvironmentVariable($entry.Key)
+    }
+    foreach ($key in @('GOFLAGS','GOWORK','GOEXPERIMENT','GOTOOLCHAIN')) {
+        [Environment]::SetEnvironmentVariable($key, $buildEnvironment[$key])
+    }
+    Invoke-BuildProcess 'Verify Go i18n guardrails' $Go @('-C',$repo,'test','-count=1','./internal/i18n')
+    foreach ($entry in $buildEnvironment.GetEnumerator()) {
         [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value)
     }
     Invoke-BuildProcess 'Verify frontend assets' $Node @((Join-Path $PSScriptRoot 'verify-frontend-assets.mjs'))
+    Invoke-BuildProcess 'Verify frontend i18n guardrails' $Node @((Join-Path $PSScriptRoot 'sync-i18n.mjs'),'--check')
     foreach ($target in @(
         @{name='asterhand';file='asterhand.exe';gui=$false},
         @{name='asterhand-launcher';file='AsterhandLauncher.exe';gui=$true},

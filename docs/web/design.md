@@ -24,6 +24,20 @@ Web 的本地命令管理使用独立模块和同源认证 API，快捷输入命
 
 设置弹窗分为常规、模型、快捷输入、网络与高级四页，仅通过 CSS 切换显示，节点设置与桌面设置仍是两个独立表单，保存语义不变。节点表单跨三页，提交时若必填项位于隐藏页，先切换到该页再由浏览器提示。
 
+## 运行期国际化与无损语言切换
+
+运行期多语言由 `internal/i18n/locales/manifest.json` 语言注册表与 `<id>.json` 词表统一驱动，架构决策见 [ADR-002](adr/002-runtime-internationalization-framework.md)，实施与回归范围见[国际化计划](../development/features/internationalization-framework/plan.md)。Go 端通过 `//go:embed` 内嵌词表；`scripts/sync-i18n.mjs` 从同一词表确定性生成只读 ES module `web/i18n-catalog.mjs` 与 `internal/quickinput/assets/i18n-catalog.mjs`，不发起运行时词表网络请求，保持 `connect-src 'none'` 与静态模块闭包契约。
+
+语言状态分为四层：
+1. **持久偏好（`desired.locale`）**：存于 `desktop-settings.json`（`"auto"` 或注册表语言 `id`，旧文件缺省归一化为 `"auto"`）。
+2. **节点有效语言（`effective_locale`）**：具体语言直接生效；`"auto"` 按节点操作系统用户 UI 语言执行三级匹配（精确标签 → 语言族前缀 → `default_fallback` 即 `en-US`）。托盘、快捷输入宿主与启动器统一采用节点有效语言。
+3. **Web 生效语言**：已获取节点状态时，`desired.locale != "auto"` 采用配置值；`"auto"` 且节点 `system_locale_detected == true` 采用节点有效语言（系统优先）；仅当 `"auto"` 且 `system_locale_detected == false` 时次选浏览器 `navigator.languages`，并通过 `X-Asterhand-Locale` 请求头同步当次 API 错误响应语言。
+4. **首帧提示与未登录覆盖**：`localStorage`（`asterhand-locale`）仅作首帧防闪提示，`/health` 与 `/api/desktop/settings` 返回后立即校准；未登录页手动切换写入当前标签页 `sessionStorage`，仅作用于登录前视图与 `/api/login`，登录成功后以服务端持久偏好为准。
+
+语言更新走专用接口 `POST /api/desktop/locale`（请求体 `{operation_id, expected_revision, locale}`），与 `Apply` 共用互斥锁、操作幂等表与原子写盘，独立维护 `last_locale_operation`，在写盘前核对 `expected_revision`（不符返回 `409` 并附最新状态），不检查交互桌面或热键注册器、不初始化 WebView2、不取消录制租约。原 `POST /api/desktop/settings` 的 `locale` 为可选字段，缺省保留原语言。桌面设置维护非语言基线 `formBaseline`：语言切换不重置未提交开关/按键/主题草稿，仅当无挂起 `pending` 且服务端非语言字段与 `formBaseline` 一致时推进 `formBaseline.revision`，确保跨页面并发修改仍触发 `409` 保护；响应丢失时保留 `{operation_id, expected_revision, locale}` 与 `GET /api/desktop/settings` 对账，迟到旧请求由服务端 `expected_revision` 拦截。
+
+静态文案使用 `data-i18n`、`data-i18n-placeholder`、`data-i18n-aria-label`、`data-i18n-title` 与 `textContent` 绑定，禁止 `innerHTML`。切换语言时各视图执行局部 `relocalize()`：任务视图保留未提交回答草稿与输入焦点/选区并原位刷新已打开的详情摘要；节点设置、桌面设置与本地命令保留未保存编辑与 `dirty` 状态（全新节点的默认设备名在未手动修改前随语言展示译文，整表单保存回传 `name_edited: false` 不误清 `name_default`）；聊天渲染器保留语言无关的 Markdown/KaTeX 正文 `body` 与消息签名缓存，仅原位更新角色标签、时间、送达提示、分片按钮与代码块复制标签，并通知 `composer-layout` 重算收起态高度。公开错误与状态优先按 `message_key`/`error_key` 本地化，缺失或未知键回退服务端兜底文本。
+
 ## 页面结构
 
 ```text

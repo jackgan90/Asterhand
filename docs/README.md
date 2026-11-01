@@ -22,6 +22,8 @@
 
 ## 其他入口
 
+- [运行期界面与提示国际化框架](development/features/internationalization-framework/plan.md)、[验证说明](development/features/internationalization-framework/validation.md)、[国际化开发指南](development/i18n-guide.md)、[国际化架构 ADR](web/adr/002-runtime-internationalization-framework.md)：单一权威翻译表、中英双语无损实时切换、系统优先/浏览器次选自动匹配及四层静态硬编码守卫（工程验证、独立复审及本机双语切换用户验收通过，其余专项边界见验证说明）。
+
 - [聊天发送与停止回复](development/features/chat-send-intent/plan.md)：用户消息统一展示，异常按消息提示，停止当前回复后后续消息继续发送。
 
 - [本地快捷命令](development/features/local-quick-commands/plan.md)、[命令设计](executors/local-commands.md)、[验证说明](development/features/local-quick-commands/validation.md)：Web 注册 bat/cmd/ps1，快捷输入 `/` 搜索并独立启动，无需模型配置。
@@ -41,7 +43,7 @@
 - [原始需求来源](overview/origin.md)、[原始场景](overview/scenarios.md)、[迁移对照](overview/migration.md)。
 - [研究来源](overview/research.md)、[后续方向](overview/future.md)。
 - [手工验收](testing/acceptance.md)、[自动化验收矩阵](testing/matrix.md)、[平台矩阵](testing/platforms.md)。
-- [开发流程](development/workflow.md)、[代码风格](development/code-style.md)、[待验证事项](development/open-questions.md)。
+- [开发流程](development/workflow.md)、[代码风格](development/code-style.md)、[国际化开发指南](development/i18n-guide.md)、[待验证事项](development/open-questions.md)。
 - [按需模型配置与可选诊断](development/features/on-demand-model-readiness/plan.md)、[验证方法](development/features/on-demand-model-readiness/validation.md)：基础启动、功能配置和手动诊断分离，保留任务去重与取消恢复。
 - [Feature 模板](development/templates/feature-plan.md)、[ADR 模板](development/templates/adr.md)、[验证说明模板](development/templates/validation.md)。
 - [项目结构与文档治理](development/features/project-structure/plan.md)、[接口契约](../contracts/README.md)。

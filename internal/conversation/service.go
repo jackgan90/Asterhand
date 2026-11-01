@@ -68,7 +68,7 @@ func (s *Service) recoverCatalog() {
 			continue
 		}
 		if s.active != nil {
-			s.fault = Fail("recovery_required", "存在多个未核对轮次，请保留会话目录并检查运行时")
+			s.fault = FailKey("recovery_required", "err.conv.multiple_unreconciled")
 			return
 		}
 		copy := record
@@ -116,7 +116,7 @@ func (s *Service) Call(ctx context.Context, request Request) (response Response,
 		return response, err
 	}
 	if request.Action != "hello" && request.Target != s.Target() {
-		return response, Fail("wrong_target", "会话目标不属于当前节点")
+		return response, FailKey("wrong_target", "err.conv.wrong_node_target")
 	}
 	s.mu.Lock()
 	fault, stopping := s.fault, s.stopping
@@ -129,7 +129,7 @@ func (s *Service) Call(ctx context.Context, request Request) (response Response,
 		return response, fault
 	}
 	if stopping {
-		return response, Fail("stopping", "节点正在退出，草稿已保留")
+		return response, FailKey("stopping", "err.conv.stopping_draft_kept")
 	}
 	descriptor, describeErr := s.runtime.Describe()
 	response.Capabilities, response.CanSend = descriptor.Capabilities, descriptor.CanSend
@@ -138,7 +138,7 @@ func (s *Service) Call(ctx context.Context, request Request) (response Response,
 		caps := descriptor.Capabilities
 		if (request.Action == "create" || request.Action == "submit" || request.Action == "prepare" || request.Action == "enqueue") && (!caps.History || !caps.DurableReceipts) ||
 			(request.Action == "history" || request.Action == "message") && !caps.History || request.Action == "cancel" && !caps.Cancellation {
-			return response, Fail("unsupported", "当前运行时未提供此会话能力")
+			return response, FailKey("unsupported", "err.conv.capability_unsupported")
 		}
 	}
 	switch request.Action {
@@ -194,7 +194,7 @@ func (s *Service) readOrCancel(ctx context.Context, request Request, response Re
 	if request.Operation != "" {
 		record, err := s.catalog.turn(request.Operation)
 		if err != nil || record.Turn.Conversation != request.Conversation {
-			return response, Fail("not_found", "操作不属于此会话")
+			return response, FailKey("not_found", "err.conv.op_wrong_conversation")
 		}
 		response.Turn = &record.Turn
 	} else {
@@ -225,7 +225,7 @@ func (s *Service) readOrCancel(ctx context.Context, request Request, response Re
 			return response, nil
 		}
 		if response.Turn.Delivery != "accepted" {
-			return response, Fail("not_ready", "当前没有可停止的回复")
+			return response, FailKey("not_ready", "err.conv.nothing_to_stop")
 		}
 		if err = s.cancelTurn(ctx, response.Turn.Operation); err != nil {
 			return response, err
@@ -237,14 +237,14 @@ func (s *Service) readOrCancel(ctx context.Context, request Request, response Re
 		}
 		return response, err
 	}
-	return response, Fail("unsupported", "不支持此会话操作")
+	return response, FailKey("unsupported", "err.conv.unsupported_action")
 }
 
 func (s *Service) create(ctx context.Context, operation string) (Conversation, error) {
 	s.mu.Lock()
 	if s.stopping || s.configuring {
 		s.mu.Unlock()
-		return Conversation{}, Fail("busy", "节点正在切换配置或退出")
+		return Conversation{}, FailKey("busy", "err.conv.busy_switching")
 	}
 	descriptor, err := s.runtime.Describe()
 	if err != nil {
@@ -287,7 +287,7 @@ func (s *Service) finishCreation(ctx context.Context, item conversationRecord) (
 	}
 	if s.stopping || s.configuring || s.creating[item.Conversation.ID] {
 		s.mu.Unlock()
-		return item, Fail("busy", "会话正在创建或节点正在切换状态，请刷新核对")
+		return item, FailKey("busy", "err.conv.busy_creating_refresh")
 	}
 	s.creating[item.Conversation.ID] = true
 	s.wg.Add(1)
@@ -316,7 +316,7 @@ func (s *Service) BeginConfiguration() (func(), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.stopping || s.configuring || s.active != nil || len(s.creating) != 0 || len(s.queue) != 0 {
-		return nil, Fail("busy", "请先处理待发消息，并停止和核对当前聊天，再修改模型设置")
+		return nil, FailKey("busy", "err.conv.busy_before_model_settings")
 	}
 	s.configuring = true
 	var once sync.Once

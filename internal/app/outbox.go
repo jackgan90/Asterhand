@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/model"
 	"github.com/jackgan90/Asterhand/internal/peer"
 	"github.com/jackgan90/Asterhand/internal/store"
@@ -20,12 +21,12 @@ func (a *App) submit(j model.Job, input tasks.Submission) (model.Outbox, error) 
 		input.Project = j.Request.ProjectID
 	}
 	if j.Request.TargetExplicit && input.Target != j.Request.Target {
-		return model.Outbox{}, errors.New("目标与显式选择器冲突，请用户重新选择后提交")
+		return model.Outbox{}, i18n.Err("err.app.target_selector_conflict")
 	}
 	if input.Target != a.Config.Get().NodeID {
 		p, err := a.Peers.Get(input.Target)
 		if err != nil || p.Revoked {
-			return model.Outbox{}, errors.New("目标节点尚未配对或已撤销")
+			return model.Outbox{}, i18n.Err("err.app.target_unpaired_or_revoked")
 		}
 	}
 	id := j.ID
@@ -124,7 +125,7 @@ func (a *App) refreshOutbox(ctx context.Context, o model.Outbox) {
 		var p model.Peer
 		p, err = a.Peers.Get(o.PeerID)
 		if err == nil && p.Revoked {
-			err = errors.New("此 peer 已撤销")
+			err = i18n.Err("err.app.peer_revoked")
 		}
 		if err == nil && o.Cancel {
 			err = peer.Call(ctx, p, "POST", "/v1/cancel-request", map[string]string{"request_id": o.Request.RequestID}, nil)
@@ -138,7 +139,10 @@ func (a *App) refreshOutbox(ctx context.Context, o model.Outbox) {
 		}
 	}
 	if err != nil {
-		o.Error = err.Error()
+		msg, key, args := i18n.LocalizeError(i18n.Effective(), err)
+		o.Error = msg
+		o.ErrorKey = key
+		o.ErrorArgs = args
 		o.State = "delivery_unknown"
 		if rejected {
 			o.State = "rejected"
@@ -146,6 +150,8 @@ func (a *App) refreshOutbox(ctx context.Context, o model.Outbox) {
 	} else {
 		o.Job = &j
 		o.Error = ""
+		o.ErrorKey = ""
+		o.ErrorArgs = nil
 		o.State = "delivered"
 		o.Updated = model.Now()
 	}

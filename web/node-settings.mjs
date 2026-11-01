@@ -1,19 +1,98 @@
+import {localizeMessage, t} from "./i18n.mjs";
 import {$, node, dialog} from "./ui.mjs";
+
+const probeKeys = {
+  not_run: "web.settings.probe.not_run",
+  running: "web.settings.probe.running",
+  passed: "web.settings.probe.passed",
+  failed: "web.settings.probe.failed",
+  stale: "web.settings.probe.stale",
+};
+
 export function nodeSettings({api, post, session, desktop, guarded, notice, refreshPeers, listen}) {
   let probeTimer, probeGeneration = 0, openGeneration = 0;
+  let loadedData = null, lastProbe = null, lastNetwork = null, statusState = null;
+  let nameDirty = false, renderedDefaultName = "";
+  const form = $("#settings-form");
+
+  if (form?.elements?.name?.addEventListener) {
+    listen(form.elements.name, "input", () => { nameDirty = true; });
+  }
+
+  function paintKeyAndRuntime() {
+    if (!loadedData) return;
+    $("#key-status").textContent = loadedData.has_key
+      ? t("web.settings.model.key_saved")
+      : t("web.settings.model.key_empty");
+    $("#runtime-status").textContent = t("web.settings.network.runtime_info", {
+      node_id: loadedData.config.node_id,
+      home: loadedData.home,
+    });
+  }
+
+  function formatSavedMessage(state) {
+    const configuration = state.chatAvailable
+      ? t("web.settings.saved_chat_ready")
+      : t("web.settings.saved_chat_optional");
+    return [
+      t("web.settings.saved_prefix"),
+      configuration,
+      state.restartRequired ? t("web.settings.saved_restart_required") : "",
+    ].filter(Boolean).join(" ");
+  }
+
+  function paintStatusLine() {
+    if (!statusState) {
+      $("#settings-status").textContent = "";
+      return;
+    }
+    if (statusState.kind === "tailnet_filled") {
+      $("#settings-status").textContent = t("web.settings.network.tailnet_filled");
+      return;
+    }
+    if (statusState.kind === "saved") {
+      $("#settings-status").textContent = formatSavedMessage(statusState);
+    }
+  }
+
+  function paintProbe() {
+    if (!lastProbe) return;
+    const base = t(probeKeys[lastProbe.state] || probeKeys.not_run);
+    const errText = localizeMessage(lastProbe.message_key, lastProbe.message_args, lastProbe.error || "");
+    $("#probe-status").textContent = base + (errText ? ` ${errText}` : "");
+    $("#probe-status").dataset.tone = {passed:"ok", failed:"error", running:"warn"}[lastProbe.state] || "muted";
+    $("#probe").disabled = lastProbe.state === "running";
+  }
+
+  function paintNetwork() {
+    if (!lastNetwork) return;
+    const detail = localizeMessage(lastNetwork.message_key, lastNetwork.message_args, lastNetwork.detail || "");
+    $("#network-status").textContent = `${detail}${lastNetwork.ipv4 ? " · " + lastNetwork.ipv4 : ""}`;
+    $("#use-tailnet").hidden = !lastNetwork.endpoint;
+  }
+
   async function openSettings() {
     clearTimeout(probeTimer);
     probeGeneration++;
     const scope = session(), generation = ++openGeneration;
     void desktop.open();
     const data = await api("/api/settings"),
-      c = data.config,
-      form = $("#settings-form");
+      c = data.config;
     if (!scope?.active || generation !== openGeneration) return;
-    form.elements.name.value = c.name;
+    loadedData = data;
+    lastNetwork = null;
+    statusState = null;
+    nameDirty = false;
+    if (c.name_default) {
+      renderedDefaultName = t("common.default_node_name");
+      form.elements.name.value = renderedDefaultName;
+    } else {
+      renderedDefaultName = "";
+      form.elements.name.value = c.name;
+    }
     form.elements.endpoint.value = c.endpoint || "";
     form.elements.peer_listen.value = c.peer_listen;
-    $("#settings-status").textContent = "";
+    paintStatusLine();
     const populate = (select, items, selected) => {
       select.replaceChildren();
       for (const item of items) {
@@ -60,34 +139,34 @@ export function nodeSettings({api, post, session, desktop, guarded, notice, refr
     form.elements.root.value = c.projects?.[0]?.root || "";
     form.elements.key.value = "";
     form.elements.delete_key.checked = false;
-    $("#key-status").textContent = data.has_key
-      ? "已保存密钥，出于安全不会显示原文。"
-      : "尚未设置密钥。";
-    $("#runtime-status").textContent =
-      `设备 ID：${c.node_id}\n数据目录：${data.home}`;
+    paintKeyAndRuntime();
     dialog("#settings");
     $("#settings").scrollTop = 0;
     await updateProbe();
     if (!scope.active || generation !== openGeneration) return;
     const network = await api("/api/network");
     if (!scope.active || generation !== openGeneration) return;
-    $("#network-status").textContent =
-      `${network.detail}${network.ipv4 ? " · " + network.ipv4 : ""}`;
-    $("#use-tailnet").hidden = !network.endpoint;
+    lastNetwork = network;
+    paintNetwork();
     $("#use-tailnet").onclick = () => {
       form.elements.endpoint.value = network.endpoint;
       form.elements.peer_listen.value = network.listen;
-      $("#settings-status").textContent = "已填入 Tailscale 地址，保存后重启服务即可生效。";
+      statusState = {kind: "tailnet_filled"};
+      paintStatusLine();
     };
   }
   listen($("#settings-open"), "click", () => guarded(openSettings));
-  listen($("#settings-form"), "submit", (event) => {
+  listen(form, "submit", (event) => {
     event.preventDefault();
     guarded(async () => {
       const scope = session(), generation = openGeneration;
       const f = new FormData(event.target);
+      const rawInputName = f.get("name");
+      const keepDefaultName = Boolean(loadedData?.config?.name_default) && !nameDirty && rawInputName === renderedDefaultName;
+      const submittedName = keepDefaultName ? loadedData.config.name : rawInputName;
       const result = await post("/api/settings", {
-        name: f.get("name"),
+        name: submittedName,
+        name_edited: !keepDefaultName,
         endpoint: f.get("endpoint").trim(),
         peer_listen: f.get("peer_listen").trim(),
         agent_runtime: f.get("agent_runtime"),
@@ -101,11 +180,23 @@ export function nodeSettings({api, post, session, desktop, guarded, notice, refr
         delete_key: f.get("delete_key") === "on",
       });
       if (!scope?.active || generation !== openGeneration) return;
+      if (loadedData && !keepDefaultName) {
+        loadedData.config.name = submittedName;
+        loadedData.config.name_default = false;
+      }
+      if (loadedData) {
+        if (f.get("delete_key") === "on") loadedData.has_key = false;
+        else if (f.get("key")) loadedData.has_key = true;
+        paintKeyAndRuntime();
+      }
       event.target.elements.key.value = "";
-      const chat = result.capabilities?.chat;
-      const configuration = chat?.available ? "模型已就绪，可以直接聊天。" : "需要模型功能时再填写 API Key 即可，无需提前测试。";
-      const message = ["设置已保存。", configuration, result.restart_required ? "监听地址已修改，请停止本机服务后重新启动。" : ""].join(" ").trim();
-      $("#settings-status").textContent = message;
+      statusState = {
+        kind: "saved",
+        chatAvailable: Boolean(result.capabilities?.chat?.available),
+        restartRequired: Boolean(result.restart_required),
+      };
+      const message = formatSavedMessage(statusState);
+      paintStatusLine();
       notice(message);
       await updateProbe();
       if (scope.active) await refreshPeers();
@@ -116,16 +207,8 @@ export function nodeSettings({api, post, session, desktop, guarded, notice, refr
     clearTimeout(probeTimer);
     const result = await api("/api/probe");
     if (!scope?.active || generation !== probeGeneration) return;
-    $("#probe-status").textContent =
-      {
-        not_run: "尚未测试",
-        running: "正在测试…",
-        passed: "连接正常",
-        failed: "测试未通过",
-        stale: "配置已变化，可重新测试",
-      }[result.state] + (result.error ? ` ${result.error}` : "");
-    $("#probe-status").dataset.tone = {passed:"ok", failed:"error", running:"warn"}[result.state] || "muted";
-    $("#probe").disabled = result.state === "running";
+    lastProbe = result;
+    paintProbe();
     if (result.state === "running") probeTimer = setTimeout(() => guarded(updateProbe), 1500);
   }
   listen($("#probe"), "click", () =>
@@ -136,14 +219,25 @@ export function nodeSettings({api, post, session, desktop, guarded, notice, refr
     }),
   );
 
+  function relocalize() {
+    if (loadedData?.config?.name_default && !nameDirty && form.elements.name.value === renderedDefaultName) {
+      renderedDefaultName = t("common.default_node_name");
+      form.elements.name.value = renderedDefaultName;
+    }
+    paintKeyAndRuntime();
+    paintStatusLine();
+    paintProbe();
+    paintNetwork();
+  }
+
   function stop() {
     openGeneration++;
     probeGeneration++;
     clearTimeout(probeTimer);
-    const fields = $("#settings-form").elements;
+    const fields = form.elements;
     fields.agent_runtime.onchange = fields.provider.onchange = null;
     $("#use-tailnet").onclick = null;
   }
   listen($("#settings"), "close", stop);
-  return {open:openSettings, stop, resume:() => $("#settings").open ? openSettings() : undefined};
+  return {open:openSettings, relocalize, stop, resume:() => $("#settings").open ? openSettings() : undefined};
 }

@@ -3,13 +3,13 @@ package environment
 import (
 	"context"
 	"crypto/sha256"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 
 	"github.com/jackgan90/Asterhand/internal/config"
 	"github.com/jackgan90/Asterhand/internal/executor"
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/llm"
 	"github.com/jackgan90/Asterhand/internal/quickinput/hostbundle"
 	"github.com/jackgan90/Asterhand/packaging"
@@ -22,7 +22,7 @@ func CheckBundle(ctx context.Context, base string) error {
 		return err
 	}
 	if sha256.Sum256(b) != packaging.Digest() {
-		return fmt.Errorf("安装包依赖清单与程序内嵌清单不符")
+		return i18n.Err("err.env.manifest_mismatch")
 	}
 	if runtime.GOOS == "windows" {
 		host, err := hostbundle.Verify(base, config.Version, config.SourceDigest)
@@ -44,14 +44,14 @@ func checkBundleTargets(ctx context.Context, base string, catalog packaging.Cata
 		c := config.Config{AgentRuntime: target.Runtime, LLM: llm.Selection{Provider: target.Provider, Model: target.Model, CredentialRef: target.CredentialRef, Endpoint: target.Endpoint}}
 		adapter, err := resolve(target.Runtime)
 		if err != nil {
-			return fmt.Errorf("安装包目标 %s: %w", target.ID, err)
+			return i18n.Wrap("err.env.bundle_target", map[string]string{"id": target.ID}, err)
 		}
 		c = adapter.Discover(c, base)
 		if err = adapter.Validate(c); err == nil {
 			_, err = adapter.Check(ctx, c)
 		}
 		if err != nil {
-			return fmt.Errorf("安装包目标 %s: %w", target.ID, err)
+			return i18n.Wrap("err.env.bundle_target", map[string]string{"id": target.ID}, err)
 		}
 	}
 	return nil

@@ -2,5 +2,5 @@ package web
 
 import "embed"
 
-//go:embed index.html app.js style.css view-model.mjs desktop-settings.mjs api-client.mjs app-lifecycle.mjs browser-actions.mjs ui.mjs task-controller.mjs task-admission.mjs task-view.mjs node-controller.mjs node-settings.mjs local-commands.mjs
+//go:embed index.html app.js style.css i18n.mjs i18n-catalog.mjs locale-controller.mjs view-model.mjs desktop-settings.mjs api-client.mjs app-lifecycle.mjs browser-actions.mjs ui.mjs task-controller.mjs task-admission.mjs task-view.mjs node-controller.mjs node-settings.mjs local-commands.mjs
 var Files embed.FS

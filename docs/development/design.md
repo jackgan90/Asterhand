@@ -22,6 +22,8 @@ feature 计划连接相关领域和验收用例，不复制完整需求。大型
 
 超限例外、用户拆分许可及验证记录保存 feature 计划。CI 不因软阈值自动拒绝，也不能替代用户批准。
 
+运行期国际化守卫共用 `internal/i18n/guard-rules.json` 单一规则源：`scripts/sync-i18n.mjs` 负责从 `internal/i18n/locales/` 确定性生成前端只读词表模块并按配置中的 `js_ui_sinks` 校验词表对称性、占位符一致性、HTML `data-i18n*` 绑定、显式映射字典与前端/桥接 JS 硬编码字面量；`internal/i18n/guard_test.go` 负责按配置中的 `go_desktop_ui_sinks` 与 `go_symbol_exemptions` 校验全栈键引用对称性、死键并集与受检 Go/桌面源码字面量。应用与输入宿主构建脚本、`go test`、`node --test` 及提交前快捷入口 `scripts/check-i18n.ps1` 共同阻断违规；日常开发写法与守卫盲区见 [国际化开发指南](i18n-guide.md)。
+
 ## 文档与证据的生命周期
 
 长期文档说明当前契约、设计原因、支持边界和可复现验证方法。链接文本使用功能名称，链接目标必须受版本控制；其他维护者只克隆仓库即可理解引用。

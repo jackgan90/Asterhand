@@ -3,7 +3,6 @@
 package quickinput
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,6 +14,7 @@ import (
 	"unsafe"
 
 	"github.com/jackgan90/Asterhand/internal/config"
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/quickinput/hostbundle"
 	"golang.org/x/sys/windows"
 )
@@ -46,12 +46,14 @@ func launchWindowsHostFrom(directory string) (hostProcess, error) {
 	}
 	guard, err := hostbundle.Verify(directory, config.Version, config.SourceDigest)
 	if err != nil {
-		return nil, &RegistrationError{"host_bundle_invalid", err.Error()}
+		key, args, _ := i18n.ErrorDetails(err)
+		return nil, &RegistrationError{Code: "host_bundle_invalid", Detail: err.Error(), Key: key, Args: args}
 	}
 	defer guard.Close()
 	token, err := restrictedHostToken()
 	if err != nil {
-		return nil, &RegistrationError{"host_token_failed", fmt.Sprintf("无法创建非提权输入宿主: %v", err)}
+		args := map[string]string{"err": err.Error()}
+		return nil, &RegistrationError{Code: "host_token_failed", Detail: i18n.T(i18n.Effective(), "err.quickinput.host_token_create", args), Key: "err.quickinput.host_token_create", Args: args}
 	}
 	if token != 0 {
 		defer token.Close()
@@ -78,7 +80,7 @@ func launchWindowsHostFrom(directory string) (hostProcess, error) {
 		if p.job != 0 {
 			windows.CloseHandle(p.job)
 		}
-		return nil, fmt.Errorf("启动非提权输入宿主失败: %w", err)
+		return nil, i18n.Wrap("err.quickinput.host_launch_failed", map[string]string{"err": err.Error()}, err)
 	}
 	go func() { _, _ = windows.WaitForSingleObject(p.process, windows.INFINITE); close(p.exited) }()
 	return p, nil
@@ -185,12 +187,12 @@ func hostEnvironment() []uint16 {
 func (p *windowsHostProcess) GrantForeground() error {
 	select {
 	case <-p.exited:
-		return fmt.Errorf("输入宿主已退出")
+		return i18n.Err("err.quickinput.host_exited")
 	default:
 	}
 	ok, _, _ := uiDLL.NewProc("AllowSetForegroundWindow").Call(uintptr(p.pid))
 	if ok == 0 {
-		return &RegistrationError{"focus_denied", "系统拒绝激活输入框，请从托盘重试"}
+		return &RegistrationError{Code: "focus_denied", Detail: i18n.T(i18n.Effective(), "err.quickinput.focus_denied_tray"), Key: "err.quickinput.focus_denied_tray"}
 	}
 	return nil
 }
@@ -203,7 +205,7 @@ func (p *windowsHostProcess) Stop() error {
 		select {
 		case <-p.exited:
 		case <-time.After(5 * time.Second):
-			p.stopErr = fmt.Errorf("输入宿主退出未确认")
+			p.stopErr = i18n.Err("err.quickinput.host_exit_unconfirmed")
 		}
 		deadline := time.Now().Add(5 * time.Second)
 		for {
@@ -216,7 +218,7 @@ func (p *windowsHostProcess) Stop() error {
 				break
 			}
 			if time.Now().After(deadline) {
-				p.stopErr = fmt.Errorf("输入宿主进程组退出未确认")
+				p.stopErr = i18n.Err("err.quickinput.host_job_unconfirmed")
 				break
 			}
 			time.Sleep(20 * time.Millisecond)
@@ -240,12 +242,12 @@ func hostJobProcessCount(job windows.Handle) (uint32, error) {
 func inheritedPipe(value string, name string) (*os.File, error) {
 	raw, err := strconv.ParseUint(value, 10, 64)
 	if err != nil || raw == 0 {
-		return nil, fmt.Errorf("缺少父进程通信句柄")
+		return nil, i18n.Err("err.quickinput.missing_parent_pipes")
 	}
 	h := windows.Handle(raw)
 	kind, err := windows.GetFileType(h)
 	if err != nil || kind != windows.FILE_TYPE_PIPE {
-		return nil, fmt.Errorf("输入宿主通道无效")
+		return nil, i18n.Err("err.quickinput.invalid_host_channel")
 	}
 	if err = windows.SetHandleInformation(h, windows.HANDLE_FLAG_INHERIT, 0); err != nil {
 		return nil, err

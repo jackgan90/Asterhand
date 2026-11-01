@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jackgan90/Asterhand/internal/config"
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"golang.org/x/sys/windows"
 )
 
@@ -29,6 +30,7 @@ func TestMain(m *testing.M) {
 		time.Sleep(50 * time.Millisecond)
 		os.Exit(0)
 	}
+	i18n.SetDefaultPreference("zh-CN")
 	os.Exit(m.Run())
 }
 

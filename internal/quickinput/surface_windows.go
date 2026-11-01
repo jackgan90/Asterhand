@@ -15,6 +15,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/model"
 	"github.com/jackgan90/Asterhand/internal/quickinput/hostipc"
 	"github.com/jackgan90/Asterhand/packaging"
@@ -68,6 +69,7 @@ type nativeSurface struct {
 	draft                         *Draft
 	remoteDraft                   *editorRelay
 	theme                         string
+	locale                        string
 	epoch                         string
 	documentReady                 bool
 	pageInitialized               bool
@@ -96,7 +98,7 @@ func startConfiguredSurface(home string, onMessage func(string), onFailure func(
 	s := &nativeSurface{home: home, ready: make(chan error, 1), done: make(chan struct{}), commands: make(chan func(), 32), onMessage: onMessage, onFailure: onFailure}
 	s.remoteDraft = relay
 	s.height = initialSurfaceHeight
-	s.draft, s.theme, s.epoch, s.waiters = &Draft{}, "star", model.ID(), map[string]chan struct{}{}
+	s.draft, s.theme, s.locale, s.epoch, s.waiters = &Draft{}, "star", i18n.Effective(), model.ID(), map[string]chan struct{}{}
 	if len(source) != 0 {
 		s.draft = source[0]
 	}
@@ -105,16 +107,16 @@ func startConfiguredSurface(home string, onMessage func(string), onFailure func(
 	case err := <-s.ready:
 		if err != nil {
 			if closeErr := s.Close(); closeErr != nil {
-				return s, fmt.Errorf("%v；收尾未确认: %w", err, closeErr)
+				return s, i18n.Wrap("err.quickinput.init_close_unconfirmed", map[string]string{"err": err.Error(), "close_err": closeErr.Error()}, closeErr)
 			}
 			return nil, err
 		}
 		return s, err
 	case <-time.After(15 * time.Second):
 		if err := s.Close(); err != nil {
-			return s, fmt.Errorf("WebView2 初始化超时，收尾未确认: %w", err)
+			return s, i18n.Wrap("err.quickinput.init_timeout_close", nil, err)
 		}
-		return nil, fmt.Errorf("WebView2 初始化超时")
+		return nil, i18n.Err("err.quickinput.init_timeout")
 	}
 }
 
@@ -129,7 +131,7 @@ func (s *nativeSurface) run() {
 	uiDLL.NewProc("SetThreadDpiAwarenessContext").Call(^uintptr(3))
 	hr, _, _ := oleDLL.NewProc("CoInitializeEx").Call(0, 2)
 	if int32(hr) < 0 {
-		s.ready <- fmt.Errorf("初始化 STA 失败")
+		s.ready <- i18n.Err("err.quickinput.sta_failed")
 		return
 	}
 	defer oleDLL.NewProc("CoUninitialize").Call()
@@ -141,7 +143,13 @@ func (s *nativeSurface) run() {
 	available, err := webviewloader.GetAvailableCoreWebView2BrowserVersionString("")
 	minimum := packaging.Dependencies().WebView2.MinimumRuntimeVersion
 	if err != nil || !runtimeVersionAtLeast(available, minimum) {
-		s.ready <- &RegistrationError{Code: "runtime_unavailable", Detail: fmt.Sprintf("需要 WebView2 Evergreen Runtime %s 或更新版本，当前探测版本 %q；请运行安装器补齐", minimum, available)}
+		args := map[string]string{"minimum": minimum, "available": strconv.Quote(available)}
+		s.ready <- &RegistrationError{
+			Code:   "runtime_unavailable",
+			Key:    "err.quickinput.webview2_version_need",
+			Args:   args,
+			Detail: i18n.T(i18n.Effective(), "err.quickinput.webview2_version_need", args),
+		}
 		return
 	}
 	profile := filepath.Join(s.home, "quick-input-profile")
@@ -175,7 +183,7 @@ func (s *nativeSurface) createWindow() error {
 	if ok, _, err := uiDLL.NewProc("RegisterClassExW").Call(uintptr(unsafe.Pointer(&cls))); ok == 0 {
 		return err
 	}
-	title, _ := windows.UTF16PtrFromString("Asterhand · 星伴")
+	title, _ := windows.UTF16PtrFromString(i18n.T(s.locale, "brand.quickinput_window_title"))
 	const appWindow = 0x00040000                             // WS_EX_APPWINDOW; no owner or TOOLWINDOW suppression.
 	const windowStyle = 0x80000000 | 0x00080000 | 0x00020000 // POPUP | SYSMENU | MINIMIZEBOX
 	hwnd, _, err := uiDLL.NewProc("CreateWindowExW").Call(appWindow, uintptr(unsafe.Pointer(s.class)), uintptr(unsafe.Pointer(title)), windowStyle, 0, 0, 680, initialSurfaceHeight, 0, 0, instance, 0)
@@ -196,19 +204,19 @@ func (s *nativeSurface) EnvironmentCompleted(code webviewloader.HRESULT, environ
 		return 0
 	}
 	if code < 0 || environment == nil {
-		s.ready <- fmt.Errorf("WebView2 环境创建失败 0x%x", uint32(code))
+		s.ready <- i18n.ErrArgs("err.quickinput.env_create_failed", map[string]string{"code": fmt.Sprintf("%x", uint32(code))})
 		return 0
 	}
 	s.environment = (*comRef)(unsafe.Pointer(environment)).retain()
 	s.version, _ = s.environment.text(5)
 	minimum := packaging.Dependencies().WebView2.MinimumRuntimeVersion
 	if !runtimeVersionAtLeast(s.version, minimum) {
-		s.ready <- fmt.Errorf("WebView2 Runtime %s 过旧，需要 %s 或更新版本", s.version, minimum)
+		s.ready <- i18n.ErrArgs("err.quickinput.webview2_too_old", map[string]string{"version": s.version, "minimum": minimum})
 		return 0
 	}
 	extension, err := s.environment.query("{ee0eb9df-6f12-46ce-b53f-3f47b9c928e0}")
 	if err != nil {
-		s.ready <- fmt.Errorf("WebView2 不支持独立隐私 profile: %w", err)
+		s.ready <- i18n.Wrap("err.quickinput.profile_unsupported", nil, err)
 		return 0
 	}
 	defer extension.release()
@@ -272,7 +280,7 @@ func (s *nativeSurface) controllerCompleted(code uintptr, value *comRef) uintptr
 		return 0
 	}
 	if int32(code) < 0 || value == nil {
-		s.ready <- fmt.Errorf("WebView2 控制器创建失败 0x%x", uint32(code))
+		s.ready <- i18n.ErrArgs("err.quickinput.controller_create_failed", map[string]string{"code": fmt.Sprintf("%x", uint32(code))})
 		return 0
 	}
 	s.controller = value.retain()
@@ -299,11 +307,11 @@ func (s *nativeSurface) dispatch(ctx context.Context, fn func()) error {
 		uiDLL.NewProc("PostMessageW").Call(s.hwnd.Load(), 0x8021, 0, 0)
 		return nil
 	case <-s.done:
-		return fmt.Errorf("输入窗口已关闭")
+		return i18n.Err("err.quickinput.window_closed")
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
-		return fmt.Errorf("输入界面正在处理其他操作，请稍后重试")
+		return i18n.Err("err.quickinput.surface_busy_retry")
 	}
 }
 
@@ -350,13 +358,13 @@ func (s *nativeSurface) finishClose() {
 		return
 	}
 	if s.creationPending {
-		s.closeError = fmt.Errorf("WebView2 创建仍未完成，请重新启动本节点")
+		s.closeError = i18n.Err("err.quickinput.create_unfinished")
 	}
 	if s.exitSubscription != nil && !s.browserExited && time.Since(s.closeStarted) < 10*time.Second {
 		return
 	}
 	if s.exitSubscription != nil && !s.browserExited {
-		s.closeError = fmt.Errorf("WebView2 浏览器仍在清理，保留 profile")
+		s.closeError = i18n.Err("err.quickinput.browser_cleaning")
 	}
 	uiDLL.NewProc("KillTimer").Call(s.hwnd.Load(), 70)
 	uiDLL.NewProc("DestroyWindow").Call(s.hwnd.Load())

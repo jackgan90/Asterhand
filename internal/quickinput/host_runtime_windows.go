@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"github.com/jackgan90/Asterhand/internal/config"
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/quickinput/hostipc"
 	"golang.org/x/sys/windows"
 )
@@ -59,6 +60,9 @@ func serveInputHost(input io.Reader, output io.Writer, initial hostipc.Message) 
 		peer.terminalFailure("runtime_override")
 		return err
 	}
+	if initial.Locale != "" {
+		i18n.SetDefaultPreference(initial.Locale)
+	}
 	relay := newEditorRelay(initial.Epoch, initial.Revision, send, fail)
 	draft := &Draft{text: initial.Text, revision: initial.Revision}
 	failed := func(err error) {
@@ -81,9 +85,18 @@ func serveInputHost(input io.Reader, output io.Writer, initial hostipc.Message) 
 	if err = surface.Update(initial.Theme); err != nil {
 		return err
 	}
+	if initial.Locale != "" {
+		if err = surface.UpdateLocale(initial.Locale); err != nil {
+			return err
+		}
+	}
 	if initial.Recovered {
 		_ = surface.dispatch(ctx, func() {
-			_ = surface.postJSON(map[string]string{"kind": "error", "message": "输入界面曾中断，已恢复主进程最后接收的草稿；请检查未完成的输入。"})
+			_ = surface.postJSON(map[string]string{
+				"kind":        "error",
+				"message":     i18n.T(i18n.Effective(), "status.quickinput.recovery_banner"),
+				"message_key": "status.quickinput.recovery_banner",
+			})
 		})
 	}
 	if err = send(hostipc.Message{Kind: hostipc.Ready, AppVersion: config.Version, Source: config.SourceDigest, Runtime: surface.version}); err != nil {
@@ -130,6 +143,12 @@ func serveHostCommand(ctx context.Context, surface *nativeSurface, relay *editor
 		return surface.dispatch(ctx, func() { _ = send(hostipc.Message{Kind: hostipc.State, Request: m.Request}) })
 	case hostipc.Theme:
 		if err := surface.Update(m.Theme); err != nil {
+			return err
+		}
+		return surface.dispatch(ctx, func() { _ = send(hostipc.Message{Kind: hostipc.State, Request: m.Request}) })
+	case hostipc.Locale:
+		i18n.SetDefaultPreference(m.Locale)
+		if err := surface.UpdateLocale(m.Locale); err != nil {
 			return err
 		}
 		return surface.dispatch(ctx, func() { _ = send(hostipc.Message{Kind: hostipc.State, Request: m.Request}) })

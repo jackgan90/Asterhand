@@ -3,12 +3,12 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 
 	"github.com/jackgan90/Asterhand/internal/desktop"
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/localcommands"
 	commandswire "github.com/jackgan90/Asterhand/internal/localcommands/wire"
 )
@@ -51,7 +51,15 @@ func (a *App) commandsAPI(w http.ResponseWriter, r *http.Request) {
 		if public.Code == "configuration" || public.Code == "unavailable" {
 			status = http.StatusServiceUnavailable
 		}
-		send(w, status, map[string]string{"error": public.Message, "code": public.Code})
+		msg := i18n.LocalizeMessage(a.requestLocale(r), public.MessageKey, public.MessageArgs, public.Message)
+		payload := map[string]any{"error": msg, "code": public.Code}
+		if public.MessageKey != "" {
+			payload["message_key"] = public.MessageKey
+		}
+		if len(public.MessageArgs) > 0 {
+			payload["message_args"] = i18n.CloneArgs(public.MessageArgs)
+		}
+		send(w, status, payload)
 		return
 	}
 	send(w, http.StatusOK, result)
@@ -65,7 +73,7 @@ func readCommand(w http.ResponseWriter, r *http.Request, value any) error {
 		return err
 	}
 	if d.Decode(new(any)) != io.EOF {
-		return fmt.Errorf("请求包含多余内容")
+		return i18n.Err("err.http.extra_body")
 	}
 	return nil
 }
@@ -79,7 +87,7 @@ func (a *App) commandCall(ctx context.Context, request commandswire.Request) com
 	address := a.webAddress
 	a.mu.Unlock()
 	if stopping {
-		return localcommands.Failure(fmt.Errorf("节点正在退出"))
+		return localcommands.Failure(i18n.Err("err.app.node_stopping"))
 	}
 	switch request.Action {
 	case "list":
@@ -88,7 +96,7 @@ func (a *App) commandCall(ctx context.Context, request commandswire.Request) com
 		return a.Commands.Launch(ctx, request.ID, request.Revision)
 	case "settings":
 		if address == "" {
-			return localcommands.Failure(fmt.Errorf("Web 尚未就绪"))
+			return localcommands.Failure(i18n.Err("err.app.web_not_ready"))
 		}
 		fragment := url.Values{"login": {a.loginToken}, "commands": {request.ID}}
 		if err := desktop.Open("http://" + address + "/#" + fragment.Encode()); err != nil {

@@ -4,9 +4,11 @@ package quickinput
 
 import (
 	"fmt"
+	"strconv"
 	"syscall"
 	"unsafe"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/wailsapp/go-webview2/pkg/combridge"
 	"golang.org/x/sys/windows"
 )
@@ -57,7 +59,7 @@ func (p *comRef) object(slot int) (*comRef, error) {
 	var result *comRef
 	err := p.call(slot, uintptr(unsafe.Pointer(&result)))
 	if err == nil && result == nil {
-		err = fmt.Errorf("WebView2 返回空接口，slot=%d", slot)
+		err = i18n.ErrArgs("err.quickinput.com_null_interface", map[string]string{"slot": strconv.Itoa(slot)})
 	}
 	return result, err
 }
@@ -81,13 +83,13 @@ func (p *comRef) boundedText(slot, limit int) (string, error) {
 		if unit == 0 {
 			text := windows.UTF16ToString(units)
 			if len(text) > limit {
-				return "", fmt.Errorf("WebView2 文本超过长度限制")
+				return "", i18n.Err("err.quickinput.com_text_too_long")
 			}
 			return text, nil
 		}
 		units = append(units, unit)
 	}
-	return "", fmt.Errorf("WebView2 文本超过长度限制")
+	return "", i18n.Err("err.quickinput.com_text_too_long")
 }
 
 func (p *comRef) putText(slot int, text string) error {

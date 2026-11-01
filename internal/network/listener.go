@@ -1,18 +1,19 @@
 package network
 
 import (
-	"errors"
 	"net"
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/jackgan90/Asterhand/internal/i18n"
 )
 
 func ValidateListener(address string) error {
 	host, port, err := net.SplitHostPort(address)
 	n, parseErr := strconv.Atoi(port)
 	if err != nil || net.ParseIP(host) == nil || parseErr != nil || n < 1 || n > 65535 {
-		return errors.New("节点监听地址格式为 IP:端口，端口范围 1—65535")
+		return i18n.Err("err.network.listen_format")
 	}
 	return nil
 }
@@ -40,15 +41,27 @@ func LoopbackListener(address string) bool {
 	return err == nil && ip != nil && ip.IsLoopback()
 }
 
-func ConnectionWarning(endpoint, configured, actual string) string {
+func ConnectionWarningKey(endpoint, configured, actual string) string {
 	if !ListenerMatches(configured, actual) {
-		return "网络设置修改后尚未生效，请停止本机服务后重新启动。"
+		return "status.network.restart_required"
 	}
 	if LoopbackListener(actual) || LoopbackEndpoint(endpoint) {
-		return "当前仅本机可以访问。如需与其他设备协作，请在“设置 › 网络与高级”中使用 Tailscale 地址。"
+		return "status.network.loopback_only"
 	}
 	if endpoint == "" {
-		return "尚未设置访问地址。如需与其他设备协作，请在“设置 › 网络与高级”中使用 Tailscale 地址。"
+		return "status.network.endpoint_missing"
 	}
 	return ""
+}
+
+func ConnectionWarningFor(locale, endpoint, configured, actual string) string {
+	key := ConnectionWarningKey(endpoint, configured, actual)
+	if key == "" {
+		return ""
+	}
+	return i18n.T(locale, key)
+}
+
+func ConnectionWarning(endpoint, configured, actual string) string {
+	return ConnectionWarningFor(i18n.Effective(), endpoint, configured, actual)
 }

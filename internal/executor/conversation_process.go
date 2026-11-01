@@ -110,7 +110,7 @@ func (p *chatProcess) close() error {
 	case <-p.exited:
 		return nil
 	case <-time.After(5 * time.Second):
-		return conversation.Fail("cleanup_pending", "聊天运行时退出尚未确认")
+		return conversation.FailKey("cleanup_pending", "err.conv.runtime.cleanup_pending")
 	}
 }
 
@@ -137,7 +137,7 @@ func (p *chatProcess) call(ctx context.Context, command chatCommand, result any)
 	p.mu.Lock()
 	if !p.alive() || len(p.pending) >= 16 {
 		p.mu.Unlock()
-		return conversation.Fail("unavailable", "聊天运行时连接不可用，请核对操作状态")
+		return conversation.FailKey("unavailable", "err.conv.runtime.conn_unavailable")
 	}
 	p.sequence++
 	command.ID = strconv.FormatUint(p.sequence, 10)
@@ -147,12 +147,12 @@ func (p *chatProcess) call(ctx context.Context, command chatCommand, result any)
 	defer func() { p.mu.Lock(); delete(p.pending, command.ID); p.mu.Unlock() }()
 	data, err := json.Marshal(command)
 	if err != nil || len(data) >= 128*1024 {
-		return conversation.Fail("invalid_request", "聊天请求超过传输限制")
+		return conversation.FailKey("invalid_request", "err.conv.runtime.request_oversized")
 	}
 	err = p.writeCommand(ctx, append(data, '\n'))
 	if err != nil {
 		p.stop()
-		return conversation.Fail("unavailable", "聊天连接中断，请核对操作状态")
+		return conversation.FailKey("unavailable", "err.conv.runtime.conn_interrupted")
 	}
 	select {
 	case reply := <-waiter:
@@ -168,7 +168,7 @@ func (p *chatProcess) call(ctx context.Context, command chatCommand, result any)
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-p.done:
-		return conversation.Fail("unavailable", "聊天运行时中断，请核对操作状态")
+		return conversation.FailKey("unavailable", "err.conv.runtime.process_interrupted")
 	}
 }
 
@@ -189,6 +189,6 @@ func (p *chatProcess) writeCommand(ctx context.Context, data []byte) error {
 		return ctx.Err()
 	case <-p.done:
 		<-done
-		return conversation.Fail("unavailable", "聊天连接已关闭")
+		return conversation.FailKey("unavailable", "err.conv.runtime.conn_closed")
 	}
 }

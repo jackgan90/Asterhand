@@ -2,9 +2,9 @@
 package llm
 
 import (
-	"fmt"
 	"slices"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/packaging"
 )
 
@@ -34,10 +34,10 @@ func (DeepSeek) Describe() Descriptor {
 }
 func (d DeepSeek) Validate(s Selection) error {
 	if s.Provider != d.Describe().ID || !slices.Contains(d.Describe().Models, s.Model) {
-		return fmt.Errorf("DeepSeek 模型未支持: %s", s.Model)
+		return i18n.ErrArgs("err.llm.model_unsupported", map[string]string{"model": s.Model})
 	}
 	if s.Endpoint != "" {
-		return fmt.Errorf("当前 DeepSeek adapter 尚未支持自定义 endpoint")
+		return i18n.Err("err.llm.custom_endpoint_unsupported")
 	}
 	return nil
 }
@@ -46,7 +46,7 @@ func Resolve(id string) (Provider, error) {
 	case "deepseek":
 		return DeepSeek{}, nil
 	default:
-		return nil, fmt.Errorf("模型 provider 未安装: %s", id)
+		return nil, i18n.ErrArgs("err.llm.provider_missing", map[string]string{"id": id})
 	}
 }
 func Available() []Descriptor { return []Descriptor{DeepSeek{}.Describe()} }

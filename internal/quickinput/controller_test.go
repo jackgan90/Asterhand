@@ -21,7 +21,7 @@ type testRegistrar struct {
 
 func (r *testRegistrar) Register(b Binding) (int, error) {
 	if b.Key == r.conflict {
-		return 0, &RegistrationError{"conflict", "occupied"}
+		return 0, &RegistrationError{Code: "conflict", Detail: "occupied"}
 	}
 	r.next++
 	r.held[r.next] = b
@@ -43,16 +43,19 @@ type testSurface struct {
 	closed      bool
 	snapshotErr error
 	theme       string
+	locale      string
+	localeErr   error
 }
 
 type testActivation struct{}
 
 func (testActivation) valid() bool { return true }
 
-func (s *testSurface) Toggle()                        { s.toggles++ }
-func (s *testSurface) Update(theme string) error      { s.theme = theme; return nil }
-func (s *testSurface) Snapshot(context.Context) error { return s.snapshotErr }
-func (s *testSurface) Close() error                   { s.closed = true; return nil }
+func (s *testSurface) Toggle()                          { s.toggles++ }
+func (s *testSurface) Update(theme string) error        { s.theme = theme; return nil }
+func (s *testSurface) UpdateLocale(locale string) error { s.locale = locale; return s.localeErr }
+func (s *testSurface) Snapshot(context.Context) error   { return s.snapshotErr }
+func (s *testSurface) Close() error                     { s.closed = true; return nil }
 func controllerFixture(t *testing.T) (*Controller, *testRegistrar, *testSurface) {
 	t.Helper()
 	c := New(t.TempDir())

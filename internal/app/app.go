@@ -16,6 +16,7 @@ import (
 	"github.com/jackgan90/Asterhand/internal/config"
 	"github.com/jackgan90/Asterhand/internal/conversation"
 	"github.com/jackgan90/Asterhand/internal/executor"
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/localcommands"
 	"github.com/jackgan90/Asterhand/internal/model"
 	"github.com/jackgan90/Asterhand/internal/peer"
@@ -46,6 +47,8 @@ type App struct {
 	probeRunning    bool
 	probeStatus     string
 	probeError      string
+	probeErrorKey   string
+	probeErrorArgs  map[string]string
 	webAddress      string
 	peerAddress     string
 	wg              sync.WaitGroup
@@ -53,6 +56,8 @@ type App struct {
 	done            <-chan struct{}
 	ctx             context.Context
 	peerSync        chan struct{}
+	refreshMu       sync.Mutex
+	refreshCh       chan struct{}
 	requests        requestGate
 	stopping        bool
 	closeOnce       sync.Once
@@ -80,7 +85,7 @@ func New(c *config.Manager, x executor.Executor) (*App, error) {
 		}
 		x = &executor.Selected{Config: c}
 	}
-	a := &App{Config: c, Store: s, Peers: p, sessions: map[string]session{}, probeTokens: map[string]bool{}, probeStatus: "not_run", peerSync: make(chan struct{}, 1)}
+	a := &App{Config: c, Store: s, Peers: p, sessions: map[string]session{}, probeTokens: map[string]bool{}, probeStatus: "not_run", peerSync: make(chan struct{}, 1), refreshCh: make(chan struct{})}
 	a.Engine = tasks.New(s, c, x)
 	a.Engine.SubmitRemote = a.submit
 	tokenPath := filepath.Join(c.Home, "web-login.token")
@@ -114,7 +119,7 @@ func (a *App) Start(ctx context.Context) (string, error) {
 	}
 	ip := net.ParseIP(host)
 	if ip == nil || !ip.IsLoopback() {
-		return "", errors.New("本机 Web 只允许绑定 loopback IP")
+		return "", i18n.Err("err.app.web_loopback_only")
 	}
 	web, err := net.Listen("tcp", c.WebListen)
 	if err != nil {
@@ -139,7 +144,7 @@ func (a *App) Start(ctx context.Context) (string, error) {
 	tlsListener := tls.NewListener(remote, &tls.Config{Certificates: []tls.Certificate{a.Peers.TLS}, MinVersion: tls.VersionTLS13})
 	for _, run := range []func(){func() { localServer.Serve(web) }, func() { peerServer.Serve(tlsListener) }, func() {
 		if err := a.Engine.Run(ctx); err != nil {
-			log.Printf("任务状态持久化失败，停止节点并保留现场: %v", err)
+			log.Printf("%s", i18n.T(i18n.Effective(), "err.app.persist_failed_log", map[string]string{"err": err.Error()}))
 			a.RequestStop(true)
 		}
 	}, func() { a.outboxLoop(ctx) }, func() { a.peerSyncLoop(ctx) }} {
@@ -172,3 +177,22 @@ func (a *App) Close() error {
 func (a *App) Address() string       { return a.webAddress }
 func (a *App) PeerAddress() string   { return a.peerAddress }
 func (a *App) Done() <-chan struct{} { return a.done }
+
+func (a *App) notifyRefresh() {
+	a.refreshMu.Lock()
+	if a.refreshCh != nil {
+		close(a.refreshCh)
+	}
+	a.refreshCh = make(chan struct{})
+	a.refreshMu.Unlock()
+}
+
+func (a *App) refreshDone() <-chan struct{} {
+	a.refreshMu.Lock()
+	if a.refreshCh == nil {
+		a.refreshCh = make(chan struct{})
+	}
+	ch := a.refreshCh
+	a.refreshMu.Unlock()
+	return ch
+}

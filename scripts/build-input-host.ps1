@@ -10,6 +10,10 @@ if ($versionSource -notmatch 'const Version = "([^"]+)"') { throw 'Cannot resolv
 $version = $Matches[1]
 & node (Join-Path $PSScriptRoot 'verify-frontend-assets.mjs')
 if ($LASTEXITCODE -ne 0) { throw 'Frontend vendor assets failed integrity checks.' }
+& node (Join-Path $PSScriptRoot 'sync-i18n.mjs') --check
+if ($LASTEXITCODE -ne 0) { throw 'Frontend i18n guardrails failed.' }
+& $Go -C $repo test -count=1 ./internal/i18n
+if ($LASTEXITCODE -ne 0) { throw 'Go i18n guardrails failed.' }
 if ($SourceDigest -ne 'development' -and $SourceDigest -notmatch '^[0-9a-f]{64}$') { throw 'Invalid source digest.' }
 $savedOS=$env:GOOS; $savedArch=$env:GOARCH; $savedCGO=$env:CGO_ENABLED
 try {

@@ -1,6 +1,6 @@
 # 构建脚本
 
-聊天数学资源由 `verify-frontend-assets.mjs` 验证固定版本及逐文件 SHA-256，正式构建与开发宿主构建都会执行。开发宿主构建需要 Node.js；完整包使用已验证的 NodeDistribution。聊天宿主同样嵌入应用图标，KaTeX 许可证与来源清单随完整包放入 `licenses/katex`，验证方法见[聊天桌面体验验证](../docs/development/features/chat-desktop-experience/validation.md)。
+聊天数学资源由 `verify-frontend-assets.mjs` 验证固定版本及逐文件 SHA-256，正式构建与开发宿主构建都会执行。运行期国际化词表由 `sync-i18n.mjs` 从 `internal/i18n/locales/*.json` 确定性生成前端只读模块，`build-application.ps1` 与 `build-input-host.ps1` 在编译前自动执行 `sync-i18n.mjs --check` 与 `go test -count=1 ./internal/i18n`，提交前可运行 `check-i18n.ps1 -Go <go-executable>` 一键完成全栈守卫检查，详见[国际化验证说明](../docs/development/features/internationalization-framework/validation.md)。开发宿主构建需要 Node.js；完整包使用已验证的 NodeDistribution。聊天宿主同样嵌入应用图标，KaTeX 许可证与来源清单随完整包放入 `licenses/katex`，验证方法见[聊天桌面体验验证](../docs/development/features/chat-desktop-experience/validation.md)。
 
 独立宿主、主进程草稿、权限矩阵与退出清理的当前验证入口见[进程隔离验证](../docs/development/features/quick-input-process-isolation/validation.md)。
 

@@ -14,7 +14,7 @@ Gateway 按首次历史访问或发送需求启动，节点生命周期内复用
 
 Windows 快捷输入使用同版本的独立 GUI 宿主 AsterhandInputHost.exe；主进程控制器持有原生草稿、本地配置事务、录制租约与恢复策略，热键注册归托盘 OS 线程。UI 宿主在非提权 Medium 权限下运行 STA 与 WebView2，使用有界匿名管道交换定型消息；管理员节点通过受限令牌启动，标准用户使用自身非提权身份。创建进程时纳入自有 Job，父进程退出清理所属进程树。宿主保持 CGO_ENABLED=0，使用固定 Go WebView2 loader/COM bridge 与经官方 SDK 校验的窄接口，go.mod/go.sum 锁定版本与摘要，构建保留 MIT/ISC 许可证。Evergreen Runtime 检测实际版本和最低 API 能力，安装材料固定来源/版本/摘要；补齐失败保留在线节点，运行中更新不重启任务节点。取舍见[隔离 ADR](adr/007-quick-input-process-isolation.md)，依赖与分发边界见[宿主依赖说明](../../packaging/webview2.md)。
 
-快捷键、主题保存在节点数据目录的独立 desktop-settings.json，profile 为同目录的专用受保护子目录；程序升级不复制真实 Edge profile，不卸载共享 Runtime。普通用户和管理员交互会话使用相同 UI 进程架构，失败时不回退到提权 WebView2。SYSTEM、非交互环境、宿主完整性/版本错误和依赖失败报告具体降级状态，现有 Web、托盘和任务继续。托盘依据实际注册和 UI 就绪状态显示快捷键。草稿不落盘，UI 中断恢复主进程最后接受文本，主进程退出清空。
+快捷键、主题与可选语言偏好（`locale`，默认 `"auto"`，旧文件缺省兼容为 `"auto"`）保存在节点数据目录的独立 desktop-settings.json，profile 为同目录的专用受保护子目录；程序升级不复制真实 Edge profile，不卸载共享 Runtime。快捷输入宿主在 `init` 与运行期 `locale` IPC 消息中接收节点有效语言并同步原生窗口标题，隐藏挂起期间只保留最新语言状态并在恢复时推送。本地命令文件选择子进程（`pick-local-script`）由父进程通过 `--locale` 传入白名单有效语言，受限子进程无需读取节点私有数据目录；桌面启动器 `AsterhandLauncher.exe` 基于 `installation.json` 数据目录只读尝试解析 `desktop-settings.json` 的 `locale`，缺失、读取受限或 `"auto"` 时直接探测系统 UI 语言并回退 `en-US`。安装与工程维护脚本（`install.ps1`、`install.sh`、`install-local.cmd`、`packaging/*.ps1`、`scripts/*.ps1`）保持单语实现，不纳入运行期多语言词表。普通用户和管理员交互会话使用相同 UI 进程架构，失败时不回退到提权 WebView2。SYSTEM、非交互环境、宿主完整性/版本错误和依赖失败报告具体降级状态，现有 Web、托盘和任务继续。托盘依据实际注册和 UI 就绪状态显示快捷键。草稿不落盘，UI 中断恢复主进程最后接受文本，主进程退出清空。
 
 范围：Windows 安装、启动、诊断与构建；使用 schema 2 包描述。验证方法见 [安装路径](../development/features/installer-path-resolution/plan.md) 与 [公共包契约](../development/features/provider-neutral-flows/validation.md)。
 

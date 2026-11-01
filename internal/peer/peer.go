@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"fmt"
 	"io"
 	"math/big"
 	"net/http"
@@ -24,6 +23,7 @@ import (
 	"time"
 
 	"github.com/jackgan90/Asterhand/internal/config"
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/model"
 	"github.com/jackgan90/Asterhand/internal/network"
 	"github.com/jackgan90/Asterhand/internal/store"
@@ -59,7 +59,7 @@ func Open(c *config.Manager, s *store.Store) (*Manager, error) {
 	certPath, keyPath := filepath.Join(c.Home, "node.crt"), filepath.Join(c.Home, "node.key")
 	if _, err := os.Stat(certPath); errors.Is(err, os.ErrNotExist) {
 		if _, keyErr := os.Stat(keyPath); keyErr == nil {
-			return nil, errors.New("节点证书缺失但私钥存在，请恢复备份")
+			return nil, i18n.Err("err.peer.cert_missing_key_present")
 		}
 		if err = createCertificate(c.Get().NodeID, certPath, keyPath); err != nil {
 			return nil, err
@@ -98,7 +98,7 @@ func createCertificate(id, certPath, keyPath string) error {
 func endpoint(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return errors.New("节点地址必须是 https://主机:端口")
+		return i18n.Err("err.peer.endpoint_https_host_port")
 	}
 	return nil
 }
@@ -124,7 +124,7 @@ func (m *Manager) AcceptPair(r PairRequest) (model.Peer, error) {
 	var response model.Peer
 	replayed := false
 	if r.Node.ID == "" || r.Node.ID == m.Config.Get().NodeID || len(r.Node.OutboundToken) < 20 {
-		return response, errors.New("无效的节点身份")
+		return response, i18n.Err("err.peer.invalid_node_identity")
 	}
 	if err := endpoint(r.Node.Endpoint); err != nil {
 		return response, err
@@ -139,7 +139,7 @@ func (m *Manager) AcceptPair(r PairRequest) (model.Peer, error) {
 		}
 		if record.UsedBy != "" {
 			if record.UsedBy != r.Node.ID || record.RequestHash != model.Hash(r.Node) {
-				return nil, errors.New("配对码已使用")
+				return nil, i18n.Err("err.peer.invite_used")
 			}
 			replayed = true
 			response = *record.Response
@@ -149,7 +149,7 @@ func (m *Manager) AcceptPair(r PairRequest) (model.Peer, error) {
 		}
 		expiry, _ := time.Parse(time.RFC3339Nano, record.Invitation.Expires)
 		if time.Now().After(expiry) {
-			return nil, errors.New("配对码已过期")
+			return nil, i18n.Err("err.peer.invite_expired")
 		}
 		c := m.Config.Get()
 		token := model.ID()
@@ -170,7 +170,7 @@ func (m *Manager) AcceptPair(r PairRequest) (model.Peer, error) {
 	}
 	var existing model.Peer
 	if err = m.Store.Get("peer", r.Node.ID, &existing); err == nil && existing.Revoked && replayed {
-		return model.Peer{}, errors.New("此节点已撤销，请创建新的配对邀请")
+		return model.Peer{}, i18n.Err("err.peer.revoked_reinvite")
 	}
 	p := r.Node
 	p.InboundHash = model.Digest([]byte(response.OutboundToken))
@@ -182,20 +182,20 @@ func (m *Manager) Pair(ctx context.Context, code string) (model.Peer, error) {
 	var i Invitation
 	b, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(code))
 	if err != nil {
-		return model.Peer{}, errors.New("配对码格式无效")
+		return model.Peer{}, i18n.Err("err.peer.invite_invalid")
 	}
 	if err = json.Unmarshal(b, &i); err != nil {
 		return model.Peer{}, err
 	}
 	c := m.Config.Get()
 	if i.NodeID == c.NodeID {
-		return model.Peer{}, errors.New("请选择另一台节点")
+		return model.Peer{}, i18n.Err("err.peer.self_pair")
 	}
 	if err = endpoint(c.Endpoint); err != nil {
-		return model.Peer{}, errors.New("请先设置本机可达的 HTTPS 节点地址")
+		return model.Peer{}, i18n.Err("err.peer.local_https_required")
 	}
 	if !network.LoopbackEndpoint(i.Endpoint) && (network.LoopbackEndpoint(c.Endpoint) || network.LoopbackListener(c.PeerListen)) {
-		return model.Peer{}, errors.New("本机节点仍使用回环地址。请设置 Tailscale 节点与监听地址，并重启后再配对")
+		return model.Peer{}, i18n.Err("err.peer.local_loopback_listen")
 	}
 	target := model.Peer{ID: i.NodeID, Endpoint: i.Endpoint, Certificate: i.Certificate}
 	// Persist the same handshake before network I/O so response loss is retryable.
@@ -220,7 +220,7 @@ func (m *Manager) Pair(ctx context.Context, code string) (model.Peer, error) {
 		return target, err
 	}
 	if response.ID != i.NodeID || response.Certificate != i.Certificate {
-		return target, errors.New("配对目标身份与邀请不符")
+		return target, i18n.Err("err.peer.target_mismatch")
 	}
 	response.InboundHash = model.Digest([]byte(own.OutboundToken))
 	response.Projects = nil
@@ -265,10 +265,10 @@ func client(p model.Peer) (*http.Client, error) {
 	}
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM([]byte(p.Certificate)) {
-		return nil, errors.New("无效的节点证书")
+		return nil, i18n.Err("err.peer.invalid_cert")
 	}
 	transport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, ServerName: p.ID}, MaxIdleConns: 2, ResponseHeaderTimeout: 20 * time.Second}
-	return &http.Client{Transport: transport, Timeout: 25 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("节点协议禁止重定向") }}, nil
+	return &http.Client{Transport: transport, Timeout: 25 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return i18n.Err("err.peer.redirect_forbidden") }}, nil
 }
 func Call(ctx context.Context, p model.Peer, method, path string, input, output any) error {
 	c, err := client(p)
@@ -294,7 +294,7 @@ func Call(ctx context.Context, p model.Peer, method, path string, input, output 
 	}
 	res, err := c.Do(req)
 	if err != nil {
-		return fmt.Errorf("连接 %s 失败: %w", p.Endpoint, err)
+		return i18n.Wrap("err.peer.connect_failed", map[string]string{"endpoint": p.Endpoint}, err)
 	}
 	defer res.Body.Close()
 	const responseLimit = 2 * 1024 * 1024
@@ -303,7 +303,7 @@ func Call(ctx context.Context, p model.Peer, method, path string, input, output 
 		return err
 	}
 	if len(b) > responseLimit {
-		return errors.New("节点响应超过大小限制")
+		return i18n.Err("err.peer.response_oversized")
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		// Only a complete, request-bound rejection from the submission endpoint
@@ -316,9 +316,14 @@ func Call(ctx context.Context, p model.Peer, method, path string, input, output 
 			}
 		}
 		var failure struct {
-			Error string `json:"error"`
+			Error       string            `json:"error"`
+			MessageKey  string            `json:"message_key"`
+			MessageArgs map[string]string `json:"message_args"`
 		}
 		json.Unmarshal(b, &failure)
+		if failure.MessageKey != "" && i18n.HasKey(failure.MessageKey) {
+			return i18n.ErrArgs(failure.MessageKey, failure.MessageArgs)
+		}
 		if failure.Error == "" {
 			failure.Error = res.Status
 		}
@@ -340,5 +345,5 @@ func (m *Manager) Authenticate(token string) (model.Peer, error) {
 			return p, nil
 		}
 	}
-	return model.Peer{}, errors.New("peer 凭据无效或已撤销")
+	return model.Peer{}, i18n.Err("err.peer.token_invalid_or_revoked")
 }

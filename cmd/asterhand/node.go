@@ -12,6 +12,7 @@ import (
 	"github.com/jackgan90/Asterhand/internal/app"
 	"github.com/jackgan90/Asterhand/internal/config"
 	"github.com/jackgan90/Asterhand/internal/desktop"
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/launch"
 )
 
@@ -30,7 +31,17 @@ func runNode(c *config.Manager, open bool) error {
 	tray, err := desktop.Start(desktop.Options{
 		State: func() desktop.State {
 			cfg := c.Get()
-			return desktop.State{Name: cfg.Name, Stopping: a.Stopping()}
+			name := cfg.Name
+			if cfg.NameDefault {
+				loc := i18n.Effective()
+				if a.Input != nil {
+					if eff := a.Input.Status().EffectiveLocale; i18n.ValidLocale(eff) {
+						loc = eff
+					}
+				}
+				name = i18n.T(loc, "common.default_node_name")
+			}
+			return desktop.State{Name: name, Stopping: a.Stopping()}
 		},
 		OpenWeb: func() error {
 			address, err := launch.ExistingURL(c.Home)
@@ -59,14 +70,14 @@ func runNode(c *config.Manager, open bool) error {
 		return err
 	}
 	defer os.Remove(runtimePath)
-	fmt.Printf("Asterhand %s\n本机页面：http://%s\n节点数据：%s\n使用托盘或 open 命令打开登录页面，Ctrl+C 或托盘退出停止节点。\n", config.Version, a.Address(), c.Home)
+	fmt.Println(i18n.T(i18n.Effective(), "desktop.cli.startup_banner", map[string]string{"version": config.Version, "address": a.Address(), "home": c.Home}))
 	if open {
 		address, openErr := launch.ExistingURL(c.Home)
 		if openErr == nil {
 			openErr = openBrowser(address)
 		}
 		if openErr != nil {
-			fmt.Fprintln(os.Stderr, "打开浏览器失败，请从托盘重试：", openErr)
+			fmt.Fprintln(os.Stderr, i18n.T(i18n.Effective(), "desktop.cli.browser_open_failed", map[string]string{"err": openErr.Error()}))
 		}
 	}
 	select {

@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/jackgan90/Asterhand/internal/i18n"
 )
 
 type Registrar interface {
@@ -18,6 +19,7 @@ type Registrar interface {
 type Surface interface {
 	Toggle()
 	Update(string) error
+	UpdateLocale(string) error
 	Snapshot(context.Context) error
 	Close() error
 }
@@ -25,29 +27,100 @@ type SurfaceFactory func() (Surface, error)
 type RegistrationError struct {
 	Code   string
 	Detail string
+	Key    string
+	Args   map[string]string
 }
 
-func (e *RegistrationError) Error() string { return e.Detail }
+func (e *RegistrationError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Key != "" {
+		return i18n.LocalizeMessage(i18n.Effective(), e.Key, e.Args, e.Detail)
+	}
+	return e.Detail
+}
+
+func (e *RegistrationError) I18nKey() (string, map[string]string) {
+	if e == nil {
+		return "", nil
+	}
+	return e.Key, i18n.CloneArgs(e.Args)
+}
 
 type Error struct {
 	Status  int
 	Message string
+	Key     string
+	Args    map[string]string
 }
 
-func (e *Error) Error() string { return e.Message }
+func (e *Error) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Key != "" {
+		return i18n.LocalizeMessage(i18n.Effective(), e.Key, e.Args, e.Message)
+	}
+	return e.Message
+}
+
+func (e *Error) I18nKey() (string, map[string]string) {
+	if e == nil {
+		return "", nil
+	}
+	return e.Key, i18n.CloneArgs(e.Args)
+}
+
+func statusError(status int, key string, args ...map[string]string) *Error {
+	var params map[string]string
+	if len(args) > 0 {
+		params = i18n.CloneArgs(args[0])
+	}
+	return &Error{Status: status, Message: i18n.T(i18n.Effective(), key, params), Key: key, Args: params}
+}
+
+func wrapStatusError(status int, err error) *Error {
+	if key, args, ok := i18n.ErrorDetails(err); ok {
+		return &Error{Status: status, Message: err.Error(), Key: key, Args: args}
+	}
+	return &Error{Status: status, Message: err.Error()}
+}
 
 type Status struct {
-	Desired        Preferences `json:"desired"`
-	Registration   string      `json:"registration"`
-	Effective      *Binding    `json:"effective_binding,omitempty"`
-	Surface        string      `json:"surface"`
-	Error          string      `json:"error,omitempty"`
-	ErrorCode      string      `json:"error_code,omitempty"`
-	CleanupPending int         `json:"cleanup_pending"`
-	Supported      bool        `json:"supported"`
-	LastOperation  string      `json:"last_operation,omitempty"`
-	RuntimeVersion string      `json:"runtime_version,omitempty"`
-	RecoveryNotice string      `json:"recovery_notice,omitempty"`
+	Desired              Preferences       `json:"desired"`
+	Registration         string            `json:"registration"`
+	Effective            *Binding          `json:"effective_binding,omitempty"`
+	Surface              string            `json:"surface"`
+	Error                string            `json:"error,omitempty"`
+	ErrorCode            string            `json:"error_code,omitempty"`
+	ErrorKey             string            `json:"error_key,omitempty"`
+	ErrorArgs            map[string]string `json:"error_args,omitempty"`
+	CleanupPending       int               `json:"cleanup_pending"`
+	Supported            bool              `json:"supported"`
+	LastOperation        string            `json:"last_operation,omitempty"`
+	LastLocaleOperation  string            `json:"last_locale_operation,omitempty"`
+	EffectiveLocale      string            `json:"effective_locale,omitempty"`
+	SystemLocaleDetected bool              `json:"system_locale_detected"`
+	RuntimeVersion       string            `json:"runtime_version,omitempty"`
+	RecoveryNotice       string            `json:"recovery_notice,omitempty"`
+	RecoveryNoticeKey    string            `json:"recovery_notice_key,omitempty"`
+}
+
+func (s Status) Localize(locale string) Status {
+	if !i18n.ValidLocale(locale) {
+		locale = s.EffectiveLocale
+	}
+	if !i18n.ValidLocale(locale) {
+		locale = i18n.Effective()
+	}
+	if s.ErrorKey != "" {
+		s.Error = i18n.LocalizeMessage(locale, s.ErrorKey, s.ErrorArgs, s.Error)
+	}
+	if s.RecoveryNoticeKey != "" {
+		s.RecoveryNotice = i18n.LocalizeMessage(locale, s.RecoveryNoticeKey, nil, s.RecoveryNotice)
+	}
+	return s
 }
 
 type Change struct {
@@ -56,6 +129,7 @@ type Change struct {
 	Enabled   bool    `json:"enabled"`
 	Binding   Binding `json:"binding"`
 	Theme     string  `json:"theme_id"`
+	Locale    *string `json:"locale,omitempty"`
 	Reset     bool    `json:"reset,omitempty"`
 }
 
@@ -98,10 +172,13 @@ func New(home string) *Controller {
 	c.status = Status{Desired: Defaults(), Registration: "initializing", Surface: "not_created", Supported: runtime.GOOS == "windows"}
 	if p, err := c.store.Load(); err == nil {
 		c.status.Desired = p
+		i18n.SetDefaultPreference(p.Locale)
 	} else {
+		i18n.SetDefaultPreference("auto")
 		c.invalid = true
 		c.status.Registration, c.status.Error = "config_invalid", err.Error()
 		c.status.ErrorCode = "config_invalid"
+		c.status.ErrorKey, c.status.ErrorArgs, _ = i18n.ErrorDetails(err)
 	}
 	if !c.status.Supported {
 		c.status.Registration = "unsupported"
@@ -111,8 +188,17 @@ func New(home string) *Controller {
 
 func (c *Controller) Status() Status {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	eff, detected := i18n.ResolveLocale(c.status.Desired.Locale)
+	c.status.EffectiveLocale = eff
+	c.status.SystemLocaleDetected = detected
+	if c.status.ErrorKey != "" {
+		c.status.Error = i18n.LocalizeMessage(eff, c.status.ErrorKey, c.status.ErrorArgs, c.status.Error)
+	}
+	if c.status.RecoveryNoticeKey != "" {
+		c.status.RecoveryNotice = i18n.LocalizeMessage(eff, c.status.RecoveryNoticeKey, nil, c.status.RecoveryNotice)
+	}
 	b, _ := json.Marshal(c.status)
+	c.mu.Unlock()
 	var result Status
 	_ = json.Unmarshal(b, &result)
 	return result
@@ -130,21 +216,26 @@ func (c *Controller) setError(state string, err error) {
 	defer c.mu.Unlock()
 	c.status.Registration, c.status.Error = state, err.Error()
 	c.status.ErrorCode = state
+	c.status.ErrorKey, c.status.ErrorArgs, _ = i18n.ErrorDetails(err)
 	var nativeError *RegistrationError
 	if errors.As(err, &nativeError) {
 		c.status.ErrorCode = nativeError.Code
 	}
 }
 
+func (c *Controller) clearErrorLocked() {
+	c.status.Error, c.status.ErrorCode, c.status.ErrorKey, c.status.ErrorArgs = "", "", "", nil
+}
+
 func (c *Controller) ReadySurface() (Surface, error) {
 	if c.closingFailed {
-		return nil, fmt.Errorf("旧输入窗口尚未确认清理，请从托盘退出并重新启动本节点")
+		return nil, i18n.Err("err.quickinput.old_surface_cleanup")
 	}
 	if c.surface != nil {
 		return c.surface, nil
 	}
 	if c.factory == nil {
-		return nil, fmt.Errorf("桌面尚未连接或当前平台不支持")
+		return nil, i18n.Err("err.quickinput.desktop_not_connected")
 	}
 	c.mu.Lock()
 	c.status.Surface = "initializing"
@@ -169,9 +260,14 @@ func (c *Controller) ReadySurface() (Surface, error) {
 	c.mu.Unlock()
 	if c.isStopping() {
 		c.closeSurface()
-		return nil, &Error{503, "节点正在退出"}
+		return nil, statusError(503, "err.app.node_stopping")
 	}
-	if err := surface.Update(c.Status().Desired.Theme); err != nil {
+	st := c.Status()
+	if err := surface.Update(st.Desired.Theme); err != nil {
+		c.failSurface(err)
+		return nil, err
+	}
+	if err := surface.UpdateLocale(st.EffectiveLocale); err != nil {
 		c.failSurface(err)
 		return nil, err
 	}
@@ -182,21 +278,22 @@ func (c *Controller) Retry() (Status, error) {
 	c.op.Lock()
 	defer c.op.Unlock()
 	if c.isStopping() {
-		return c.Status(), &Error{503, "节点正在退出"}
+		return c.Status(), statusError(503, "err.app.node_stopping")
 	}
 	if c.invalid {
-		return c.Status(), &Error{409, "桌面配置无效，请恢复默认"}
+		return c.Status(), statusError(409, "err.quickinput.config_invalid_restore")
 	}
 	c.recoveryUsed = false
 	if !c.Status().Supported || c.registrar == nil {
-		return c.Status(), &Error{503, "当前没有可用的 Windows 交互桌面"}
+		return c.Status(), statusError(503, "err.quickinput.no_interactive_desktop")
 	}
 	if err := c.cleanup(); err != nil {
 		return c.Status(), err
 	}
 	if !c.Status().Desired.Enabled {
 		c.mu.Lock()
-		c.status.Registration, c.status.Error, c.status.ErrorCode = "disabled", "", ""
+		c.status.Registration = "disabled"
+		c.clearErrorLocked()
 		c.mu.Unlock()
 		return c.Status(), nil
 	}
@@ -206,7 +303,8 @@ func (c *Controller) Retry() (Status, error) {
 	}
 	if c.active != 0 {
 		c.mu.Lock()
-		c.status.Registration, c.status.Error, c.status.ErrorCode = "registered", "", ""
+		c.status.Registration = "registered"
+		c.clearErrorLocked()
 		c.mu.Unlock()
 		return c.Status(), nil
 	}
@@ -217,7 +315,8 @@ func (c *Controller) Retry() (Status, error) {
 	}
 	c.mu.Lock()
 	c.active = id
-	c.status.Registration, c.status.Error, c.status.ErrorCode = "registered", "", ""
+	c.status.Registration = "registered"
+	c.clearErrorLocked()
 	b := c.status.Desired.Binding
 	c.status.Effective = &b
 	c.mu.Unlock()
@@ -280,16 +379,16 @@ func (c *Controller) Open() error {
 	c.op.Lock()
 	defer c.op.Unlock()
 	if c.isStopping() {
-		return fmt.Errorf("节点正在退出")
+		return i18n.Err("err.app.node_stopping")
 	}
 	if c.invalid {
-		return fmt.Errorf("请在 Web 恢复有效的桌面设置")
+		return i18n.Err("err.quickinput.restore_in_web")
 	}
 	if c.registrar == nil || !c.Status().Supported {
-		return fmt.Errorf("当前没有可用的交互桌面")
+		return i18n.Err("err.quickinput.no_desktop_generic")
 	}
 	if !c.Status().Desired.Enabled {
-		return fmt.Errorf("请先在 Web 启用快捷输入")
+		return i18n.Err("err.quickinput.enable_in_web")
 	}
 	c.recoveryUsed = false
 	s, err := c.ReadySurface()
@@ -303,7 +402,8 @@ func (c *Controller) Open() error {
 				c.active = id
 				b := c.status.Desired.Binding
 				c.status.Effective = &b
-				c.status.Registration, c.status.Error, c.status.ErrorCode = "registered", "", ""
+				c.status.Registration = "registered"
+				c.clearErrorLocked()
 				c.mu.Unlock()
 			}
 		}
@@ -328,6 +428,7 @@ func (c *Controller) failedGeneration(generation uint64, err error) {
 		if generation == c.surfaceGeneration {
 			c.status.Error = err.Error()
 			c.status.ErrorCode = nativeError.Code
+			c.status.ErrorKey, c.status.ErrorArgs, _ = i18n.ErrorDetails(err)
 		}
 		c.mu.Unlock()
 		return
@@ -354,7 +455,8 @@ func (c *Controller) failSurface(err error) {
 	c.active = 0
 	c.status.Effective = nil
 	c.pendingActivation = nil
-	c.status.RecoveryNotice = "输入界面曾中断，重建后恢复最近已确认草稿；请检查未提交的输入法候选。"
+	c.status.RecoveryNoticeKey = "status.quickinput.recovery_rebuilt"
+	c.status.RecoveryNotice = i18n.T(i18n.Effective(), "status.quickinput.recovery_rebuilt")
 	c.mu.Unlock()
 	if id != 0 {
 		c.retire(id)
@@ -384,7 +486,8 @@ func (c *Controller) closeSurface() {
 		c.closingFailed = true
 		c.status.Surface = "closing"
 		c.status.Error = err.Error()
-		log.Printf("快捷输入收尾未确认: %v", err)
+		c.status.ErrorKey, c.status.ErrorArgs, _ = i18n.ErrorDetails(err)
+		log.Print(i18n.T(i18n.Effective(), "err.quickinput.cleanup_failed_log", map[string]string{"err": err.Error()}))
 		return
 	}
 	c.surface = nil
@@ -403,7 +506,7 @@ func (c *Controller) cleanup() error {
 	c.status.CleanupPending = len(remaining)
 	c.mu.Unlock()
 	if len(remaining) != 0 {
-		return &Error{409, "旧注册仍待清理，请重试或从托盘退出并重启本节点"}
+		return statusError(409, "err.quickinput.old_reg_cleanup")
 	}
 	return nil
 }

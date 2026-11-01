@@ -2,6 +2,8 @@ package quickinput
 
 import (
 	"time"
+
+	"github.com/jackgan90/Asterhand/internal/i18n"
 )
 
 const recoveryHealthyInterval = 60 * time.Second
@@ -17,8 +19,11 @@ func (c *Controller) recoverSurface(cause error) {
 	c.recoveryUsed = true
 	c.mu.Lock()
 	c.status.Registration, c.status.Surface = "recovering", "recovering"
-	c.status.Error, c.status.ErrorCode = "输入界面中断，正在恢复", "host_recovering"
-	c.status.RecoveryNotice = "输入界面曾中断，已恢复主进程最后接收的草稿；尚未送达的输入或未确认候选可能丢失。"
+	c.status.ErrorCode = "host_recovering"
+	c.status.ErrorKey, c.status.ErrorArgs = "status.quickinput.host_recovering", nil
+	c.status.Error = i18n.T(i18n.Effective(), "status.quickinput.host_recovering")
+	c.status.RecoveryNoticeKey = "status.quickinput.recovery_host"
+	c.status.RecoveryNotice = i18n.T(i18n.Effective(), "status.quickinput.recovery_host")
 	c.mu.Unlock()
 	c.closeSurface()
 	if c.isStopping() {
@@ -40,7 +45,7 @@ func (c *Controller) recoverSurface(cause error) {
 	if c.active != 0 {
 		c.status.Registration = "registered"
 	}
-	c.status.Error, c.status.ErrorCode = "", ""
+	c.clearErrorLocked()
 	c.mu.Unlock()
 	applyActivation(intent, surface)
 }

@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {setLocale} from "../web/i18n.mjs";
 import {domFixture, clockFixture, tick, descendants, deferred} from "./web-fixture.mjs";
+
+setLocale("zh-CN");
 
 let sequence = 0;
 async function page(t, handler = () => undefined) {
@@ -14,7 +17,7 @@ async function page(t, handler = () => undefined) {
     sessionStorage:{getItem:k => storage.get(k), setItem:(k,v) => storage.set(k,v), removeItem:k => storage.delete(k)},
     FormData:class { constructor(form) { this.form = form; } get(key) { const f = this.form.elements[key]; return f?.checked ? "on" : f?.value || ""; } },
     confirm:() => false, prompt:() => null,
-    navigator:{clipboard:{writeText:async () => {}}},
+    navigator:{languages:["zh-CN"], clipboard:{writeText:async () => {}}},
     ...Object.fromEntries(["setTimeout","clearTimeout","setInterval","clearInterval"].map(key => [key, clock[key].bind(clock)])),
     EventSource:class extends EventTarget { constructor() { super(); streams.push(this); } close() { this.closed = true; } },
     fetch:async (path, options = {}) => {

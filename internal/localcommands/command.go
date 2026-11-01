@@ -4,7 +4,6 @@ package localcommands
 
 import (
 	"encoding/json"
-	"fmt"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -12,6 +11,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/localcommands/wire"
 )
 
@@ -46,7 +46,9 @@ type SaveResult struct {
 
 var englishName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
 
-func problem(code, message string) error { return &wire.Error{Code: code, Message: message} }
+func problem(code, key string, args ...map[string]string) error {
+	return wire.FailKey(code, key, args...)
+}
 
 func cleanText(text string, limit int) bool {
 	return len(text) <= limit && utf8.ValidString(text) && !strings.ContainsFunc(text, unicode.IsControl)
@@ -55,17 +57,17 @@ func cleanText(text string, limit int) bool {
 func normalize(command Command) (Command, error) {
 	command.Name = strings.TrimSpace(command.Name)
 	if !englishName.MatchString(command.Name) {
-		return command, problem("invalid", "英文名须以字母开头，只包含字母、数字、连字符或下划线，最多 64 字符")
+		return command, problem("invalid", "err.localcmd.invalid_name")
 	}
 	if len(command.Aliases) > 16 || !cleanText(command.Description, 512) {
-		return command, problem("invalid", "最多 16 个别名，描述最多 512 UTF-8 字节且不包含控制字符")
+		return command, problem("invalid", "err.localcmd.invalid_aliases_desc")
 	}
 	names := []string{command.Name}
 	aliases := []string{}
 	for _, alias := range command.Aliases {
 		alias = strings.TrimSpace(alias)
 		if alias == "" || strings.HasPrefix(alias, "/") || !cleanText(alias, 128) {
-			return command, problem("invalid", "别名不能为空、以 / 开头或包含控制字符，最多 128 UTF-8 字节")
+			return command, problem("invalid", "err.localcmd.invalid_alias")
 		}
 		if !containsName(names, alias) {
 			aliases, names = append(aliases, alias), append(names, alias)
@@ -85,21 +87,21 @@ func normalize(command Command) (Command, error) {
 		command.Window = "background"
 	}
 	if command.Window != "background" && command.Window != "terminal" {
-		return command, problem("invalid", "请选择后台运行或打开终端")
+		return command, problem("invalid", "err.localcmd.invalid_window")
 	}
 	if command.Arguments == nil {
 		command.Arguments = []string{}
 	}
 	encoded, _ := json.Marshal(command.Arguments)
 	if len(command.Arguments) > 128 || len(encoded) > 8192 {
-		return command, problem("invalid", "固定参数最多 128 项、合计 8 KiB")
+		return command, problem("invalid", "err.localcmd.too_many_args")
 	}
 	for _, arg := range command.Arguments {
 		if !cleanText(arg, 4096) {
-			return command, problem("invalid", "参数不支持控制字符，每项最多 4096 UTF-8 字节")
+			return command, problem("invalid", "err.localcmd.invalid_arg")
 		}
 		if !strings.EqualFold(filepath.Ext(command.Script), ".ps1") && strings.Contains(arg, `"`) {
-			return command, problem("invalid", "批处理参数不支持字面双引号，请改用 .ps1；含空格参数无需自行加引号")
+			return command, problem("invalid", "err.localcmd.batch_quote_save")
 		}
 	}
 	return command, nil
@@ -115,18 +117,18 @@ func ScriptPath(value string) (string, error) {
 	case ".bat", ".cmd", ".ps1":
 		return value, nil
 	default:
-		return "", problem("invalid", "仅支持 .bat、.cmd 和 Windows PowerShell 5.1 .ps1 脚本")
+		return "", problem("invalid", "err.localcmd.unsupported_ext")
 	}
 }
 
 func localPath(value string) (string, error) {
 	if !cleanText(value, 2048) || strings.TrimSpace(value) != value || !filepath.IsAbs(value) || strings.HasPrefix(value, `\\`) || strings.HasPrefix(value, "//") {
-		return "", problem("invalid", "请填写本机绝对路径，不支持网络共享或设备路径")
+		return "", problem("invalid", "err.localcmd.local_abs_path_only")
 	}
 	value = filepath.Clean(value)
 	// A colon outside the volume could select an NTFS stream, not a script file.
 	if strings.Contains(strings.TrimPrefix(value, filepath.VolumeName(value)), ":") {
-		return "", problem("invalid", "路径不能包含文件数据流")
+		return "", problem("invalid", "err.localcmd.no_ads")
 	}
 	return value, nil
 }
@@ -150,12 +152,12 @@ func commandNames(c Command) []string { return append([]string{c.Name}, c.Aliase
 
 func validateCatalog(c Catalog) error {
 	if c.Schema != 1 || !wire.ValidID(c.Revision) || len(c.Commands) > 10000 {
-		return fmt.Errorf("命令配置版本或大小无效")
+		return i18n.Err("err.localcmd.catalog_version_size")
 	}
 	ids := map[string]bool{}
 	for i, command := range c.Commands {
 		if !wire.ValidID(command.ID) || !wire.ValidID(command.Revision) || ids[command.ID] {
-			return fmt.Errorf("命令身份无效")
+			return i18n.Err("err.localcmd.invalid_id")
 		}
 		ids[command.ID] = true
 		if _, err := normalize(command); err != nil {
@@ -163,11 +165,11 @@ func validateCatalog(c Catalog) error {
 		}
 		for _, other := range c.Commands[:i] {
 			if sameLaunch(command, other) {
-				return fmt.Errorf("命令配置存在重复启动项")
+				return i18n.Err("err.localcmd.duplicate_entry")
 			}
 			for _, name := range commandNames(command) {
 				if containsName(commandNames(other), name) {
-					return fmt.Errorf("命令名称冲突")
+					return i18n.Err("err.localcmd.name_conflict_generic")
 				}
 			}
 		}

@@ -6,12 +6,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/jackgan90/Asterhand/internal/i18n"
 )
 
 type Installation struct {
@@ -25,14 +26,14 @@ type Installation struct {
 func ReadInstallation(path string) (Installation, error) {
 	var result Installation
 	if err := readJSON(path, &result); err != nil {
-		return result, fmt.Errorf("读取安装记录失败，请重新运行安装器：%w", err)
+		return result, i18n.Wrap("err.launch.read_install_failed", nil, err)
 	}
 	if result.Schema != 1 {
-		return result, errors.New("安装记录版本不受支持，请重新运行安装器")
+		return result, i18n.Err("err.launch.unsupported_install_schema")
 	}
 	for _, p := range []string{result.Executable, result.Data} {
 		if !filepath.IsAbs(p) || strings.ContainsAny(p, "\x00\r\n\"") {
-			return result, errors.New("安装记录包含无效的绝对路径")
+			return result, i18n.Err("err.launch.invalid_abs_path")
 		}
 	}
 	root, err := canonicalPath(filepath.Dir(path))
@@ -45,22 +46,22 @@ func ReadInstallation(path string) (Installation, error) {
 	}
 	result.Executable, err = canonicalPath(result.Executable)
 	if err != nil {
-		return result, fmt.Errorf("节点程序不可用：%w", err)
+		return result, i18n.Wrap("err.launch.exe_unavailable", nil, err)
 	}
 	if !within(root, versions) || !within(versions, result.Executable) || !samePath(filepath.Base(result.Executable), "asterhand.exe") {
-		return result, errors.New("节点程序必须位于本安装目录的 versions 内")
+		return result, i18n.Err("err.launch.exe_outside_versions")
 	}
 	info, err := os.Stat(result.Executable)
 	if err != nil || !info.Mode().IsRegular() {
-		return result, errors.New("节点程序缺失或不是普通文件，请重新安装")
+		return result, i18n.Err("err.launch.exe_missing")
 	}
 	result.Data, err = canonicalPath(result.Data)
 	if err != nil {
-		return result, fmt.Errorf("数据目录无效：%w", err)
+		return result, i18n.Wrap("err.launch.data_dir_invalid", nil, err)
 	}
 	user, _ := os.UserHomeDir()
 	if samePath(result.Data, filepath.Dir(result.Data)) || samePath(result.Data, user) || samePath(root, result.Data) || within(root, result.Data) || within(result.Data, root) {
-		return result, errors.New("数据目录必须独立于程序目录、磁盘根目录和用户主目录")
+		return result, i18n.Err("err.launch.data_dir_overlap")
 	}
 	return result, nil
 }
@@ -92,7 +93,7 @@ func readJSON(path string, v any) error {
 		return err
 	}
 	if len(b) > 64*1024 {
-		return errors.New("状态文件过大")
+		return i18n.Err("err.launch.state_oversized")
 	}
 	b = bytes.TrimPrefix(b, []byte{0xef, 0xbb, 0xbf})
 	d := json.NewDecoder(bytes.NewReader(b))
@@ -101,7 +102,7 @@ func readJSON(path string, v any) error {
 	}
 	var extra any
 	if err = d.Decode(&extra); err != io.EOF {
-		return errors.New("状态文件包含额外内容")
+		return i18n.Err("err.launch.state_extra")
 	}
 	return nil
 }
@@ -118,12 +119,12 @@ func prepareHome(home string) error {
 	err := readJSON(filepath.Join(home, "config.json"), &cfg)
 	if err == nil {
 		if cfg.NodeID == "" {
-			return errors.New("已有配置缺少节点身份，请检查数据目录")
+			return i18n.Err("err.launch.missing_node_id")
 		}
 		return nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("已有节点配置无效：%w", err)
+		return i18n.Wrap("err.launch.invalid_node_config", nil, err)
 	}
 	entries, err := os.ReadDir(home)
 	if err != nil {
@@ -133,10 +134,10 @@ func prepareHome(home string) error {
 		switch entry.Name() {
 		case "startup.log", "error.log", "launcher.log", "startup.txt", "error.txt", "service.lock", "launch-state.json":
 			if entry.IsDir() {
-				return errors.New("数据目录中的状态或日志路径不是文件")
+				return i18n.Err("err.launch.path_not_file")
 			}
 		default:
-			return errors.New("数据目录已有其他内容，请使用空目录或已有 Asterhand 节点目录")
+			return i18n.Err("err.launch.data_dir_not_empty")
 		}
 	}
 	return nil

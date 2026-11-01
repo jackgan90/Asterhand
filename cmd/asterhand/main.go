@@ -13,6 +13,7 @@ import (
 	"github.com/jackgan90/Asterhand/internal/config"
 	"github.com/jackgan90/Asterhand/internal/environment"
 	"github.com/jackgan90/Asterhand/internal/executor"
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/launch"
 	"github.com/jackgan90/Asterhand/internal/quickinput"
 )
@@ -34,13 +35,20 @@ func run() error {
 		fmt.Println(config.Version)
 		return nil
 	}
+	loc := i18n.Effective()
 	if command == "pick-local-script" {
-		if len(args) != 0 {
-			return fmt.Errorf("脚本选择不接受参数")
+		f := flag.NewFlagSet(command, flag.ContinueOnError)
+		f.SetOutput(io.Discard)
+		locale := f.String("locale", "", i18n.T(loc, "desktop.cli.flag.locale"))
+		if err := f.Parse(args); err != nil {
+			return err
+		}
+		if f.NArg() != 0 {
+			return i18n.Err("err.cli.picker_no_args")
 		}
 		// The private parent pipe is kept open for the lifetime of the request.
 		go func() { _, _ = io.Copy(io.Discard, os.Stdin); os.Exit(0) }()
-		path, err := quickinput.RunScriptPicker()
+		path, err := quickinput.RunScriptPicker(*locale)
 		if err != nil {
 			return err
 		}
@@ -50,7 +58,7 @@ func run() error {
 	}
 	if command == "bundle-check" {
 		f := flag.NewFlagSet(command, flag.ContinueOnError)
-		base := f.String("directory", ".", "只读检查安装包目录")
+		base := f.String("directory", ".", i18n.T(loc, "desktop.cli.flag.directory"))
 		if err := f.Parse(args); err != nil {
 			return err
 		}
@@ -59,14 +67,14 @@ func run() error {
 		return environment.CheckBundle(ctx, *base)
 	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
-	home := flags.String("home", config.DefaultHome(), "节点数据目录")
-	web := flags.String("web", "", "本机 Web 监听地址")
-	peers := flags.String("peer", "", "节点 TLS 监听地址")
-	agent := flags.String("agent-runtime", "", "选择已安装的 agent runtime")
-	optionsPath := flags.String("runtime-options", "", "所选 runtime 的选项 JSON 文件（不含凭据）")
-	delay := flags.Int("acceptance-delay", 0, "隔离验收：文件创建前延迟秒数 (0—60)")
-	open := flags.Bool("open", false, "启动后打开本机 Web")
-	basic := flags.Bool("basic", false, "仅配置基础节点，不安装助手运行时")
+	home := flags.String("home", config.DefaultHome(), i18n.T(loc, "desktop.cli.flag.home"))
+	web := flags.String("web", "", i18n.T(loc, "desktop.cli.flag.web"))
+	peers := flags.String("peer", "", i18n.T(loc, "desktop.cli.flag.peer"))
+	agent := flags.String("agent-runtime", "", i18n.T(loc, "desktop.cli.flag.agent_runtime"))
+	optionsPath := flags.String("runtime-options", "", i18n.T(loc, "desktop.cli.flag.runtime_options"))
+	delay := flags.Int("acceptance-delay", 0, i18n.T(loc, "desktop.cli.flag.acceptance_delay"))
+	open := flags.Bool("open", false, i18n.T(loc, "desktop.cli.flag.open"))
+	basic := flags.Bool("basic", false, i18n.T(loc, "desktop.cli.flag.basic"))
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -89,7 +97,7 @@ func run() error {
 		return doctor(c)
 	}
 	if command != "start" && command != "setup" && command != "repair" {
-		return fmt.Errorf("可用命令: setup, start, open, status, doctor, repair, version")
+		return i18n.Err("err.cli.available_commands")
 	}
 	c, unlock, err := config.OpenLocked(*home)
 	if err != nil {
@@ -133,7 +141,7 @@ func run() error {
 		}
 	}
 	if *delay < 0 || *delay > 60 {
-		return fmt.Errorf("验收延迟必须为 0—60 秒")
+		return i18n.Err("err.cli.acceptance_delay_range")
 	}
 	cfg.AcceptanceDelay = *delay
 	if err = c.Save(cfg); err != nil {

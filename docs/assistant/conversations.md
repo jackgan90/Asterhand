@@ -194,3 +194,7 @@ Conversation / Turn / Task 分离。未来轮次可以产生工具活动、问�
 公共响应的 connection 字段仅返回 connecting、connected、unavailable，不包含底层原因。connect 操作复用共享启动，connection 操作只读配置、启动和私有桥状态。桥状态依据 Gateway 已认证连接、已有重连操作及真实聊天终态；缺少模型凭据或实际模型请求失败统一返回 unavailable。正常回复后恢复 connected，配置更换采用新实例并清除旧实例的失败记录。只读历史不会清除实际模型失败。
 
 展开聊天面板即启动本地 Agent，即使尚无会话；此操作不创建会话，也不请求模型。已连接确认本机 Agent 可达，模型认证仅随用户真实发送验证。连接轮询不得改变持久消息收据、发送队列、运行终态或重放策略。详见[连接状态计划](../development/features/chat-connection-status/plan.md)。
+
+## 会话错误与展示本地化边界
+
+公共会话协议 `internal/conversation/wire` 的 `Error` 保持原有机器错误码（`busy`、`rejected`、`not_found`、`unavailable`、`invalid_request` 等）决定排队、草稿回填与终态分流，同时可选携带 `message_key`、`message_args` 与非空兜底 `message`。[chatbridge](../../internal/executor/chatbridge/main.mjs) 向 Go 父进程返回的公开错误附带稳定消息标识，由 Go 适配层填入可选标识字段并按当前有效语言生成兜底文本；快捷输入宿主按当前语言本地化展示，未知标识或自由文本错误回退 `message` 原文。模型系统提示词与工具契约面向 LLM，不进入 UI 翻译表。

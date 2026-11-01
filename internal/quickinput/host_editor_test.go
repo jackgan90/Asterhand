@@ -96,7 +96,7 @@ func TestParentDraftRejectsStaleEpochAndConflictingSequence(t *testing.T) {
 }
 
 func TestMenuOnlyShowsActuallyUsableShortcut(t *testing.T) {
-	s := Status{Desired: Defaults(), Supported: true, Registration: "unavailable", Surface: "failed"}
+	s := Status{Desired: Defaults(), EffectiveLocale: "zh-CN", Supported: true, Registration: "unavailable", Surface: "failed"}
 	if strings.Contains(s.MenuLabel(), "Ctrl") {
 		t.Fatal("unregistered shortcut advertised")
 	}
@@ -109,5 +109,9 @@ func TestMenuOnlyShowsActuallyUsableShortcut(t *testing.T) {
 	s.Registration = "recovering"
 	if strings.Contains(s.MenuLabel(), "Ctrl") || !strings.Contains(s.MenuLabel(), "恢复") {
 		t.Fatal("recovering advertised ready")
+	}
+	s.EffectiveLocale = "en-US"
+	if strings.Contains(s.MenuLabel(), "Ctrl") || !strings.Contains(s.MenuLabel(), "Recovering") {
+		t.Fatal("english recovering label mismatch")
 	}
 }

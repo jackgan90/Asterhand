@@ -31,6 +31,9 @@ func (s *nativeSurface) resume() {
 	}
 	if s.documentReady {
 		_ = s.postJSON(map[string]string{"kind": "theme", "theme": s.theme})
+		if s.locale != "" {
+			_ = s.postJSON(map[string]string{"kind": "locale", "locale": s.locale})
+		}
 	}
 }
 

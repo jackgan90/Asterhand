@@ -61,7 +61,7 @@ func (c *chatController) dispatch(surface *remoteSurface, message hostipc.Messag
 	if c.closing || c.inflight >= 8 || !priority && c.inflight >= 4 || read && c.reads >= 2 {
 		c.mu.Unlock()
 		_ = surface.send(hostipc.Message{Kind: hostipc.ChatResult, ChatID: message.ChatID,
-			ChatReply: &hostipc.ChatReply{Response: wire.Response{Error: &wire.Error{Code: "busy", Message: "会话入口正在处理请求，请稍后重试"}}}})
+			ChatReply: &hostipc.ChatReply{Response: wire.Response{Error: wire.PublicError(wire.FailKey("busy", "err.quickinput.chat_busy_retry"))}}})
 		return
 	}
 	c.inflight++
@@ -83,7 +83,7 @@ func (c *chatController) dispatch(surface *remoteSurface, message hostipc.Messag
 			c.wg.Done()
 			c.mu.Unlock()
 			_ = surface.send(hostipc.Message{Kind: hostipc.ChatResult, ChatID: message.ChatID,
-				ChatReply: &hostipc.ChatReply{Response: wire.Response{Error: &wire.Error{Code: "busy", Message: "请先核对之前的发送状态"}}}})
+				ChatReply: &hostipc.ChatReply{Response: wire.Response{Error: wire.PublicError(wire.FailKey("busy", "err.quickinput.chat_reconcile_first"))}}})
 			return
 		}
 		c.order++

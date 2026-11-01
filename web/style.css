@@ -287,7 +287,19 @@ label { display: block; }
 .connection::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); }
 .connection[data-state="online"]::before { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
 .connection[data-state="offline"]::before { background: var(--danger); }
-.top-actions { display: flex; gap: 4px; }
+.top-actions { display: flex; align-items: center; gap: 4px; }
+.locale-select {
+  width: auto;
+  margin-top: 0;
+  padding: 6px 28px 6px 10px;
+  font-size: 13px;
+  color: var(--muted);
+  background-color: transparent;
+  border-color: transparent;
+  border-radius: 10px;
+  background-position: right 8px center;
+}
+.locale-select:hover:not(:disabled) { color: var(--fg); background-color: var(--hover); }
 
 /* Login */
 .login-card { width: min(420px, 92vw); margin: 14vh auto 0; padding: 40px 36px; border-radius: 22px; text-align: center; }

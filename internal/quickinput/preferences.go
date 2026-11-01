@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/model"
 )
 
@@ -18,16 +18,32 @@ type Preferences struct {
 	Enabled  bool    `json:"enabled"`
 	Binding  Binding `json:"binding"`
 	Theme    string  `json:"theme_id"`
+	Locale   string  `json:"locale"`
 }
 
-func Defaults() Preferences { return Preferences{1, model.ID(), true, DefaultBinding(), "star"} }
+func Defaults() Preferences {
+	return Preferences{
+		Schema:   1,
+		Revision: model.ID(),
+		Enabled:  true,
+		Binding:  DefaultBinding(),
+		Theme:    "star",
+		Locale:   "auto",
+	}
+}
 
 func (p Preferences) validated() (Preferences, error) {
+	if p.Locale == "" {
+		p.Locale = "auto"
+	}
 	if p.Schema != 1 || p.Revision == "" || len(p.Revision) > 100 {
-		return p, fmt.Errorf("桌面配置格式或版本无效")
+		return p, i18n.Err("err.quickinput.prefs_invalid_schema")
 	}
 	if p.Theme != "star" && p.Theme != "frost" {
-		return p, fmt.Errorf("请选择内置主题")
+		return p, i18n.Err("err.quickinput.prefs_builtin_theme")
+	}
+	if !i18n.ValidPreference(p.Locale) {
+		return p, i18n.Err("err.quickinput.prefs_invalid_locale")
 	}
 	binding, err := p.Binding.Normalize()
 	p.Binding = binding
@@ -55,22 +71,23 @@ func (s *PreferencesStore) Load() (Preferences, error) {
 		return Preferences{}, err
 	}
 	if len(b) > 16*1024 {
-		return Preferences{}, fmt.Errorf("桌面配置超过 16 KiB")
+		return Preferences{}, i18n.Err("err.quickinput.prefs_oversized")
 	}
 	var p Preferences
 	decoder := json.NewDecoder(bytes.NewReader(b))
 	decoder.DisallowUnknownFields()
 	if err = decoder.Decode(&p); err != nil {
-		return p, fmt.Errorf("桌面配置损坏，请恢复默认或修复原文件")
+		return p, i18n.Err("err.quickinput.prefs_corrupt")
 	}
 	if decoder.Decode(new(any)) != io.EOF {
-		return p, fmt.Errorf("桌面配置包含多余内容")
+		return p, i18n.Err("err.quickinput.prefs_extra")
 	}
 	return p.validated()
 }
 
 func (s *PreferencesStore) Save(p Preferences) error {
-	if _, err := p.validated(); err != nil {
+	p, err := p.validated()
+	if err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(p, "", "  ")

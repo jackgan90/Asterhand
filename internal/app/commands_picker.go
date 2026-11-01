@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/localcommands"
 	"github.com/jackgan90/Asterhand/internal/quickinput"
 )
@@ -11,7 +12,7 @@ import (
 func (a *App) browseCommandScript(w http.ResponseWriter, r *http.Request) {
 	var input struct{}
 	if err := readCommand(w, r, &input); err != nil {
-		fail(w, http.StatusBadRequest, err)
+		a.fail(w, r, http.StatusBadRequest, err)
 		return
 	}
 	a.mu.Lock()
@@ -21,7 +22,7 @@ func (a *App) browseCommandScript(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Unlock()
 	if busy || stopping {
-		send(w, http.StatusConflict, map[string]string{"error": "文件选择窗口已打开或节点正在退出"})
+		a.fail(w, r, http.StatusConflict, i18n.Err("err.app.picker_busy"))
 		return
 	}
 	defer func() { a.mu.Lock(); a.commandPicking = false; a.mu.Unlock() }()
@@ -40,7 +41,7 @@ func (a *App) browseCommandScript(w http.ResponseWriter, r *http.Request) {
 		path, err = localcommands.ScriptPath(path)
 	}
 	if err != nil {
-		fail(w, http.StatusBadRequest, err)
+		a.fail(w, r, http.StatusBadRequest, err)
 		return
 	}
 	send(w, http.StatusOK, map[string]any{"path": path, "cancelled": path == ""})

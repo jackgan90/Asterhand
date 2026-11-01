@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/model"
 	"github.com/jackgan90/Asterhand/internal/store"
 )
@@ -29,7 +29,7 @@ func (e *Engine) Tool(ctx context.Context, token string, c ToolCall) (result any
 	a := e.active[token]
 	e.mu.Unlock()
 	if a == nil {
-		return nil, errors.New("执行凭据已失效")
+		return nil, i18n.Err("err.tasks.tool_token_expired")
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -42,33 +42,33 @@ func (e *Engine) Tool(ctx context.Context, token string, c ToolCall) (result any
 		return nil, err
 	}
 	if c.OperationID == "" || len(c.OperationID) > 200 {
-		return nil, errors.New("缺少稳定工具调用 ID")
+		return nil, i18n.Err("err.tasks.tool_missing_op_id")
 	}
 	var j model.Job
 	if err := e.Store.Get("job", a.job, &j); err != nil {
 		return nil, err
 	}
 	if j.Attempt != a.attempt || model.Terminal(j.State) || j.State == "cancel_requested" {
-		return nil, errors.New("当前 attempt 不接受工具调用")
+		return nil, i18n.Err("err.tasks.tool_attempt_closed")
 	}
 	switch c.Tool {
 	case "asterhand_create_text", "asterhand_read_text":
 		if a.mode != "execute" {
-			return nil, errors.New("路由任务无文件权限")
+			return nil, i18n.Err("err.tasks.route_no_file_perm")
 		}
 		return e.fileTool(a, j, c)
 	case "asterhand_ask_user":
 		return e.ask(a, j, c)
 	case "asterhand_submit":
 		if a.mode != "route" || e.SubmitRemote == nil {
-			return nil, errors.New("执行节点不允许再次委派")
+			return nil, i18n.Err("err.tasks.execute_no_redelegate")
 		}
 		var args Submission
 		if err := json.Unmarshal(c.Arguments, &args); err != nil {
 			return nil, err
 		}
 		if len(args.Goal) == 0 || len(args.Goal) > 16000 {
-			return nil, errors.New("任务目标无效")
+			return nil, i18n.Err("err.tasks.invalid_goal")
 		}
 		if _, err := e.Store.Change(j.ID, "submission_started", func(current *model.Job) (any, error) {
 			return nil, activeJob(a, current)
@@ -92,16 +92,16 @@ func (e *Engine) Tool(ctx context.Context, token string, c ToolCall) (result any
 		})
 		return map[string]string{"submission_id": o.ID, "state": "queued_for_delivery", "owner": o.PeerID}, err
 	default:
-		return nil, errors.New("未授权的工具")
+		return nil, i18n.Err("err.tasks.unauthorized_tool")
 	}
 }
 func safePath(path string) error {
 	if path == "" || len(path) > 500 || strings.ContainsAny(path, "\x00:") || filepath.IsAbs(path) || !filepath.IsLocal(path) {
-		return errors.New("请使用授权项目内的相对路径")
+		return i18n.Err("err.tasks.relative_path_required")
 	}
 	for _, part := range strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' }) {
 		if part == ".." || part == "." || strings.TrimRight(part, " .") != part {
-			return errors.New("不允许路径穿越或尾随点/空格")
+			return i18n.Err("err.tasks.path_traversal")
 		}
 	}
 	return nil
@@ -118,7 +118,7 @@ func (e *Engine) fileTool(a *active, j model.Job, c ToolCall) (any, error) {
 		return nil, err
 	}
 	if len(args.Content) > MaxText || !utf8.ValidString(args.Content) {
-		return nil, errors.New("文本必须为 UTF-8，最多 64 KiB")
+		return nil, i18n.Err("err.tasks.text_utf8_limit")
 	}
 	p, err := e.project(j.Request.ProjectID)
 	if err != nil {
@@ -147,7 +147,7 @@ func (e *Engine) fileTool(a *active, j model.Job, c ToolCall) (any, error) {
 		if existing.State == "completed" {
 			return existing.Artifact, e.Store.CompleteOperation(existing)
 		}
-		return nil, errors.New("此文件操作结果尚未确认，需核对，禁止重新写入")
+		return nil, i18n.Err("err.tasks.op_pending_reconcile")
 	}
 	if !errors.Is(err, store.ErrNotFound) {
 		return nil, err
@@ -178,7 +178,7 @@ func (e *Engine) fileTool(a *active, j model.Job, c ToolCall) (any, error) {
 	if err != nil {
 		op.State = "no_effect"
 		e.Store.Put("operation", opID, op)
-		return nil, fmt.Errorf("文件创建失败（不覆盖已有文件）: %w", err)
+		return nil, i18n.Wrap("err.tasks.file_create_failed", nil, err)
 	}
 	_, err = io.WriteString(f, args.Content)
 	if err == nil {
@@ -196,7 +196,7 @@ func (e *Engine) fileTool(a *active, j model.Job, c ToolCall) (any, error) {
 		return nil, err
 	}
 	if string(b) != args.Content {
-		return nil, errors.New("创建后读取校验失败")
+		return nil, i18n.Err("err.tasks.readback_mismatch")
 	}
 	preview := b
 	if len(preview) > 8000 {
@@ -221,14 +221,14 @@ func readText(root *os.Root, path string) ([]byte, error) {
 		return nil, err
 	}
 	if !info.Mode().IsRegular() {
-		return nil, errors.New("仅允许普通文本文件")
+		return nil, i18n.Err("err.tasks.regular_file_only")
 	}
 	b, err := io.ReadAll(io.LimitReader(f, MaxText+1))
 	if err != nil {
 		return nil, err
 	}
 	if len(b) > MaxText || !utf8.Valid(b) {
-		return nil, errors.New("文件不是有效 UTF-8 或超过 64 KiB")
+		return nil, i18n.Err("err.tasks.read_utf8_limit")
 	}
 	return b, nil
 }
@@ -240,7 +240,7 @@ func (e *Engine) ask(a *active, j model.Job, c ToolCall) (any, error) {
 		return nil, err
 	}
 	if len(args.Question) == 0 || len(args.Question) > 4000 {
-		return nil, errors.New("问题长度无效")
+		return nil, i18n.Err("err.tasks.invalid_question_len")
 	}
 	interaction := model.Interaction{ID: model.Hash([]string{j.ID, j.Attempt, c.OperationID}), Attempt: j.Attempt, NativeID: c.OperationID, Kind: "question", Question: args.Question, Expires: time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339Nano), State: "pending"}
 	_, err := e.Store.Change(j.ID, "input_requested", func(j *model.Job) (any, error) {
@@ -270,38 +270,38 @@ func (e *Engine) ask(a *active, j model.Job, c ToolCall) (any, error) {
 			return nil, err
 		}
 		if j.Interaction == nil || j.Interaction.ID != interaction.ID {
-			return nil, errors.New("问题已失效")
+			return nil, i18n.Err("err.tasks.question_expired")
 		}
 		if j.Interaction.State == "saved" || j.Interaction.State == "delivered" {
 			return e.deliverAnswer(a, interaction.ID)
 		}
 		deadline, _ := time.Parse(time.RFC3339Nano, interaction.Expires)
 		if !time.Now().Before(deadline) {
-			return nil, errors.New("等待回答超过 10 分钟")
+			return nil, i18n.Err("err.tasks.answer_timeout")
 		}
 	}
 }
 func (e *Engine) Answer(id, interactionID, attempt, answerID, answer, actor string) (model.Job, error) {
 	if len(answerID) < 8 || len(answer) > 4000 || answer == "" {
-		return model.Job{}, errors.New("回答内容或请求 ID 无效")
+		return model.Job{}, i18n.Err("err.tasks.answer_invalid")
 	}
 	return e.Store.ChangeControl(id, "answer_saved", func(j *model.Job) (any, error) {
 		i := j.Interaction
 		if i == nil || i.ID != interactionID || i.Attempt != attempt || j.Attempt != attempt {
-			return nil, errors.New("问题与当前 attempt 不匹配")
+			return nil, i18n.Err("err.tasks.answer_attempt_mismatch")
 		}
 		if i.Kind != "question" && actor != "local" {
-			return nil, errors.New("审批必须在执行节点本机处理")
+			return nil, i18n.Err("err.tasks.approval_local_only")
 		}
 		if i.State == "saved" || i.State == "delivered" {
 			if i.AnswerID == answerID && i.Answer == answer {
 				return nil, store.ErrUnchanged
 			}
-			return nil, errors.New("问题已经回答")
+			return nil, i18n.Err("err.tasks.answer_already_answered")
 		}
 		deadline, _ := time.Parse(time.RFC3339Nano, i.Expires)
 		if i.State != "pending" || j.State != "waiting_input" || !time.Now().Before(deadline) {
-			return nil, errors.New("问题已失效")
+			return nil, i18n.Err("err.tasks.question_expired")
 		}
 		i.Answer = answer
 		i.AnswerID = answerID
@@ -316,7 +316,7 @@ func activeJob(a *active, j *model.Job) error {
 		return err
 	}
 	if j.Attempt != a.attempt || j.State != "running" {
-		return errors.New("当前 attempt 状态已改变")
+		return i18n.Err("err.tasks.attempt_state_changed")
 	}
 	return nil
 }
@@ -329,14 +329,14 @@ func (e *Engine) deliverAnswer(a *active, interactionID string) (any, error) {
 		}
 		i := j.Interaction
 		if j.Attempt != a.attempt || i == nil || i.ID != interactionID || i.Attempt != a.attempt {
-			return nil, errors.New("问题与当前 attempt 不匹配")
+			return nil, i18n.Err("err.tasks.answer_attempt_mismatch")
 		}
 		if i.State == "delivered" && j.State == "running" {
 			answer = i.Answer
 			return nil, store.ErrUnchanged
 		}
 		if j.State != "waiting_input" || i.State != "saved" {
-			return nil, errors.New("问题已失效")
+			return nil, i18n.Err("err.tasks.question_expired")
 		}
 		answer = i.Answer
 		i.State = "delivered"

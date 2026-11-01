@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/llm"
 	"github.com/jackgan90/Asterhand/packaging"
 )
@@ -25,17 +26,29 @@ func normalize(c Config) Config {
 		}
 	}
 	c.Model = ""
+	if len(c.Projects) > 0 {
+		c.Projects = append([]Project(nil), c.Projects...)
+		for i := range c.Projects {
+			if c.Projects[i].ID == "workspace" && !c.Projects[i].NameCustom {
+				if c.Projects[i].Name == "" {
+					c.Projects[i].Name = legacyDefaultWorkspaceName
+				} else if c.Projects[i].Name != legacyDefaultWorkspaceName {
+					c.Projects[i].NameCustom = true
+				}
+			}
+		}
+	}
 	return c
 }
 func ValidateSelection(c Config) error {
 	if !credentialID.MatchString(c.LLM.CredentialRef) {
-		return errors.New("凭据引用格式无效")
+		return i18n.Err("err.config.invalid_credential_ref")
 	}
 	return llm.Validate(c.LLM)
 }
 func (m *Manager) SetCredential(ref, key string) error {
 	if !credentialID.MatchString(ref) {
-		return errors.New("凭据引用格式无效")
+		return i18n.Err("err.config.invalid_credential_ref")
 	}
 	path := filepath.Join(m.Home, ref+".secret")
 	if key == "" {
@@ -53,7 +66,7 @@ func (m *Manager) SetCredential(ref, key string) error {
 }
 func (m *Manager) Credential(ref string) (string, error) {
 	if !credentialID.MatchString(ref) {
-		return "", errors.New("凭据引用格式无效")
+		return "", i18n.Err("err.config.invalid_credential_ref")
 	}
 	b, err := os.ReadFile(filepath.Join(m.Home, ref+".secret"))
 	if err != nil {

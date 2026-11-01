@@ -1,22 +1,36 @@
 import {commandClient} from './command-client.mjs';
 import {commandQuery, filterCommands} from './command-model.mjs';
 import {commandResults} from './command-results.mjs';
+import {getLocale, localizeError, localizeMessage, t} from './i18n.mjs';
 
 export function commandPanel(bridge, {input, post, changed, sendText}) {
   const root = document.getElementById('command-panel');
-  if (!root) return {changed() {}, key() {return false;}, submit() {return false;}, dispose() {}};
+  if (!root) return {changed() {}, key() {return false;}, submit() {return false;}, relocalize() {}, dispose() {}};
   const list = document.getElementById('command-list'), message = document.getElementById('command-message');
   const run = document.getElementById('command-run');
   const empty = document.getElementById('command-empty'), chatSend = document.getElementById('chat-send');
-  const client = commandClient(bridge, post), results = commandResults(), cleanup = [];
+  const client = commandClient(bridge, post), results = commandResults(), errorMeta = new Map(), cleanup = [];
   let entries = [], filtered = [], selected = '', ready = false, visible = false, dismissed = false, composing = false;
-  let loading = false, disposed = false, timer = null, lastText = '', painted = '';
+  let loading = false, disposed = false, timer = null, lastText = '', painted = '', messageState = null;
   const listen = (target, name, callback) => { target.addEventListener(name, callback); cleanup.push(() => target.removeEventListener(name, callback)); };
   const query = () => commandQuery(input.value);
   const active = () => ready && visible && query() !== null && !dismissed;
-  function say(text) {
+  function clearMessage() {
+    messageState = null;
+    message.textContent = ''; message.hidden = true;
+    measure();
+  }
+  function showError(err) {
+    messageState = {err};
+    const text = localizeError(err);
     message.textContent = text; message.hidden = !text;
     measure();
+  }
+  function rowErrorText(id) {
+    const raw = results.error(id);
+    if (!raw) return '';
+    const meta = errorMeta.get(id);
+    return meta ? localizeError(meta) : raw;
   }
   function measure() {
     if (!root.hidden) {
@@ -44,7 +58,7 @@ export function commandPanel(bridge, {input, post, changed, sendText}) {
     }
     filtered = filterCommands(entries, query());
     if (!filtered.some(entry => entry.id === selected)) selected = filtered[0]?.id ?? '';
-    const signature = JSON.stringify(filtered.map(entry => [entry, results.error(entry.id)]));
+    const signature = JSON.stringify([getLocale(), filtered.map(entry => [entry, rowErrorText(entry.id)])]);
     if (signature === painted) { highlight(scroll); measure(); return; }
     painted = signature;
     const previousScroll = list.scrollTop;
@@ -58,13 +72,15 @@ export function commandPanel(bridge, {input, post, changed, sendText}) {
       const aliases = [...(entry.aliases ?? [])].sort((a, b) => Number(b === entry.matchedName) - Number(a === entry.matchedName));
       title.textContent = entry.name + (aliases.length ? ' · ' + aliases.join(' / ') : '');
       title.title = title.textContent;
+      const detailText = localizeMessage(entry.detail_key, entry.detail_args, entry.detail || '');
       const failed = !['ready', 'checking'].includes(entry.state);
-      description.textContent = failed ? entry.detail : entry.description || (entry.state === 'checking' ? '正在检查脚本' : '本地脚本');
-      row.title = [title.textContent, entry.description, failed ? entry.detail : ''].filter(Boolean).join('\n');
+      description.textContent = failed ? detailText : entry.description || t(entry.state === 'checking' ? 'quickinput.commands_checking' : 'quickinput.commands_local_script');
+      row.title = [title.textContent, entry.description, failed ? detailText : ''].filter(Boolean).join('\n');
       info.append(title, description);
       const error = document.createElement('span');
-      error.className = 'command-error'; error.textContent = results.error(entry.id); error.hidden = !error.textContent;
-      error.title = error.textContent ? error.textContent + '\n点击打开配置' : '';
+      const errText = rowErrorText(entry.id);
+      error.className = 'command-error'; error.textContent = errText; error.hidden = !errText;
+      error.title = errText ? t('quickinput.commands_open_config_hint', {error: errText}) : '';
       error.setAttribute('role', 'status');
       row.append(info, error);
       row.addEventListener('pointerdown', event => { if (event.button === 0) event.preventDefault(); });
@@ -76,7 +92,7 @@ export function commandPanel(bridge, {input, post, changed, sendText}) {
     }
     list.scrollTop = previousScroll;
     empty.hidden = Boolean(filtered.length);
-    empty.textContent = loading && !entries.length ? '正在读取命令…' : entries.length ? '未找到命令' : '尚未注册命令，点击“管理命令”添加';
+    empty.textContent = t(loading && !entries.length ? 'quickinput.commands_loading' : entries.length ? 'quickinput.commands_no_match' : 'quickinput.commands_empty');
     run.disabled = !selected;
     highlight(scroll); measure();
   }
@@ -91,9 +107,13 @@ export function commandPanel(bridge, {input, post, changed, sendText}) {
         if (disposed || !active()) return;
         all.push(...(response.entries ?? [])); catalog = response.catalog; offset = response.next ?? 0;
       } while (offset);
-      entries = all; results.retain(all.map(entry => entry.id)); say(''); paint();
+      const ids = all.map(entry => entry.id);
+      entries = all; results.retain(ids);
+      const keep = new Set(ids);
+      for (const id of errorMeta.keys()) if (!keep.has(id)) errorMeta.delete(id);
+      clearMessage(); paint();
     } catch (error) {
-      if (!disposed) { entries = []; say(error.message); paint(); }
+      if (!disposed) { entries = []; showError(error); paint(); }
     } finally {
       loading = false;
       if (active() && !disposed) timer = setTimeout(refresh, 1500);
@@ -102,12 +122,18 @@ export function commandPanel(bridge, {input, post, changed, sendText}) {
   async function execute(entry) {
     if (composing || !entry) return;
     const version = results.begin(entry.id);
-    if (entry.state === 'missing') { results.finish(entry.id, version, '命令脚本缺失，请更新配置'); paint(); return; }
+    if (entry.state === 'missing') {
+      const msg = t('quickinput.commands_missing_script');
+      if (results.finish(entry.id, version, msg)) errorMeta.set(entry.id, {messageKey: 'quickinput.commands_missing_script', rawMessage: msg});
+      paint();
+      return;
+    }
     try {
       const response = await client.call('launch', {command_id:entry.id, revision:entry.revision});
-      if (!disposed && response.started && results.finish(entry.id, version)) paint();
+      if (!disposed && response.started && results.finish(entry.id, version)) { errorMeta.delete(entry.id); paint(); }
     } catch (error) {
-      if (disposed || !results.finish(entry.id, version, error.message)) return;
+      if (disposed || !results.finish(entry.id, version, localizeError(error))) return;
+      errorMeta.set(entry.id, error);
       paint();
       if (error.code === 'conflict' || error.code === 'not_found') void refresh();
     }
@@ -115,7 +141,7 @@ export function commandPanel(bridge, {input, post, changed, sendText}) {
   }
   async function settings(id = '') {
     try { await client.call('settings', {command_id:id}); }
-    catch (error) { if (!disposed) say(error.message); }
+    catch (error) { if (!disposed) showError(error); }
   }
   function textChanged() {
     if (composing || disposed) return;
@@ -137,6 +163,16 @@ export function commandPanel(bridge, {input, post, changed, sendText}) {
     selected = filtered[Math.max(0, Math.min(filtered.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))]?.id ?? '';
     highlight(true); return true;
   }
+  function relocalize() {
+    if (disposed) return;
+    if (messageState) {
+      const text = localizeError(messageState.err);
+      message.textContent = text;
+      message.hidden = !text;
+    }
+    painted = '';
+    paint();
+  }
   listen(input, 'compositionstart', () => {composing = true;});
   listen(input, 'compositionend', () => {composing = false; textChanged();});
   listen(input, 'input', textChanged);
@@ -152,5 +188,5 @@ export function commandPanel(bridge, {input, post, changed, sendText}) {
     disposed = true; clearTimeout(timer); unsubscribe(); client.dispose();
     for (const remove of cleanup) remove();
   }
-  return {changed: textChanged, key, submit, dispose};
+  return {changed: textChanged, key, submit, relocalize, dispose};
 }

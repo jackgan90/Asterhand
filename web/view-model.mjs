@@ -1,3 +1,5 @@
+import {localizeMessage, t} from "./i18n.mjs";
+
 export function taskViews(jobs, outbox, localID) {
   const byID = new Map(jobs.map((job) => [job.id, job]));
   const represented = new Set(outbox.map((out) => out.id));
@@ -32,9 +34,9 @@ export function submissionState(local, target, project, goal, submitting) {
   if (submitting) return { disabled: true, busy: true, reason: "" };
   let reason = "";
   const localTasks = modelTaskStatus(local), targetTasks = modelTaskStatus(target);
-  if (!localTasks.available) reason = `本机：${localTasks.detail}`;
-  else if (!targetTasks.available) reason = `所选设备：${targetTasks.detail}`;
-  else if (!project) reason = "所选设备还没有工作目录，请先在设置中添加。";
+  if (!localTasks.available) reason = t("web.vm.local_reason", {detail: localTasks.detail});
+  else if (!targetTasks.available) reason = t("web.vm.target_reason", {detail: targetTasks.detail});
+  else if (!project) reason = t("web.vm.missing_project");
   // An empty goal only disables sending; the placeholder already explains it.
   return { disabled: !!reason || !goal.trim(), busy: false, reason };
 }
@@ -42,7 +44,8 @@ export function submissionState(local, target, project, goal, submitting) {
 export function modelTaskStatus(info) {
   if (info?.capabilities !== undefined) {
     const status = info.capabilities?.model_tasks;
-    return {available:status?.available === true, detail:status?.detail || "未获取到模型配置，请在该设备的设置中检查。"};
+    const detail = localizeMessage(status?.message_key, status?.message_args, status?.detail || "") || t("web.vm.missing_model_status");
+    return {available: status?.available === true, detail};
   }
-  return {available:info?.ready === true, detail:"该设备版本较旧（旧版验证规则），请升级后使用。"};
+  return {available: info?.ready === true, detail: t("web.vm.legacy_node")};
 }

@@ -1,10 +1,10 @@
 package executor
 
 import (
-	"fmt"
 	"path/filepath"
 
 	"github.com/jackgan90/Asterhand/internal/config"
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/packaging"
 )
 
@@ -23,7 +23,7 @@ func openClawProvider(c config.Config) (providerBridge, error) {
 		}
 		return providerBridge{"deepseek", d.Package, "DEEPSEEK_API_KEY", d.Version}, nil
 	default:
-		return providerBridge{}, fmt.Errorf("OpenClaw 未适配模型 provider: %s", c.LLM.Provider)
+		return providerBridge{}, i18n.ErrArgs("err.executor.provider_unadapted", map[string]string{"provider": c.LLM.Provider})
 	}
 }
 func (p providerBridge) Path(base string) string {

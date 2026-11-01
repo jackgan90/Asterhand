@@ -19,7 +19,7 @@ const sessionKey = binding => `agent:main:asterhand:${binding.key}`;
 async function readHistory(binding, extra = {}) {
   const result = await gateway.readyRead('chat.history', {sessionKey: sessionKey(binding), limit: 50, maxChars: HISTORY_MAX_CHARS, maxBytes: 65536, ...extra});
   if (binding.session && (result.sessionId !== binding.session || result.sessionInfo?.lifecycleRevision !== binding.lifecycle)) {
-    throw failure('binding_changed', '原生会话身份或生命周期已变化，已停止访问原绑定');
+    throw failure('binding_changed', 'err.chatbridge.native_binding_changed', 'Native session identity or lifecycle changed; stopped accessing previous binding.');
   }
   return result;
 }
@@ -27,18 +27,20 @@ async function readHistory(binding, extra = {}) {
 async function create(binding) {
   await gateway.readyRead('sessions.create', {key: sessionKey(binding)});
   const history = await readHistory(binding);
-  if (!history.sessionId || !history.sessionInfo?.lifecycleRevision) throw failure('unavailable', '会话绑定尚未确认');
+  if (!history.sessionId || !history.sessionInfo?.lifecycleRevision) {
+    throw failure('unavailable', 'err.chatbridge.binding_unconfirmed', 'Conversation binding is not yet confirmed.');
+  }
   return {...binding, session: history.sessionId, lifecycle: history.sessionInfo.lifecycleRevision};
 }
 
 async function submit(command) {
   if (!validID(command.run) || typeof command.text !== 'string' || !command.text.trim() ||
     Buffer.byteLength(command.text) > 16000 || command.text.includes('\r') || command.text.trimStart().startsWith('/')) {
-    throw failure('rejected', '聊天文本无效或包含管理命令，草稿已保留');
+    throw failure('rejected', 'err.chatbridge.invalid_or_admin_cmd', 'Chat text is invalid or contains an admin command. Draft preserved.');
   }
   let history;
   try { history = await readHistory(command.binding); }
-  catch { throw failure('rejected', '发送前会话校验失败，草稿已保留，请刷新核对绑定'); }
+  catch { throw failure('rejected', 'err.chatbridge.preflight_failed', 'Pre-send session verification failed. Draft preserved; refresh to verify binding.'); }
   promptMonitor.begin(command.run, command.binding.session);
   const result = await gateway.rpc('chat.send', {
     sessionKey: sessionKey(command.binding), sessionId: command.binding.session, message: command.text,
@@ -59,7 +61,7 @@ async function submit(command) {
 async function handle(command) {
   if (command.action === 'bootstrap') {
     if (bootstrapped || typeof command.entry !== 'string' || !Number.isInteger(command.port) || !command.token) {
-      throw failure('invalid_request', '运行时初始化参数无效');
+      throw failure('invalid_request', 'err.chatbridge.invalid_init', 'Invalid runtime initialization parameters.');
     }
     bootstrapped = true;
     promptMonitor = new PromptMonitor(command.prompt, command.prompt_instance, async identity => {
@@ -75,7 +77,7 @@ async function handle(command) {
   }
   const binding = command.binding;
   if (!bootstrapped || !binding || !validID(binding.key) || binding.runtime !== 'openclaw' || !validID(binding.generation)) {
-    throw failure('invalid_request', '会话绑定无效');
+    throw failure('invalid_request', 'err.chatbridge.invalid_binding', 'Invalid conversation binding.');
   }
   await gateway.ensureConnected().catch(error => { throw command.action === 'submit' ? submissionError(error) : error; });
   switch (command.action) {
@@ -83,7 +85,7 @@ async function handle(command) {
     case 'submit': return submit(command);
     case 'history': {
       const offset = command.offset ?? 0;
-      if (!Number.isInteger(offset) || offset < 0) throw failure('invalid_request', '历史位置无效');
+      if (!Number.isInteger(offset) || offset < 0) throw failure('invalid_request', 'err.chatbridge.invalid_offset', 'Invalid history offset.');
       const history = await readHistory(binding, {offset});
       const project = value => visibleHistory(value, async (messageId, maxChars) => {
         const result = await gateway.rpc('chat.message.get', {sessionKey: sessionKey(binding),
@@ -95,7 +97,7 @@ async function handle(command) {
       return {...historyPage(await project(await readHistory(binding)), 0, ''), reset: true};
     }
     case 'message': {
-      if (!validID(command.message)) throw failure('invalid_request', '消息身份无效');
+      if (!validID(command.message)) throw failure('invalid_request', 'err.chatbridge.invalid_message', 'Invalid message ID.');
       await readHistory(binding, {limit: 1});
       const key = JSON.stringify([binding.key, binding.session, binding.lifecycle, command.message]);
       if (!fullMessage || fullMessage.key !== key || fullMessage.expires < Date.now()) {
@@ -103,7 +105,7 @@ async function handle(command) {
         const result = await gateway.rpc('chat.message.get', {sessionKey: sessionKey(binding), sessionId: binding.session,
           messageId: command.message, maxChars: FULL_MESSAGE_MAX_CHARS});
         if (!result.ok || !result.message || visibleBodyState(result.message, FULL_MESSAGE_MAX_CHARS) !== 'complete' || byteSize(result.message) > 32 * 1024 * 1024) {
-          throw failure('message_unavailable', '运行时无法在完整读取上限内返回消息，当前内容为预览');
+          throw failure('message_unavailable', 'err.chatbridge.message_oversized', 'Runtime cannot return the message within the full-read limit; showing preview.');
         }
         fullMessage = {key, bytes: messageBytes(result.message), expires: Date.now() + 30000};
         const entry = fullMessage;
@@ -112,20 +114,20 @@ async function handle(command) {
       return fragmentBytes(fullMessage.bytes, command.message, command.offset ?? 0);
     }
     case 'observe': {
-      if (!validID(command.run)) throw failure('invalid_request', '轮次身份无效');
+      if (!validID(command.run)) throw failure('invalid_request', 'err.chatbridge.invalid_run', 'Invalid turn ID.');
       const history = await readHistory(binding, {inputRunIds: [command.run]});
       const result = observation(history, command.run, command.started, gateway.started, streams.get(command.run, sessionKey(binding)));
       return {...result, prompt: await promptMonitor.status(command.run, binding.session, result.stopped)};
     }
     case 'cancel': {
-      if (!validID(command.run)) throw failure('invalid_request', '轮次身份无效');
+      if (!validID(command.run)) throw failure('invalid_request', 'err.chatbridge.invalid_run', 'Invalid turn ID.');
       await readHistory(binding, {limit: 1});
       // Stop this reply without withdrawing its accepted user input. Native
       // discardPendingInput is a queued-input operation and skips running turns.
       await gateway.rpc('chat.abort', {sessionKey: sessionKey(binding), runId: command.run});
       return {};
     }
-    default: throw failure('unsupported', '运行时不支持此会话操作');
+    default: throw failure('unsupported', 'err.chatbridge.unsupported_op', 'Runtime does not support this conversation operation.');
   }
 }
 
@@ -144,14 +146,20 @@ async function dispatch(line) {
     command = JSON.parse(line);
     if (typeof command.id !== 'string' || command.id.length > 32 || ++inflight > 16) process.exit(3);
     const result = await handle(command);
-    if (byteSize(result) > 64 * 1024) throw failure('unavailable', '会话结果超过分页限制');
+    if (byteSize(result) > 64 * 1024) throw failure('unavailable', 'err.chatbridge.page_oversized', 'Conversation result exceeds pagination limit.');
     reply({id: command.id, result});
   } catch (error) {
     if (!command?.id) process.exit(3);
     // Native errors may carry provider diagnostics. Only adapter-authored public
     // messages leave this process; native payloads are never forwarded or logged.
-    reply({id: command.id, error: {code: error.publicMessage ? error.code : 'unavailable',
-      message: error.publicMessage ? error.message : '会话运行时暂不可用，请核对状态'}});
+    reply({
+      id: command.id,
+      error: {
+        code: error.publicMessage ? error.code : 'unavailable',
+        message: error.publicMessage ? error.message : 'Session runtime is temporarily unavailable. Check status.',
+        message_key: error.publicMessage ? error.message_key : 'err.chatbridge.runtime_unavailable',
+      },
+    });
   } finally {
     inflight--;
   }

@@ -9,13 +9,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/localcommands/wire"
 )
 
 type fileStatus struct {
-	state, detail string
-	checked       time.Time
-	busy          bool
+	state, detailKey string
+	checked          time.Time
+	busy             bool
 }
 
 type probeTask struct {
@@ -26,14 +27,14 @@ type probeTask struct {
 func inspect(c Command) fileStatus {
 	f, err := os.Stat(c.Script)
 	if errors.Is(err, os.ErrNotExist) {
-		return fileStatus{state: "missing", detail: "命令脚本缺失，请更新配置"}
+		return fileStatus{state: "missing", detailKey: "status.localcmd.missing"}
 	}
 	if err != nil || !f.Mode().IsRegular() {
-		return fileStatus{state: "unavailable", detail: "命令脚本不可访问或不是普通文件"}
+		return fileStatus{state: "unavailable", detailKey: "status.localcmd.unavailable"}
 	}
 	f, err = os.Stat(c.WorkingDirectory())
 	if err != nil || !f.IsDir() {
-		return fileStatus{state: "directory_missing", detail: "工作目录不存在或不可访问，请更新配置"}
+		return fileStatus{state: "directory_missing", detailKey: "status.localcmd.directory_missing"}
 	}
 	return fileStatus{state: "ready"}
 }
@@ -45,7 +46,7 @@ func (r *Registry) status(c Command) fileStatus {
 	key := c.ID + c.Revision
 	status := r.statuses[key]
 	if status == nil {
-		status = &fileStatus{state: "checking", detail: "正在检查脚本"}
+		status = &fileStatus{state: "checking", detailKey: "status.localcmd.checking"}
 		r.statuses[key] = status
 	}
 	if !status.busy && time.Since(status.checked) > 2*time.Second {
@@ -89,18 +90,22 @@ func (r *Registry) List(request wire.Request) wire.Response {
 		return Failure(err)
 	}
 	if request.Catalog != "" && request.Catalog != catalog.Revision {
-		return Failure(problem("conflict", "命令列表已更新，请重新读取"))
+		return Failure(problem("conflict", "err.localcmd.list_updated"))
 	}
 	slices.SortFunc(catalog.Commands, func(a, b Command) int { return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)) })
 	if request.Offset > len(catalog.Commands) {
-		return Failure(problem("conflict", "命令列表已更新，请重新读取"))
+		return Failure(problem("conflict", "err.localcmd.list_updated"))
 	}
 	end := min(request.Offset+32, len(catalog.Commands))
 	reply := wire.Response{Catalog: catalog.Revision, Entries: []wire.Entry{}}
 	for _, c := range catalog.Commands[request.Offset:end] {
 		status := r.status(c)
+		detail := ""
+		if status.detailKey != "" {
+			detail = i18n.T(i18n.Effective(), status.detailKey)
+		}
 		reply.Entries = append(reply.Entries, wire.Entry{ID: c.ID, Revision: c.Revision, Name: c.Name,
-			Aliases: c.Aliases, Description: c.Description, State: status.state, Detail: status.detail})
+			Aliases: c.Aliases, Description: c.Description, State: status.state, Detail: detail, DetailKey: status.detailKey})
 		encoded, _ := json.Marshal(reply)
 		if len(encoded) > 96*1024 {
 			reply.Entries = reply.Entries[:len(reply.Entries)-1]
@@ -121,11 +126,11 @@ func (r *Registry) Launch(ctx context.Context, id, revision string) wire.Respons
 	}
 	i := slices.IndexFunc(catalog.Commands, func(c Command) bool { return c.ID == id })
 	if i < 0 {
-		return Failure(problem("not_found", "命令已删除，请刷新列表"))
+		return Failure(problem("not_found", "err.localcmd.deleted_refresh_list"))
 	}
 	command := catalog.Commands[i]
 	if command.Revision != revision {
-		return Failure(problem("conflict", "命令配置已变化，请刷新列表后重新选择"))
+		return Failure(problem("conflict", "err.localcmd.changed_reselect"))
 	}
 	if err := r.check(ctx, command); err != nil {
 		return Failure(err)
@@ -134,13 +139,13 @@ func (r *Registry) Launch(ctx context.Context, id, revision string) wire.Respons
 	defer r.mu.RUnlock()
 	// Do not launch a new configuration after a slow filesystem check.
 	if !slices.ContainsFunc(r.catalog.Commands, func(c Command) bool { return c.ID == id && c.Revision == revision }) {
-		return Failure(problem("conflict", "命令配置已变化，请刷新列表后重新选择"))
+		return Failure(problem("conflict", "err.localcmd.changed_reselect"))
 	}
 	if ctx.Err() != nil {
-		return Failure(problem("unavailable", "启动前检查超时，请重试"))
+		return Failure(problem("unavailable", "err.localcmd.precheck_timeout"))
 	}
 	if r.launch == nil {
-		return Failure(problem("unsupported", "当前平台不支持本地快捷命令"))
+		return Failure(problem("unsupported", "err.localcmd.platform_unsupported"))
 	}
 	if err := r.launch(command); err != nil {
 		return Failure(err)
@@ -152,25 +157,31 @@ func (r *Registry) check(ctx context.Context, c Command) error {
 	select {
 	case r.probes <- struct{}{}:
 	case <-ctx.Done():
-		return problem("unavailable", "文件检查超时，请检查磁盘状态后重试")
+		return problem("unavailable", "err.localcmd.stat_timeout")
 	}
 	done := make(chan fileStatus, 1)
 	go func() { defer func() { <-r.probes }(); done <- inspect(c) }()
 	select {
 	case status := <-done:
 		if status.state != "ready" {
-			return problem(status.state, status.detail)
+			return problem(status.state, status.detailKey)
 		}
 		return nil
 	case <-ctx.Done():
-		return problem("unavailable", "文件检查超时，请检查磁盘状态后重试")
+		return problem("unavailable", "err.localcmd.stat_timeout")
 	}
 }
 
 func Failure(err error) wire.Response {
 	var public *wire.Error
-	if !errors.As(err, &public) {
-		public = &wire.Error{Code: "unavailable", Message: err.Error()}
+	if errors.As(err, &public) {
+		out := *public
+		out.Message = out.Error()
+		out.MessageArgs = i18n.CloneArgs(public.MessageArgs)
+		return wire.Response{Error: &out}
 	}
-	return wire.Response{Error: public}
+	if key, args, ok := i18n.ErrorDetails(err); ok {
+		return wire.Response{Error: wire.FailKey("unavailable", key, args)}
+	}
+	return wire.Response{Error: &wire.Error{Code: "unavailable", Message: err.Error()}}
 }

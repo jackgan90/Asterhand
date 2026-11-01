@@ -24,6 +24,7 @@ type desktopTestSurface struct{}
 
 func (*desktopTestSurface) Toggle()                        {}
 func (*desktopTestSurface) Update(string) error            { return nil }
+func (*desktopTestSurface) UpdateLocale(string) error      { return nil }
 func (*desktopTestSurface) Snapshot(context.Context) error { return nil }
 func (*desktopTestSurface) Close() error                   { return nil }
 

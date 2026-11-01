@@ -3,21 +3,22 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Asterhand · 星伴</title>
+    <title data-i18n="brand.page_title">Asterhand · 星伴</title>
     <link rel="stylesheet" href="/style.css" />
     <script type="module" src="/app.js"></script>
   </head>
   <body>
     <div class="backdrop" aria-hidden="true"></div>
     <header class="topbar">
-      <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">◈</span><strong>Asterhand</strong><span class="brand-sub">星伴</span></a>
-      <div id="connection" class="connection" role="status">连接中…</div>
-      <nav class="top-actions" aria-label="页面操作">
+      <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">◈</span><strong data-i18n="brand.primary">Asterhand</strong><span class="brand-sub" data-i18n="brand.subtitle" data-i18n-brand-sub>星伴</span></a>
+      <div id="connection" class="connection" role="status" data-i18n="web.topbar.connecting">连接中…</div>
+      <nav class="top-actions" aria-label="页面操作" data-i18n-aria-label="web.topbar.actions_aria">
+        <select id="locale-select" class="locale-select" aria-label="界面语言" data-i18n-aria-label="web.topbar.language_aria"></select>
         <button id="commands-open" class="quiet" type="button">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 8 4 4-4 4M12 16h7" /></svg>命令
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 8 4 4-4 4M12 16h7" /></svg><span data-i18n="web.topbar.commands">命令</span>
         </button>
         <button id="settings-open" class="quiet" type="button">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M12 2.5v3M12 18.5v3M4.2 6.5l2.6 1.5M17.2 16l2.6 1.5M4.2 17.5l2.6-1.5M17.2 8l2.6-1.5" /></svg>设置
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M12 2.5v3M12 18.5v3M4.2 6.5l2.6 1.5M17.2 16l2.6 1.5M4.2 17.5l2.6-1.5M17.2 8l2.6-1.5" /></svg><span data-i18n="web.topbar.settings">设置</span>
         </button>
       </nav>
     </header>
@@ -25,102 +26,102 @@
 
     <section id="login" class="login-card glass" hidden>
       <span class="brand-mark large" aria-hidden="true">◈</span>
-      <h1>欢迎回来</h1>
-      <p>输入启动时显示的登录码，或直接使用登录链接打开。</p>
+      <h1 data-i18n="web.login.title">欢迎回来</h1>
+      <p data-i18n="web.login.lead">输入启动时显示的登录码，或直接使用登录链接打开。</p>
       <form id="login-form">
-        <label class="field"><span>登录码</span><input name="token" type="password" required autocomplete="off" /></label>
-        <button>登录</button>
+        <label class="field"><span data-i18n="web.login.token_label">登录码</span><input name="token" type="password" required autocomplete="off" /></label>
+        <button data-i18n="web.login.submit">登录</button>
       </form>
     </section>
 
     <main id="workspace" hidden>
       <aside class="sidebar">
-        <p class="eyebrow">我的设备</p>
+        <p class="eyebrow" data-i18n="web.sidebar.my_devices">我的设备</p>
         <div id="nodes"></div>
-        <button id="pair-open" class="secondary full" type="button">＋ 配对新设备</button>
-        <p class="aside-note">关闭页面不影响正在执行的任务</p>
+        <button id="pair-open" class="secondary full" type="button" data-i18n="web.sidebar.pair_open">＋ 配对新设备</button>
+        <p class="aside-note" data-i18n="web.sidebar.note">关闭页面不影响正在执行的任务</p>
       </aside>
       <section class="work-area">
         <div class="hero">
-          <p class="eyebrow">你的设备，协同工作</p>
-          <h1>今天想完成什么？</h1>
+          <p class="eyebrow" data-i18n="web.hero.eyebrow">你的设备，协同工作</p>
+          <h1 data-i18n="web.hero.title">今天想完成什么？</h1>
         </div>
         <p id="node-warning" class="status-box warn" role="status" hidden></p>
         <form id="task-form" class="composer glass">
-          <textarea name="goal" id="goal" rows="4" required maxlength="16000" placeholder="描述你想完成的事…" aria-label="任务内容"></textarea>
+          <textarea name="goal" id="goal" rows="4" required maxlength="16000" placeholder="描述你想完成的事…" data-i18n-placeholder="web.composer.placeholder" aria-label="任务内容" data-i18n-aria-label="web.composer.goal_aria"></textarea>
           <div class="composer-bar">
             <div class="composer-target">
-              <label class="chip"><span>设备</span><select id="target" name="target"></select></label>
-              <label class="chip"><span>目录</span><select id="project" name="project"></select></label>
+              <label class="chip"><span data-i18n="web.composer.device_label">设备</span><select id="target" name="target"></select></label>
+              <label class="chip"><span data-i18n="web.composer.project_label">目录</span><select id="project" name="project"></select></label>
             </div>
-            <button id="submit-task">发送</button>
+            <button id="submit-task" data-i18n="web.composer.submit">发送</button>
           </div>
           <div class="composer-hint"><span id="target-hint"></span><span id="submit-status" role="status"></span></div>
         </form>
         <div class="section-title">
-          <h2>任务</h2>
+          <h2 data-i18n="web.tasks.heading">任务</h2>
           <span id="last-refresh"></span>
         </div>
         <div id="tasks">
-          <div class="empty">还没有任务</div>
+          <div class="empty" data-i18n="web.tasks.empty_initial">还没有任务</div>
         </div>
       </section>
     </main>
 
     <dialog id="settings" class="settings-dialog" data-tab="general">
       <div class="dialog-head">
-        <h2>设置</h2>
-        <button type="button" data-close="settings" class="icon-btn" aria-label="关闭">×</button>
+        <h2 data-i18n="web.settings.title">设置</h2>
+        <button type="button" data-close="settings" class="icon-btn" aria-label="关闭" data-i18n-aria-label="web.common.close">×</button>
       </div>
       <div class="settings-layout">
-        <nav class="settings-tabs" aria-label="设置分类">
-          <button type="button" class="settings-tab" data-tab-target="general">常规</button>
-          <button type="button" class="settings-tab" data-tab-target="model">模型</button>
-          <button type="button" class="settings-tab" data-tab-target="hotkey">快捷输入</button>
-          <button type="button" class="settings-tab" data-tab-target="network">网络与高级</button>
+        <nav class="settings-tabs" aria-label="设置分类" data-i18n-aria-label="web.settings.tabs_aria">
+          <button type="button" class="settings-tab" data-tab-target="general" data-i18n="web.settings.tab.general">常规</button>
+          <button type="button" class="settings-tab" data-tab-target="model" data-i18n="web.settings.tab.model">模型</button>
+          <button type="button" class="settings-tab" data-tab-target="hotkey" data-i18n="web.settings.tab.hotkey">快捷输入</button>
+          <button type="button" class="settings-tab" data-tab-target="network" data-i18n="web.settings.tab.network">网络与高级</button>
         </nav>
         <div class="settings-panes">
           <section id="desktop-settings" class="desktop-settings" aria-labelledby="desktop-title">
             <div class="pane-head">
-              <h3 id="desktop-title">快捷输入</h3>
-              <p>随时按下快捷键，呼出星伴对话面板。</p>
+              <h3 id="desktop-title" data-i18n="web.settings.tab.hotkey">快捷输入</h3>
+              <p data-i18n="web.desktop.lead">随时按下快捷键，呼出星伴对话面板。</p>
             </div>
-            <div id="desktop-state" class="status-line" role="status">正在读取…</div>
+            <div id="desktop-state" class="status-line" role="status" data-i18n="web.desktop.loading">正在读取…</div>
             <form id="desktop-form">
               <fieldset id="desktop-fields">
-                <label class="toggle-row"><span>启用快捷输入</span><input type="checkbox" name="enabled" class="switch" /></label>
+                <label class="toggle-row"><span data-i18n="web.desktop.enable_label">启用快捷输入</span><input type="checkbox" name="enabled" class="switch" /></label>
                 <div class="field">
-                  <span>快捷键</span>
+                  <span data-i18n="web.desktop.hotkey_label">快捷键</span>
                   <div class="hotkey-row">
-                    <input id="desktop-record" class="keycap" readonly aria-label="当前快捷键" placeholder="未设置" />
-                    <button type="button" id="desktop-record-start" class="secondary">录制</button>
-                    <button type="button" id="desktop-record-cancel" class="quiet" hidden>取消</button>
+                    <input id="desktop-record" class="keycap" readonly aria-label="当前快捷键" data-i18n-aria-label="web.desktop.hotkey_aria" placeholder="未设置" data-i18n-placeholder="web.desktop.hotkey_unset" />
+                    <button type="button" id="desktop-record-start" class="secondary" data-i18n="web.desktop.record_start">录制</button>
+                    <button type="button" id="desktop-record-cancel" class="quiet" hidden data-i18n="web.desktop.record_cancel">取消</button>
                   </div>
-                  <small id="desktop-record-status" role="status">点击“录制”后按下新的组合键，需包含 Ctrl 或 Alt。</small>
+                  <small id="desktop-record-status" role="status" data-i18n="web.desktop.record_hint">点击“录制”后按下新的组合键，需包含 Ctrl 或 Alt。</small>
                 </div>
                 <details class="advanced">
-                  <summary>手动选择按键</summary>
+                  <summary data-i18n="web.desktop.manual_summary">手动选择按键</summary>
                   <div class="desktop-modifiers">
                     <label class="checkbox"><input name="ctrl" type="checkbox" />Ctrl</label>
                     <label class="checkbox"><input name="alt" type="checkbox" />Alt</label>
                     <label class="checkbox"><input name="shift" type="checkbox" />Shift</label>
-                    <label class="field compact"><span>按键</span><select name="key" id="desktop-key"></select></label>
+                    <label class="field compact"><span data-i18n="web.desktop.key_label">按键</span><select name="key" id="desktop-key"></select></label>
                   </div>
                 </details>
                 <div class="field">
-                  <span>外观主题</span>
+                  <span data-i18n="web.desktop.theme_label">外观主题</span>
                   <div class="theme-options">
-                    <label class="theme-card star"><input type="radio" name="theme" value="star" /><span class="theme-swatch" aria-hidden="true"></span><strong>星核</strong><small>深空霓光</small></label>
-                    <label class="theme-card frost"><input type="radio" name="theme" value="frost" /><span class="theme-swatch" aria-hidden="true"></span><strong>霜蓝</strong><small>明亮清透</small></label>
+                    <label class="theme-card star"><input type="radio" name="theme" value="star" /><span class="theme-swatch" aria-hidden="true"></span><strong data-i18n="brand.theme.star.name">星核</strong><small data-i18n="brand.theme.star.desc">深空霓光</small></label>
+                    <label class="theme-card frost"><input type="radio" name="theme" value="frost" /><span class="theme-swatch" aria-hidden="true"></span><strong data-i18n="brand.theme.frost.name">霜蓝</strong><small data-i18n="brand.theme.frost.desc">明亮清透</small></label>
                   </div>
-                  <small>同时应用于快捷面板和此页面。</small>
+                  <small data-i18n="web.desktop.theme_hint">同时应用于快捷面板和此页面。</small>
                 </div>
                 <div class="actions">
-                  <button type="submit" id="desktop-save">保存并应用</button>
-                  <button type="button" id="desktop-retry" class="secondary" hidden>重试生效</button>
+                  <button type="submit" id="desktop-save" data-i18n="web.desktop.save">保存并应用</button>
+                  <button type="button" id="desktop-retry" class="secondary" hidden data-i18n="web.desktop.retry_effect">重试生效</button>
                   <span class="spacer"></span>
-                  <button type="button" id="desktop-check" class="quiet">检查占用</button>
-                  <button type="button" id="desktop-reset" class="quiet">恢复默认</button>
+                  <button type="button" id="desktop-check" class="quiet" data-i18n="web.desktop.check">检查占用</button>
+                  <button type="button" id="desktop-reset" class="quiet" data-i18n="web.desktop.reset">恢复默认</button>
                 </div>
               </fieldset>
             </form>
@@ -129,63 +130,65 @@
           <form id="settings-form">
             <div class="pane" data-pane="general">
               <div class="pane-head">
-                <h3>常规</h3>
-                <p>给这台设备起个名字，并选择任务可以使用的文件夹。</p>
+                <h3 data-i18n="web.settings.tab.general">常规</h3>
+                <p data-i18n="web.settings.general.lead">给这台设备起个名字，并选择任务可以使用的文件夹。</p>
               </div>
-              <label class="field"><span>设备名称</span><input name="name" required maxlength="80" placeholder="例如 书房电脑" /></label>
-              <label class="field"><span>工作目录</span><input name="root" placeholder="例如 D:\AsterhandWorkspace" />
-                <small>文件任务只在此目录内读写；仅聊天可留空。</small></label>
+              <label class="field"><span data-i18n="web.settings.general.language_label">界面语言</span><select id="settings-locale" aria-label="界面语言" data-i18n-aria-label="web.topbar.language_aria"></select>
+                <small data-i18n="web.settings.general.language_hint">可自动跟随系统语言，或固定为指定界面语言。</small></label>
+              <label class="field"><span data-i18n="web.settings.general.name_label">设备名称</span><input name="name" required maxlength="80" placeholder="例如 书房电脑" data-i18n-placeholder="web.settings.general.name_placeholder" /></label>
+              <label class="field"><span data-i18n="web.settings.general.root_label">工作目录</span><input name="root" placeholder="例如 D:\AsterhandWorkspace" data-i18n-placeholder="web.settings.general.root_placeholder" />
+                <small data-i18n="web.settings.general.root_hint">文件任务只在此目录内读写；仅聊天可留空。</small></label>
             </div>
 
             <div class="pane" data-pane="model">
               <div class="pane-head">
-                <h3>模型</h3>
-                <p>密钥加密保存在本机，不会上传。</p>
+                <h3 data-i18n="web.settings.tab.model">模型</h3>
+                <p data-i18n="web.settings.model.lead">密钥加密保存在本机，不会上传。</p>
               </div>
               <div class="field-grid">
-                <label class="field"><span>模型服务</span><select name="provider"></select></label>
-                <label class="field"><span>模型</span><select name="model"></select></label>
+                <label class="field"><span data-i18n="web.settings.model.provider_label">模型服务</span><select name="provider"></select></label>
+                <label class="field"><span data-i18n="web.settings.model.model_label">模型</span><select name="model"></select></label>
               </div>
               <input type="hidden" name="credential_ref" />
-              <label class="field"><span>API Key</span><input name="key" type="password" autocomplete="new-password" placeholder="已保存时留空即可" />
+              <label class="field"><span data-i18n="web.settings.model.key_label">API Key</span><input name="key" type="password" autocomplete="new-password" placeholder="已保存时留空即可" data-i18n-placeholder="web.settings.model.key_placeholder" />
                 <small id="key-status"></small></label>
-              <label class="checkbox"><input type="checkbox" name="delete_key" />清除已保存的密钥</label>
+              <label class="checkbox"><input type="checkbox" name="delete_key" /><span data-i18n="web.settings.model.delete_key">清除已保存的密钥</span></label>
               <details class="advanced">
-                <summary>高级</summary>
-                <label class="field"><span>运行环境</span><select name="agent_runtime"></select></label>
+                <summary data-i18n="web.settings.model.advanced">高级</summary>
+                <label class="field"><span data-i18n="web.settings.model.runtime_label">运行环境</span><select name="agent_runtime"></select></label>
               </details>
               <div class="probe-row">
-                <button type="button" id="probe" class="secondary">测试连接</button>
-                <div id="probe-status" class="status-line">尚未测试</div>
+                <button type="button" id="probe" class="secondary" data-i18n="web.settings.model.probe_button">测试连接</button>
+                <div id="probe-status" class="status-line" data-i18n="web.settings.probe.not_run">尚未测试</div>
               </div>
-              <small>测试会消耗少量 API 额度，不测试也可以直接使用。</small>
+              <small data-i18n="web.settings.model.probe_hint">测试会消耗少量 API 额度，不测试也可以直接使用。</small>
             </div>
 
             <div class="pane" data-pane="network">
               <div class="pane-head">
-                <h3>网络与高级</h3>
-                <p>让你的其他设备找到这台电脑。</p>
+                <h3 data-i18n="web.settings.tab.network">网络与高级</h3>
+                <p data-i18n="web.settings.network.lead">让你的其他设备找到这台电脑。</p>
               </div>
               <div class="network-row">
-                <div id="network-status" class="status-line">正在检测网络…</div>
-                <button type="button" id="use-tailnet" class="secondary" hidden>使用 Tailscale 地址</button>
+                <div id="network-status" class="status-line" data-i18n="web.settings.network.detecting">正在检测网络…</div>
+                <button type="button" id="use-tailnet" class="secondary" hidden data-i18n="web.settings.network.use_tailnet">使用 Tailscale 地址</button>
               </div>
-              <label class="field"><span>访问地址</span><input name="endpoint" placeholder="https://100.x.x.x:17433" /></label>
-              <label class="field"><span>监听地址</span><input name="peer_listen" required placeholder="100.x.x.x:17433" />
-                <small>两台设备需在同一 Tailscale 网络或局域网内；修改监听地址后需重启。</small></label>
+              <label class="field"><span data-i18n="web.settings.network.endpoint_label">访问地址</span><input name="endpoint" placeholder="https://100.x.x.x:17433" /></label>
+              <label class="field"><span data-i18n="web.settings.network.listen_label">监听地址</span><input name="peer_listen" required placeholder="100.x.x.x:17433" />
+                <small data-i18n="web.settings.network.listen_hint">两台设备需在同一 Tailscale 网络或局域网内；修改监听地址后需重启。</small></label>
               <details class="advanced">
-                <summary>高级信息</summary>
+                <summary data-i18n="web.settings.network.advanced_info">高级信息</summary>
                 <div id="runtime-status" class="metadata"></div>
                 <div class="danger-zone">
-                  <div><strong>停止本机服务</strong><small>停止后需从启动入口重新打开。</small></div>
-                  <button type="button" id="stop-node" class="danger">停止</button>
+                  <div><strong data-i18n="web.settings.network.stop_title">停止本机服务</strong><small data-i18n="web.settings.network.stop_hint">停止后需从启动入口重新打开。</small></div>
+                  <button type="button" id="stop-node" class="danger" data-i18n="web.settings.network.stop_button">停止</button>
                 </div>
               </details>
             </div>
 
             <div class="settings-footer">
               <div id="settings-status" class="status-line" role="status"></div>
-              <button type="submit">保存设置</button>
+              <button type="submit" data-i18n="web.settings.save_button">保存设置</button>
             </div>
           </form>
         </div>
@@ -195,27 +198,27 @@
     <dialog id="pair" class="pair-dialog">
       <div class="dialog-head">
         <div>
-          <p class="eyebrow">设备协作</p>
-          <h2>配对新设备</h2>
+          <p class="eyebrow" data-i18n="web.pair.eyebrow">设备协作</p>
+          <h2 data-i18n="web.pair.title">配对新设备</h2>
         </div>
-        <button type="button" data-close="pair" class="icon-btn" aria-label="关闭">×</button>
+        <button type="button" data-close="pair" class="icon-btn" aria-label="关闭" data-i18n-aria-label="web.common.close">×</button>
       </div>
       <div class="pair-grid">
         <section class="pair-card">
           <span class="step">1</span>
-          <h3>邀请其他设备</h3>
-          <p>生成配对码，复制到另一台设备。10 分钟内有效，只发给自己的设备。</p>
-          <button id="make-invite" type="button" class="secondary">生成配对码</button>
-          <textarea id="invite" rows="3" readonly placeholder="配对码将显示在这里" aria-label="本机配对码"></textarea>
-          <button id="copy-invite" type="button" class="quiet">复制配对码</button>
+          <h3 data-i18n="web.pair.step1_title">邀请其他设备</h3>
+          <p data-i18n="web.pair.step1_desc">生成配对码，复制到另一台设备。10 分钟内有效，只发给自己的设备。</p>
+          <button id="make-invite" type="button" class="secondary" data-i18n="web.pair.make_invite">生成配对码</button>
+          <textarea id="invite" rows="3" readonly placeholder="配对码将显示在这里" data-i18n-placeholder="web.pair.invite_placeholder" aria-label="本机配对码" data-i18n-aria-label="web.pair.invite_aria"></textarea>
+          <button id="copy-invite" type="button" class="quiet" data-i18n="web.pair.copy_invite">复制配对码</button>
         </section>
         <section class="pair-card">
           <span class="step">2</span>
-          <h3>连接到其他设备</h3>
-          <p>粘贴另一台设备生成的配对码。</p>
+          <h3 data-i18n="web.pair.step2_title">连接到其他设备</h3>
+          <p data-i18n="web.pair.step2_desc">粘贴另一台设备生成的配对码。</p>
           <form id="pair-form">
-            <textarea name="code" rows="4" required aria-label="对方的配对码" placeholder="粘贴配对码"></textarea>
-            <button>添加设备</button>
+            <textarea name="code" rows="4" required aria-label="对方的配对码" data-i18n-aria-label="web.pair.peer_code_aria" placeholder="粘贴配对码" data-i18n-placeholder="web.pair.peer_code_placeholder"></textarea>
+            <button data-i18n="web.pair.submit">添加设备</button>
           </form>
         </section>
       </div>
@@ -223,8 +226,8 @@
 
     <dialog id="detail">
       <div class="dialog-head">
-        <h2>任务详情</h2>
-        <button type="button" data-close="detail" class="icon-btn" aria-label="关闭">×</button>
+        <h2 data-i18n="web.detail.title">任务详情</h2>
+        <button type="button" data-close="detail" class="icon-btn" aria-label="关闭" data-i18n-aria-label="web.common.close">×</button>
       </div>
       <div id="detail-content"></div>
     </dialog>
@@ -232,44 +235,44 @@
     <dialog id="local-commands">
       <div class="dialog-head">
         <div>
-          <p class="eyebrow">快捷入口</p>
-          <h2>本地命令</h2>
+          <p class="eyebrow" data-i18n="web.commands.eyebrow">快捷入口</p>
+          <h2 data-i18n="web.commands.title">本地命令</h2>
         </div>
-        <button id="commands-close" class="icon-btn" type="button" aria-label="关闭">×</button>
+        <button id="commands-close" class="icon-btn" type="button" aria-label="关闭" data-i18n-aria-label="web.common.close">×</button>
       </div>
-      <p class="dialog-lead">在快捷面板中输入 / 即可选择并运行命令。</p>
+      <p class="dialog-lead" data-i18n="web.commands.lead">在快捷面板中输入 / 即可选择并运行命令。</p>
       <div class="commands-management">
-        <section class="commands-sidebar" aria-label="已添加的命令">
-          <input id="commands-search" aria-label="搜索命令" placeholder="搜索命令" />
-          <div class="actions compact"><button id="command-new" type="button">新建</button><button id="commands-refresh" type="button" class="quiet">刷新</button></div>
+        <section class="commands-sidebar" aria-label="已添加的命令" data-i18n-aria-label="web.commands.sidebar_aria">
+          <input id="commands-search" aria-label="搜索命令" data-i18n-aria-label="web.commands.search_placeholder" placeholder="搜索命令" data-i18n-placeholder="web.commands.search_placeholder" />
+          <div class="actions compact"><button id="command-new" type="button" data-i18n="web.commands.new">新建</button><button id="commands-refresh" type="button" class="quiet" data-i18n="web.commands.refresh">刷新</button></div>
           <small id="command-count"></small>
           <div id="registered-commands"></div>
         </section>
         <form id="command-form" class="command-editor">
-          <h3 id="command-form-title">新建命令</h3>
+          <h3 id="command-form-title" data-i18n="web.commands.form_new">新建命令</h3>
           <div class="field-grid">
-            <label class="field"><span>命令名</span><input name="name" required maxlength="64" pattern="[A-Za-z][A-Za-z0-9_\-]*" placeholder="backup" title="以英文字母开头，可含数字、- 和 _" /></label>
-            <label class="field"><span>启动方式</span><select name="window"><option value="background">后台运行</option><option value="terminal">打开终端窗口</option></select></label>
+            <label class="field"><span data-i18n="web.commands.name_label">命令名</span><input name="name" required maxlength="64" pattern="[A-Za-z][A-Za-z0-9_\-]*" placeholder="backup" title="以英文字母开头，可含数字、- 和 _" data-i18n-title="web.commands.name_title" /></label>
+            <label class="field"><span data-i18n="web.commands.window_label">启动方式</span><select name="window"><option value="background" data-i18n="web.commands.window_background">后台运行</option><option value="terminal" data-i18n="web.commands.window_terminal">打开终端窗口</option></select></label>
           </div>
-          <label class="field"><span>别名 <em>可选，每行一个</em></span><textarea name="aliases" rows="2" placeholder="备份"></textarea></label>
-          <label class="field"><span>说明 <em>可选</em></span><input name="description" maxlength="512" /></label>
+          <label class="field"><span><span data-i18n="web.commands.aliases_label">别名</span> <em data-i18n="web.commands.aliases_note">可选，每行一个</em></span><textarea name="aliases" rows="2" placeholder="备份" data-i18n-placeholder="web.commands.aliases_placeholder"></textarea></label>
+          <label class="field"><span><span data-i18n="web.commands.desc_label">说明</span> <em data-i18n="web.commands.optional_note">可选</em></span><input name="description" maxlength="512" /></label>
           <div class="field">
-            <label for="command-script">脚本文件</label>
-            <div class="command-script-path"><input id="command-script" name="script" required placeholder="C:\Scripts\backup.ps1" /><button id="command-browse" type="button" class="secondary">浏览…</button></div>
-            <small>支持 .bat、.cmd 和 .ps1，修改脚本后下次运行即生效。</small>
+            <label for="command-script" data-i18n="web.commands.script_label">脚本文件</label>
+            <div class="command-script-path"><input id="command-script" name="script" required placeholder="C:\Scripts\backup.ps1" /><button id="command-browse" type="button" class="secondary" data-i18n="web.commands.browse">浏览…</button></div>
+            <small data-i18n="web.commands.script_hint">支持 .bat、.cmd 和 .ps1，修改脚本后下次运行即生效。</small>
           </div>
-          <label class="field"><span>工作目录 <em>可选</em></span><input name="directory" placeholder="默认为脚本所在目录" /></label>
+          <label class="field"><span><span data-i18n="web.commands.dir_label">工作目录</span> <em data-i18n="web.commands.optional_note">可选</em></span><input name="directory" placeholder="默认为脚本所在目录" data-i18n-placeholder="web.commands.dir_placeholder" /></label>
           <div class="field">
-            <span class="command-argument-title">固定参数</span>
+            <span class="command-argument-title" data-i18n="web.commands.args_label">固定参数</span>
             <div id="command-arguments"></div>
-            <button id="command-add-argument" type="button" class="quiet">＋ 添加参数</button>
-            <small>每项一个参数，无需加引号。需要查看输出时请选择“打开终端窗口”。</small>
+            <button id="command-add-argument" type="button" class="quiet" data-i18n="web.commands.arg_add">＋ 添加参数</button>
+            <small data-i18n="web.commands.args_hint">每项一个参数，无需加引号。需要查看输出时请选择“打开终端窗口”。</small>
           </div>
-          <div class="actions"><button type="submit">保存命令</button><span class="spacer"></span><button id="command-delete" type="button" class="danger" hidden>删除命令</button></div>
+          <div class="actions"><button type="submit" data-i18n="web.commands.save">保存命令</button><span class="spacer"></span><button id="command-delete" type="button" class="danger" hidden data-i18n="web.commands.delete">删除命令</button></div>
         </form>
       </div>
       <div id="commands-status" class="status-line" role="status"></div>
     </dialog>
-    <footer class="page-footer"><span>Asterhand · 星伴</span><span id="version"></span></footer>
+    <footer class="page-footer"><span data-i18n="brand.page_title">Asterhand · 星伴</span><span id="version"></span></footer>
   </body>
 </html>

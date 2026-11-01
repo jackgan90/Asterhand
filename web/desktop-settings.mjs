@@ -1,4 +1,50 @@
+import {localizeError, localizeMessage, t} from "./i18n.mjs";
 import {applyTheme} from "./ui.mjs";
+
+const regKeys = {
+  initializing: "web.desktop.reg.initializing",
+  recovering: "web.desktop.reg.recovering",
+  conflict: "web.desktop.reg.conflict",
+  unavailable: "web.desktop.reg.unavailable",
+  unsupported: "web.desktop.reg.unsupported",
+  config_invalid: "web.desktop.reg.config_invalid",
+};
+
+const recordStatusKeys = {
+  idle: "web.desktop.record_hint",
+  waiting: "web.desktop.record_waiting",
+  done: "web.desktop.record_done",
+  cancelled: "web.desktop.record_cancelled",
+  ime: "web.desktop.record_ime_hint",
+};
+
+function normalizeBinding(value) {
+  return {
+    modifiers: [...(value?.modifiers || [])].sort(),
+    key: value?.key || "",
+  };
+}
+
+function sameNonLocale(a, b) {
+  if (!a || !b) return false;
+  const ba = normalizeBinding(a.binding), bb = normalizeBinding(b.binding);
+  return Boolean(a.enabled) === Boolean(b.enabled) &&
+    a.theme_id === b.theme_id &&
+    ba.key === bb.key &&
+    ba.modifiers.length === bb.modifiers.length &&
+    ba.modifiers.every((m, idx) => m === bb.modifiers[idx]);
+}
+
+function snapshotBaseline(desired) {
+  if (!desired) return null;
+  return {
+    revision: desired.revision,
+    enabled: Boolean(desired.enabled),
+    binding: structuredClone(desired.binding),
+    theme_id: desired.theme_id,
+  };
+}
+
 export function desktopSettings(api, post, {listen = (target, event, callback) => target.addEventListener(event, callback), session = () => ({active:true})} = {}) {
   const form = document.querySelector("#desktop-form"), fields = form.elements;
   const state = document.querySelector("#desktop-state");
@@ -6,7 +52,10 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
   const recordStatus = document.querySelector("#desktop-record-status");
   const recordCancel = document.querySelector("#desktop-record-cancel");
   const page = crypto.randomUUID();
-  let current, recording, poll, pending, busy, recordingGeneration = 0, pageGeneration = 0;
+  let current, formBaseline = null, recording, poll, pending, pendingLocale = null, busy, activeSave = null;
+  let recordingGeneration = 0, pageGeneration = 0, localeGeneration = 0;
+  let requestClock = 0, latestAppliedClock = 0;
+  let stateOverride = null, recordMode = "idle";
   let cancellation = Promise.resolve();
   const key = document.querySelector("#desktop-key");
   for (const name of [..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"].map(c => "Key"+c)
@@ -26,36 +75,92 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
     for (const m of ["ctrl","alt","shift"]) fields[m].checked = value.modifiers.includes(m);
     fields.key.value = value.key; recordInput.value = label(value);
   }
-  function render(value, fill = false) {
-    current = value;
-    const registration = {initializing:"正在准备", recovering:"正在恢复", conflict:"该组合已被其他程序占用", unavailable:"快捷输入暂不可用", unsupported:"当前系统暂不支持", config_invalid:"配置无效，请恢复默认"};
+  function paintSaveButton() {
+    document.querySelector("#desktop-save").textContent = pending ? t("web.desktop.save_retry") : t("web.desktop.save");
+  }
+  function paintRecordStatus(mode = recordMode) {
+    recordMode = mode;
+    if (typeof mode === "object" && mode?.error) {
+      recordStatus.textContent = localizeError(mode.error);
+      return;
+    }
+    recordStatus.textContent = t(recordStatusKeys[mode] || recordStatusKeys.idle);
+  }
+  function paintState() {
+    if (stateOverride?.kind === "check_available") {
+      state.textContent = t("web.desktop.check_available");
+      if (state.dataset) state.dataset.tone = "ok";
+      return;
+    }
+    if (stateOverride?.kind === "error") {
+      state.textContent = localizeError(stateOverride.error);
+      if (state.dataset) state.dataset.tone = "error";
+      return;
+    }
+    if (!current) {
+      state.textContent = t("web.desktop.loading");
+      return;
+    }
+    const value = current;
     const usable = value.registration === "registered" && value.surface === "ready" && value.effective_binding;
     const desired = label(value.desired.binding);
     let text, tone = "warn";
-    if (!value.supported) [text, tone] = ["当前系统暂不支持快捷输入", "muted"];
-    else if (usable && label(value.effective_binding) === desired) [text, tone] = [`已生效 · ${desired}`, "ok"];
-    else if (usable) text = `当前生效 ${label(value.effective_binding)} · 新组合 ${desired} 尚未生效`;
-    else if (value.registration === "disabled") [text, tone] = ["快捷输入已关闭", "muted"];
-    else if (value.surface === "failed") [text, tone] = ["面板加载失败，请点击重试", "error"];
-    else [text, tone] = [`${registration[value.registration] || "尚未生效"} · ${desired}`, value.registration === "conflict" ? "error" : "warn"];
-    if (value.cleanup_pending) text += " · 旧快捷键未释放，请重试；仍失败时从托盘退出后重新启动";
-    if (value.error) text += ` · ${value.error}`;
+    if (!value.supported) [text, tone] = [t("web.desktop.state.unsupported_full"), "muted"];
+    else if (usable && label(value.effective_binding) === desired) [text, tone] = [t("web.desktop.state.active", {binding: desired}), "ok"];
+    else if (usable) text = t("web.desktop.state.pending_new", {effective: label(value.effective_binding), desired});
+    else if (value.registration === "disabled") [text, tone] = [t("web.desktop.state.disabled"), "muted"];
+    else if (value.surface === "failed") [text, tone] = [t("web.desktop.state.surface_failed"), "error"];
+    else {
+      const reason = t(regKeys[value.registration] || "web.desktop.reg.pending");
+      [text, tone] = [t("web.desktop.state.inactive_with_reason", {reason, desired}), value.registration === "conflict" ? "error" : "warn"];
+    }
+    if (value.cleanup_pending) text += t("web.desktop.state.cleanup_pending");
+    const detailError = localizeMessage(value.error_key, value.error_args, value.error || "");
+    if (detailError) text += ` · ${detailError}`;
     state.textContent = text;
     if (state.dataset) state.dataset.tone = tone;
+  }
+  function render(value, fill = false) {
+    current = value;
+    stateOverride = null;
+    paintState();
+    const usable = value.registration === "registered" && value.surface === "ready" && value.effective_binding;
     // Retry is only meaningful when an enabled binding is not in effect.
     document.querySelector("#desktop-retry").hidden = !value.supported || (!value.cleanup_pending && (usable || !value.desired.enabled));
     applyTheme(value.desired.theme_id);
-    document.querySelector("#desktop-fields").disabled = !value.supported;
+    if (!activeSave) document.querySelector("#desktop-fields").disabled = !value.supported;
     if (fill) {
+      formBaseline = snapshotBaseline(value.desired);
       fields.enabled.checked = value.desired.enabled; fields.theme.value = value.desired.theme_id;
       setBinding(value.desired.binding);
+    } else if (!pending && formBaseline && sameNonLocale(formBaseline, value.desired)) {
+      formBaseline.revision = value.desired.revision;
     }
   }
   const isCurrent = (generation, scope) => generation === pageGeneration && scope?.active;
+  async function fetchSettings({allowError = false, generation = pageGeneration, scope = session(), valid = () => true} = {}) {
+    const stillValid = () => isCurrent(generation, scope) && valid();
+    if (!stillValid()) return {stale:true, value:current};
+    const stamp = ++requestClock;
+    try {
+      const value = await api("/api/desktop/settings");
+      if (!stillValid() || stamp < latestAppliedClock) return {stale:true, value:current};
+      latestAppliedClock = stamp;
+      return {stale:false, value};
+    } catch (error) {
+      if (allowError) throw error;
+      return {stale:!stillValid() || stamp < latestAppliedClock, value:null};
+    }
+  }
+  function commitWriteSnapshot(value, fill = false) {
+    latestAppliedClock = ++requestClock;
+    render(value, fill);
+  }
   async function refresh(fill = false) {
     const generation = pageGeneration, scope = session();
-    const value = await api("/api/desktop/settings");
-    if (isCurrent(generation, scope)) render(value, fill);
+    const {stale, value} = await fetchSettings({allowError:true, generation, scope});
+    if (!stale && value) render(value, fill);
+    return stale ? current : value;
   }
   async function endRecording() {
     recordingGeneration++;
@@ -75,29 +180,29 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
     if (!scope?.active) return;
     const transaction = busy = {generation};
     try { await fn(); }
-    catch (error) { if (isCurrent(generation, scope)) { state.textContent = error.message; if (state.dataset) state.dataset.tone = "error"; } }
+    catch (error) { if (isCurrent(generation, scope)) { stateOverride = {kind:"error", error}; paintState(); } }
     finally { if (busy === transaction) busy = undefined; }
   }
   async function recordPoll() {
     if (!recording) return;
     const lease = recording, generation = recordingGeneration;
-    const isCurrent = () => recording === lease && generation === recordingGeneration;
+    const active = () => recording === lease && generation === recordingGeneration;
     try {
       const value = await post("/api/desktop/recording/poll", {page_id:page, recording_id:lease.recording_id});
-      if (!isCurrent()) return;
+      if (!active()) return;
       if (value.binding) {
         setBinding(value.binding);
         pending = null;
         const ended = endRecording();
-        recordStatus.textContent = "已录制，点击“保存并应用”生效。";
+        paintRecordStatus("done");
         await ended;
         return;
       }
       poll = setTimeout(recordPoll, 250);
     } catch (error) {
-      if (isCurrent()) {
+      if (active()) {
         const ended = endRecording();
-        recordStatus.textContent = error.message;
+        paintRecordStatus({error});
         await ended;
       }
     }
@@ -116,50 +221,132 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
     }
     recording = lease;
     recordCancel.hidden = false;
-    recordStatus.textContent = "请按下新的组合键…（Esc 取消）";
+    paintRecordStatus("waiting");
     recordInput.focus();
     void recordPoll();
   }));
   listen(recordInput, "keydown", event => {
     if (!recording || event.isComposing || event.repeat) return;
     event.preventDefault(); event.stopPropagation();
-    if (event.key === "Escape") { void endRecording(); recordStatus.textContent = "录制已取消"; return; }
+    if (event.key === "Escape") { void endRecording(); paintRecordStatus("cancelled"); return; }
     const identity = /^[a-z]$/i.test(event.key) ? "Key"+event.key.toUpperCase() : /^[0-9]$/.test(event.key) ? "Digit"+event.key : event.code;
-    if (/^(Key|Digit)/.test(identity) && !/^[a-z0-9]$/i.test(event.key)) { recordStatus.textContent = "请切换到英文输入法，或使用手动选择。"; return; }
+    if (/^(Key|Digit)/.test(identity) && !/^[a-z0-9]$/i.test(event.key)) { paintRecordStatus("ime"); return; }
     if (event.metaKey || (!event.ctrlKey && !event.altKey) || ![...key.options].some(o => o.value === identity)) return;
     setBinding({modifiers:[event.ctrlKey && "ctrl", event.altKey && "alt", event.shiftKey && "shift"].filter(Boolean), key:identity});
-    pending = null; void endRecording(); recordStatus.textContent = "已录制，点击“保存并应用”生效。";
+    pending = null; void endRecording(); paintRecordStatus("done");
   });
   listen(recordInput, "blur", () => { void endRecording(); });
-  listen(recordCancel, "click", () => { void endRecording(); recordStatus.textContent = "录制已取消"; });
+  listen(recordCancel, "click", () => { void endRecording(); paintRecordStatus("cancelled"); });
   listen(window, "blur", () => { void endRecording(); });
   listen(document.querySelector("#settings"), "close", () => { void endRecording(); });
-  listen(form, "input", () => { pending = null; recordInput.value = label(binding()); document.querySelector("#desktop-save").textContent = "保存并应用"; });
+  listen(form, "input", () => { pending = null; recordInput.value = label(binding()); paintSaveButton(); });
   async function saveRequest(reset = false) {
     const generation = pageGeneration, scope = session();
     await endRecording();
     if (!isCurrent(generation, scope)) return;
-    pending ||= {operation_id:crypto.randomUUID(), expected_revision:current.desired.revision, enabled:fields.enabled.checked, binding:binding(), theme_id:fields.theme.value, reset};
+    const expectedRevision = formBaseline ? formBaseline.revision : current.desired.revision;
+    pending ||= {operation_id:crypto.randomUUID(), expected_revision:expectedRevision, enabled:fields.enabled.checked, binding:binding(), theme_id:fields.theme.value, reset};
     try {
       const result = await post("/api/desktop/settings", pending);
       if (!isCurrent(generation, scope)) return;
-      pending = null; render(result, true); document.querySelector("#desktop-save").textContent = "保存并应用";
+      pending = null; commitWriteSnapshot(result, true); paintSaveButton();
     } catch (error) {
       if (!isCurrent(generation, scope)) return;
       const operation = pending.operation_id;
       await refresh();
       if (!isCurrent(generation, scope)) return;
-      if (current.last_operation === operation) { pending = null; return; }
+      if (current.last_operation === operation) { pending = null; formBaseline = snapshotBaseline(current.desired); return; }
       if (error.status || current.desired.revision !== pending.expected_revision) pending = null;
-      document.querySelector("#desktop-save").textContent = pending ? "重试上次保存" : "保存并应用";
+      paintSaveButton();
       throw error;
     }
   }
   async function save(reset = false) {
-    const generation = pageGeneration, scope = session();
+    const generation = pageGeneration, scope = session(), saveToken = activeSave = {};
     document.querySelector("#desktop-fields").disabled = true;
     try { await saveRequest(reset); }
-    finally { if (isCurrent(generation, scope)) document.querySelector("#desktop-fields").disabled = !current?.supported; }
+    finally {
+      if (activeSave === saveToken) {
+        activeSave = null;
+        if (isCurrent(generation, scope)) document.querySelector("#desktop-fields").disabled = !current?.supported;
+      }
+    }
+  }
+  function inspectLocaleSnapshot(snap) {
+    if (!snap?.desired?.binding) return {outcome:"offline"};
+    render(snap, false);
+    if (!pendingLocale) return {outcome:"synced", status:snap};
+    if (snap.last_locale_operation === pendingLocale.operation_id) {
+      pendingLocale = null;
+      return {outcome:"confirmed", status:snap};
+    }
+    if (snap.desired?.revision !== pendingLocale.expected_revision) {
+      pendingLocale = null;
+      return {outcome:"superseded", status:snap};
+    }
+    return {outcome:"pending", status:snap, pending:pendingLocale};
+  }
+  async function reconcileLocale(snap = null) {
+    const pGen = pageGeneration, lGen = localeGeneration, scope = session();
+    if (snap) {
+      if (!isCurrent(pGen, scope) || lGen !== localeGeneration) return {outcome:"stale", status:current};
+      latestAppliedClock = ++requestClock;
+      return inspectLocaleSnapshot(snap);
+    }
+    const {stale, value} = await fetchSettings({generation:pGen, scope, valid:() => lGen === localeGeneration});
+    if (!isCurrent(pGen, scope) || lGen !== localeGeneration || stale) return {outcome:"stale", status:current};
+    return inspectLocaleSnapshot(value);
+  }
+  async function setLocalePreference(locale) {
+    const pGen = pageGeneration, lGen = ++localeGeneration, scope = session();
+    const sameLocaleGen = () => lGen === localeGeneration;
+    if (!scope?.active) return {ok:false, stale:true};
+    if (!current?.desired?.revision) {
+      const initial = await fetchSettings({allowError:true, generation:pGen, scope, valid:sameLocaleGen});
+      if (!isCurrent(pGen, scope) || !sameLocaleGen()) return {ok:false, stale:true};
+      if (!initial.stale && initial.value) render(initial.value, false);
+    }
+    const payload = pendingLocale && pendingLocale.locale === locale && pendingLocale.expected_revision === current.desired.revision
+      ? pendingLocale
+      : {operation_id:crypto.randomUUID(), expected_revision:current.desired.revision, locale};
+    pendingLocale = payload;
+    try {
+      const result = await post("/api/desktop/locale", payload);
+      if (!isCurrent(pGen, scope) || !sameLocaleGen()) return {ok:false, stale:true};
+      if (pendingLocale !== payload) return {ok:true, status:current || result};
+      pendingLocale = null;
+      commitWriteSnapshot(result, false);
+      return {ok:true, status:result};
+    } catch (error) {
+      if (!isCurrent(pGen, scope) || !sameLocaleGen()) return {ok:false, stale:true};
+      const hadPending = pendingLocale === payload;
+      if (error?.status) {
+        if (hadPending) pendingLocale = null;
+        if (error.details?.desktop && hadPending) {
+          commitWriteSnapshot(error.details.desktop, false);
+        } else if (!error.details?.desktop) {
+          const fetched = await fetchSettings({generation:pGen, scope, valid:sameLocaleGen});
+          if (!isCurrent(pGen, scope) || !sameLocaleGen()) return {ok:false, stale:true};
+          if (!fetched.stale && fetched.value) render(fetched.value, false);
+        }
+        return {ok:false, rejected:true, status:current || error.details?.desktop, error};
+      }
+      const fetched = await fetchSettings({generation:pGen, scope, valid:sameLocaleGen});
+      if (!isCurrent(pGen, scope) || !sameLocaleGen()) return {ok:false, stale:true};
+      if (fetched.stale) {
+        return current?.last_locale_operation === payload.operation_id
+          ? {ok:true, reconciled:true, status:current}
+          : {ok:false, unknown:Boolean(pendingLocale), superseded:!pendingLocale, status:current, pending:pendingLocale, error};
+      }
+      const rec = inspectLocaleSnapshot(fetched.value);
+      if (rec.outcome === "confirmed") return {ok:true, reconciled:true, status:rec.status};
+      return {ok:false, unknown:rec.outcome !== "superseded", superseded:rec.outcome === "superseded", status:rec.status || current, pending:pendingLocale, error};
+    }
+  }
+  function relocalize() {
+    paintState();
+    paintRecordStatus();
+    paintSaveButton();
   }
   listen(form, "submit", event => { event.preventDefault(); void run(() => save()); });
   listen(document.querySelector("#desktop-reset"), "click", () => run(() => { pending = null; return save(true); }));
@@ -169,25 +356,34 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
     if (!isCurrent(generation, scope)) return;
     await post("/api/desktop/check", {binding:binding()});
     if (!isCurrent(generation, scope)) return;
-    state.textContent = "该组合当前可用。"; if (state.dataset) state.dataset.tone = "ok";
+    stateOverride = {kind:"check_available"}; paintState();
   }));
   listen(document.querySelector("#desktop-retry"), "click", () => run(async () => {
     const generation = pageGeneration, scope = session();
     await endRecording();
     if (!isCurrent(generation, scope)) return;
     const value = await post("/api/desktop/retry");
-    if (isCurrent(generation, scope)) render(value);
+    if (isCurrent(generation, scope)) commitWriteSnapshot(value);
   }));
-  return {open:() => run(async () => {
-    const generation = pageGeneration, scope = session();
-    await endRecording();
-    if (!isCurrent(generation, scope)) return;
-    const value = await api("/api/desktop/settings");
-    if (!isCurrent(generation, scope)) return;
-    // A resumed page reconciles the unknown save instead of generating a new ID.
-    if (pending && (value.last_operation === pending.operation_id || value.desired.revision !== pending.expected_revision)) pending = null;
-    render(value, !pending);
-    document.querySelector("#desktop-save").textContent = pending ? "重试上次保存" : "保存并应用";
-  }),
-    stop:() => { pageGeneration++; void endRecording(); }};
+  return {
+    open:() => run(async () => {
+      const generation = pageGeneration, scope = session();
+      await endRecording();
+      if (!isCurrent(generation, scope)) return;
+      const fetched = await fetchSettings({allowError:true, generation, scope});
+      if (!isCurrent(generation, scope)) return;
+      const value = fetched.stale ? current : fetched.value;
+      // A resumed page reconciles the unknown save instead of generating a new ID.
+      if (pending && (value.last_operation === pending.operation_id || value.desired.revision !== pending.expected_revision)) pending = null;
+      if (!fetched.stale) inspectLocaleSnapshot(value);
+      render(value, !pending);
+      paintSaveButton();
+    }),
+    setLocale:setLocalePreference,
+    reconcileLocale,
+    relocalize,
+    status:() => current,
+    pendingLocale:() => pendingLocale,
+    stop:() => { pageGeneration++; localeGeneration++; latestAppliedClock = ++requestClock; activeSave = null; void endRecording(); },
+  };
 }

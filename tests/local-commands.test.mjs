@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {commandQuery, filterCommands, quotedCommand} from '../internal/quickinput/assets/command-model.mjs';
+import {setLocale} from '../internal/quickinput/assets/i18n.mjs';
+
+setLocale('zh-CN');
 import {commandClient} from '../internal/quickinput/assets/command-client.mjs';
 import {commandResults} from '../internal/quickinput/assets/command-results.mjs';
 

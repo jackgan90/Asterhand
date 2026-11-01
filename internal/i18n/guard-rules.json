@@ -1,0 +1,85 @@
+{
+  "schema": 1,
+  "go_checked_dirs": [
+    "cmd/asterhand",
+    "cmd/asterhand-launcher",
+    "cmd/asterhand-input-host",
+    "internal/app",
+    "internal/config",
+    "internal/conversation",
+    "internal/desktop",
+    "internal/environment",
+    "internal/executor",
+    "internal/launch",
+    "internal/llm",
+    "internal/localcommands",
+    "internal/network",
+    "internal/peer",
+    "internal/quickinput",
+    "internal/store",
+    "internal/tasks"
+  ],
+  "js_checked_dirs": [
+    "web",
+    "internal/quickinput/assets",
+    "internal/executor/chatbridge"
+  ],
+  "html_checked_files": [
+    "web/index.html",
+    "internal/quickinput/assets/index.html"
+  ],
+  "excluded_paths": [
+    "internal/prompt/",
+    "plugins/",
+    "web/i18n-catalog.mjs",
+    "internal/quickinput/assets/i18n-catalog.mjs",
+    "internal/quickinput/assets/vendor/"
+  ],
+  "html_allowed_literals": [
+    "×",
+    "◈",
+    "·",
+    "Ctrl",
+    "Alt",
+    "Shift",
+    "1",
+    "2",
+    "https://100.x.x.x:17433",
+    "100.x.x.x:17433",
+    "backup",
+    "C:\\Scripts\\backup.ps1"
+  ],
+  "go_symbol_exemptions": [
+    {
+      "file": "internal/config/config.go",
+      "symbol": "legacyDefaultWorkspaceName",
+      "reason": "Historical built-in workspace name preserved for upgrade normalization of pre-i18n config.json files."
+    },
+    {
+      "file": "internal/tasks/engine.go",
+      "symbol": "prompt",
+      "reason": "LLM task execution system prompt intentionally kept outside UI translation catalog."
+    },
+    {
+      "file": "internal/tasks/engine.go",
+      "symbol": "routePrompt",
+      "reason": "LLM routing system prompt intentionally kept outside UI translation catalog."
+    }
+  ],
+  "js_ui_sinks": [
+    {"kind": "property", "name": "textContent"},
+    {"kind": "property", "name": "innerText"},
+    {"kind": "call", "name": "node", "arg_indices": [1]},
+    {"kind": "call", "name": "element", "arg_indices": [1]},
+    {"kind": "call", "name": "confirm", "arg_indices": [0]},
+    {"kind": "call", "name": "prompt", "arg_indices": [0]},
+    {"kind": "call", "name": "notice", "arg_indices": [0]},
+    {"kind": "call", "name": "say", "arg_indices": [0]},
+    {"kind": "attribute_call", "name": "setAttribute", "attributes": ["aria-label", "title", "placeholder"]}
+  ],
+  "go_desktop_ui_sinks": [
+    {"kind": "func", "name": "menuItem", "arg_indices": [3]},
+    {"kind": "selector", "receiver": "messageBox", "method": "Call", "arg_indices": [1, 2]},
+    {"kind": "win32_proc", "proc_names": ["SetWindowTextW", "SetWindowText"], "arg_indices": [1]}
+  ]
+}

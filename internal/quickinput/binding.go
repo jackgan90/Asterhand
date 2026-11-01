@@ -5,6 +5,8 @@ package quickinput
 import (
 	"fmt"
 	"strings"
+
+	"github.com/jackgan90/Asterhand/internal/i18n"
 )
 
 type Binding struct {
@@ -19,12 +21,12 @@ func (b Binding) Normalize() (Binding, error) {
 	for _, modifier := range b.Modifiers {
 		m := strings.ToLower(strings.TrimSpace(modifier))
 		if m != "ctrl" && m != "alt" && m != "shift" {
-			return Binding{}, fmt.Errorf("快捷键只支持 Ctrl、Alt 和 Shift 修饰键")
+			return Binding{}, i18n.Err("err.quickinput.modifiers_only")
 		}
 		seen[m] = true
 	}
 	if !seen["ctrl"] && !seen["alt"] {
-		return Binding{}, fmt.Errorf("快捷键至少包含 Ctrl 或 Alt")
+		return Binding{}, i18n.Err("err.quickinput.ctrl_or_alt_required")
 	}
 	result := Binding{Modifiers: []string{}, Key: b.Key}
 	for _, m := range []string{"ctrl", "alt", "shift"} {
@@ -33,13 +35,13 @@ func (b Binding) Normalize() (Binding, error) {
 		}
 	}
 	if _, ok := keyCodes[b.Key]; !ok {
-		return Binding{}, fmt.Errorf("不支持该按键，请选择字母、数字或命名键（F12/Win/Fn 除外）")
+		return Binding{}, i18n.Err("err.quickinput.unsupported_key")
 	}
 	if _, punctuation := keyLabels[b.Key]; punctuation {
-		return Binding{}, fmt.Errorf("首版请使用字母、数字或命名键；标点按键的跨布局映射暂不支持")
+		return Binding{}, i18n.Err("err.quickinput.punctuation_unsupported")
 	}
 	if (seen["ctrl"] && seen["alt"] && b.Key == "Delete") || (seen["alt"] && b.Key == "Tab") || (seen["alt"] && b.Key == "F4") {
-		return Binding{}, fmt.Errorf("该组合为系统保留快捷键")
+		return Binding{}, i18n.Err("err.quickinput.reserved_combo")
 	}
 	return result, nil
 }

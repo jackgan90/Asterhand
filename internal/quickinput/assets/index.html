@@ -1,25 +1,25 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="input.css"><link rel="stylesheet" href="vendor/katex/katex.min.css"><link rel="stylesheet" href="chat.css"><link rel="stylesheet" href="commands.css"><script type="module" src="input.js"></script><title>星伴快捷输入</title></head>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="input.css"><link rel="stylesheet" href="vendor/katex/katex.min.css"><link rel="stylesheet" href="chat.css"><link rel="stylesheet" href="commands.css"><script type="module" src="input.js"></script><title data-i18n="brand.quickinput_window_title">星伴快捷输入</title></head>
 <body><main>
-  <header><strong>Asterhand <span>/ 星伴</span></strong><nav aria-label="会话操作">
-    <button id="chat-history" type="button">历史</button><button id="chat-new" type="button">新对话</button>
-    <button id="chat-expand" type="button" aria-expanded="false" aria-controls="chat-panel">展开 ▴</button>
+  <header><strong><b data-i18n="brand.primary">Asterhand</b> <span data-i18n="brand.quickinput_sub" data-i18n-brand-sub>/ 星伴</span></strong><nav aria-label="会话操作" data-i18n-aria-label="quickinput.nav_aria">
+    <button id="chat-history" type="button" data-i18n="quickinput.history">历史</button><button id="chat-new" type="button" data-i18n="quickinput.new_chat">新对话</button>
+    <button id="chat-expand" type="button" aria-expanded="false" aria-controls="chat-panel" data-i18n="quickinput.expand">展开 ▴</button>
   </nav></header>
-  <section id="chat-panel" hidden aria-label="持续聊天">
-    <div class="chat-session-bar"><div class="chat-session-identity"><span id="chat-conversation-name">本机默认助手</span><span aria-hidden="true"> · </span><span id="chat-connection" data-state="connecting" role="status">连接中</span></div><nav><button id="chat-latest" type="button">回到最新</button><button id="chat-refresh" type="button">刷新</button></nav></div>
-    <nav id="chat-conversations" hidden aria-label="历史会话"></nav>
-    <div id="chat-scroll" tabindex="0" aria-label="消息历史"><button id="chat-older" type="button" hidden>读取更早消息</button><div id="chat-messages"></div></div>
+  <section id="chat-panel" hidden aria-label="持续聊天" data-i18n-aria-label="quickinput.panel_aria">
+    <div class="chat-session-bar"><div class="chat-session-identity"><span id="chat-conversation-name" data-i18n="quickinput.default_assistant">本机默认助手</span><span aria-hidden="true"> · </span><span id="chat-connection" data-state="connecting" role="status" data-i18n="quickinput.conn.connecting">连接中</span></div><nav><button id="chat-latest" type="button" data-i18n="quickinput.back_to_latest">回到最新</button><button id="chat-refresh" type="button" data-i18n="quickinput.refresh">刷新</button></nav></div>
+    <nav id="chat-conversations" hidden aria-label="历史会话" data-i18n-aria-label="quickinput.conversations_aria"></nav>
+    <div id="chat-scroll" tabindex="0" aria-label="消息历史" data-i18n-aria-label="quickinput.messages_aria"><button id="chat-older" type="button" hidden data-i18n="quickinput.read_older">读取更早消息</button><div id="chat-messages"></div></div>
   </section>
-  <section id="chat-draft-decision" hidden role="alertdialog" aria-label="切换会话确认">
-    <p>当前有未发送草稿。保留当前会话，还是丢弃草稿并切换？</p>
-    <button id="chat-draft-cancel" type="button">保留当前</button><button id="chat-draft-discard" type="button">丢弃草稿并切换</button>
+  <section id="chat-draft-decision" hidden role="alertdialog" aria-label="切换会话确认" data-i18n-aria-label="quickinput.draft_dialog_aria">
+    <p data-i18n="quickinput.draft_dialog_prompt">当前有未发送草稿。保留当前会话，还是丢弃草稿并切换？</p>
+    <button id="chat-draft-cancel" type="button" data-i18n="quickinput.draft_keep">保留当前</button><button id="chat-draft-discard" type="button" data-i18n="quickinput.draft_discard">丢弃草稿并切换</button>
   </section>
-  <textarea id="input" aria-label="快捷输入" spellcheck="false" autocomplete="off" aria-controls="command-list" aria-autocomplete="list" aria-expanded="false"></textarea>
-  <section id="command-panel" hidden aria-label="本地快捷命令">
-    <div class="command-toolbar"><span>本地命令 · ↑↓ 选择</span><span id="command-message" role="status" hidden></span><button id="command-settings" type="button">管理命令</button><button id="command-as-text" type="button" title="以代码块引用原文，发送给聊天">作为文本发送</button><button id="command-run" type="button">执行</button></div>
-    <div id="command-list" role="listbox" aria-label="已注册命令"></div>
+  <textarea id="input" aria-label="快捷输入" data-i18n-aria-label="quickinput.input_aria" spellcheck="false" autocomplete="off" aria-controls="command-list" aria-autocomplete="list" aria-expanded="false"></textarea>
+  <section id="command-panel" hidden aria-label="本地快捷命令" data-i18n-aria-label="quickinput.commands_aria">
+    <div class="command-toolbar"><span data-i18n="quickinput.commands_hint">本地命令 · ↑↓ 选择</span><span id="command-message" role="status" hidden></span><button id="command-settings" type="button" data-i18n="quickinput.commands_manage">管理命令</button><button id="command-as-text" type="button" title="以代码块引用原文，发送给聊天" data-i18n-title="quickinput.commands_as_text_title" data-i18n="quickinput.commands_as_text">作为文本发送</button><button id="command-run" type="button" data-i18n="quickinput.commands_run">执行</button></div>
+    <div id="command-list" role="listbox" aria-label="已注册命令" data-i18n-aria-label="quickinput.commands_list_aria"></div>
     <div id="command-empty" hidden></div>
   </section>
-  <div class="chat-actions"><span id="chat-status" role="status">Enter 发送 · Shift+Enter 换行</span><button id="chat-stop" type="button" hidden>停止回复</button><button id="chat-send" type="button" disabled>发送</button></div>
-  <footer><span>Esc 隐藏</span><span id="status" role="status"></span></footer>
+  <div class="chat-actions"><span id="chat-status" role="status"><span data-i18n="quickinput.chat_hint">Enter 发送 · Shift+Enter 换行</span></span><button id="chat-stop" type="button" hidden data-i18n="quickinput.stop_reply">停止回复</button><button id="chat-send" type="button" disabled data-i18n="quickinput.send">发送</button></div>
+  <footer><span data-i18n="quickinput.esc_hide">Esc 隐藏</span><span id="status" role="status"></span></footer>
 </main></body></html>

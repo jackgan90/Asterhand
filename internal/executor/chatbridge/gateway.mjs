@@ -1,15 +1,18 @@
 import {spawn} from 'node:child_process';
 
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
-const failure = (code, message) => Object.assign(new Error(message), {code, publicMessage: true});
+const failure = (code, messageKey, message) =>
+  Object.assign(new Error(message), {code, message_key: messageKey, publicMessage: true});
 
 // Locked OpenClaw admission reasons, before a user turn is persisted. Other
 // INVALID_REQUEST errors and transport failures remain unknown; never replay.
 export function submissionError(error) {
-  if (error.notDispatched === true) return failure('rejected', '发送前连接未就绪，草稿已保留，请刷新后重新发送');
+  if (error.notDispatched === true) {
+    return failure('rejected', 'err.chatbridge.not_dispatched_conn', 'Connection was not ready before sending. Draft preserved; refresh and send again.');
+  }
   if (error.native?.code === 'INVALID_REQUEST' &&
     ['active-leaf-changed', 'session-settings-changed', 'session-routing-changed'].includes(error.native?.details?.reason)) {
-    return failure('rejected', '发送前会话已变化，草稿已保留，请刷新后重新发送');
+    return failure('rejected', 'err.chatbridge.not_dispatched_session', 'Session changed before sending. Draft preserved; refresh and send again.');
   }
   return error;
 }
@@ -27,7 +30,7 @@ export class Gateway {
 
   async start({entry, port, token, startup_timeout_ms = 55000}) {
     if (!Number.isInteger(startup_timeout_ms) || startup_timeout_ms < 1 || startup_timeout_ms > 180000) {
-      throw failure('invalid_request', '运行时启动等待参数无效');
+      throw failure('invalid_request', 'err.chatbridge.invalid_wait', 'Invalid runtime startup timeout parameter.');
     }
     this.port = port;
     this.token = token;
@@ -58,7 +61,7 @@ export class Gateway {
     });
     const deadline = Date.now() + startup_timeout_ms;
     while (Date.now() < deadline) {
-      if (this.childFailed) throw failure('unavailable', '聊天运行时未能启动');
+      if (this.childFailed) throw failure('unavailable', 'err.chatbridge.child_failed', 'Chat runtime failed to start.');
       try {
         await this.connect();
         process.stderr.write('[asterhand] gateway authenticated\n');
@@ -70,7 +73,7 @@ export class Gateway {
       }
     }
     process.stderr.write('[asterhand] gateway startup timeout\n');
-    throw failure('unavailable', '聊天运行时启动超时');
+    throw failure('unavailable', 'err.chatbridge.startup_timeout', 'Chat runtime startup timed out.');
   }
 
   disconnect() {
@@ -78,7 +81,9 @@ export class Gateway {
     const socket = this.socket;
     this.socket = null;
     socket?.close();
-    for (const entry of this.pending.values()) entry.reject(failure('unavailable', '聊天连接中断，请核对操作状态'));
+    for (const entry of this.pending.values()) {
+      entry.reject(failure('unavailable', 'err.conv.runtime.conn_interrupted', 'Chat connection interrupted. Check operation status.'));
+    }
     this.pending.clear();
   }
 
@@ -87,8 +92,8 @@ export class Gateway {
     const socket = new WebSocket(`ws://127.0.0.1:${this.port}`);
     this.socket = socket;
     await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(failure('unavailable', '聊天握手超时')), 4000);
-      const fail = () => { clearTimeout(timer); reject(failure('unavailable', '聊天连接不可用')); };
+      const timer = setTimeout(() => reject(failure('unavailable', 'err.chatbridge.handshake_timeout', 'Chat handshake timed out.')), 4000);
+      const fail = () => { clearTimeout(timer); reject(failure('unavailable', 'err.chatbridge.conn_unavailable', 'Chat connection is unavailable.')); };
       socket.onerror = fail;
       socket.onclose = () => {
         fail();
@@ -110,7 +115,7 @@ export class Gateway {
           if (!entry) return;
           this.pending.delete(frame.id);
           if (frame.ok) entry.resolve(frame.payload);
-          else entry.reject(Object.assign(failure('unavailable', '运行时请求未完成，请核对状态'), {native: frame.error}));
+          else entry.reject(Object.assign(failure('unavailable', 'err.chatbridge.request_incomplete', 'Runtime request did not complete. Check status.'), {native: frame.error}));
         } else if (frame.type === 'event') {
           this.onEvent(frame);
         }
@@ -121,7 +126,9 @@ export class Gateway {
       client: {id: 'cli', version: 'asterhand-chat-v1', platform: process.platform, mode: 'cli'},
       role: 'operator', scopes: ['operator.read', 'operator.write'], caps: [], auth: {token: this.token},
     });
-    if (this.socket !== socket || socket.readyState !== WebSocket.OPEN) throw failure('unavailable', '聊天连接在认证时中断');
+    if (this.socket !== socket || socket.readyState !== WebSocket.OPEN) {
+      throw failure('unavailable', 'err.chatbridge.auth_interrupted', 'Chat connection interrupted during authentication.');
+    }
     this.authenticated = true;
   }
 
@@ -136,22 +143,22 @@ export class Gateway {
 
   async reconnect() {
     for (const wait of [500, 1000, 2000]) {
-      if (this.childFailed) throw failure('unavailable', '聊天运行时已退出');
+      if (this.childFailed) throw failure('unavailable', 'err.chatbridge.child_exited', 'Chat runtime has exited.');
       await delay(wait);
       try { await this.connect(); return; } catch { this.disconnect(); }
     }
-    throw failure('unavailable', '聊天重连失败，请刷新核对状态');
+    throw failure('unavailable', 'err.chatbridge.reconnect_failed', 'Chat reconnection failed. Refresh to check status.');
   }
 
   rpc(method, params, timeout = 15000) {
     if (this.socket?.readyState !== WebSocket.OPEN || method !== 'connect' && !this.authenticated || this.pending.size >= 16) {
-      return Promise.reject(Object.assign(failure('unavailable', '聊天连接暂不可用'), {notDispatched: true}));
+      return Promise.reject(Object.assign(failure('unavailable', 'err.chatbridge.temp_unavailable', 'Chat connection is temporarily unavailable.'), {notDispatched: true}));
     }
     const id = String(++this.sequence);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(failure('unavailable', '运行时响应超时，请核对操作状态'));
+        reject(failure('unavailable', 'err.chatbridge.response_timeout', 'Runtime response timed out. Check operation status.'));
       }, timeout);
       this.pending.set(id, {
         resolve: value => { clearTimeout(timer); resolve(value); },

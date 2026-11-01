@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {ChatWindow, MAX_BODY_BYTES, bodyBytes, unsettled} from '../internal/quickinput/assets/chat-model.mjs';
+import {setLocale} from '../internal/quickinput/assets/i18n.mjs';
+
+setLocale('zh-CN');
 import {conversationClient} from '../internal/quickinput/assets/chat-client.mjs';
 import {historyPage, messageFragment, StreamState, observation, byteSize} from '../internal/executor/chatbridge/projection.mjs';
 

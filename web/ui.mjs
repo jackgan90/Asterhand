@@ -1,3 +1,6 @@
+import {formatDateTime, localizeError, t} from "./i18n.mjs";
+
+export {localizeError};
 export const $ = (selector, root = document) => root.querySelector(selector);
 export function node(tag, text, className) {
   const element = document.createElement(tag);
@@ -5,7 +8,7 @@ export function node(tag, text, className) {
   if (className) element.className = className;
   return element;
 }
-export const date = value => value ? new Date(value).toLocaleString() : "未确认";
+export const date = value => value ? formatDateTime(value) : t("common.unconfirmed");
 export function dialog(id) { if (!$(id).open) $(id).showModal(); }
 
 // The page follows the quick-input panel theme saved on this node.

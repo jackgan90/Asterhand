@@ -3,9 +3,9 @@
 package executor
 
 import (
-	"fmt"
 	"strings"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"golang.org/x/sys/windows"
 )
 
@@ -25,7 +25,7 @@ func resolveExistingPath(path string) (string, error) {
 		return "", err
 	}
 	if n >= uint32(len(buffer)) {
-		return "", fmt.Errorf("目录路径过长")
+		return "", i18n.Err("err.executor.path_too_long")
 	}
 	resolved := windows.UTF16ToString(buffer[:n])
 	if strings.HasPrefix(resolved, `\\?\UNC\`) {

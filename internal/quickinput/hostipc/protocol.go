@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackgan90/Asterhand/internal/conversation/wire"
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	commandswire "github.com/jackgan90/Asterhand/internal/localcommands/wire"
 )
 
@@ -25,6 +26,7 @@ const (
 	Ready          Kind = "ready"
 	Toggle         Kind = "toggle"
 	Theme          Kind = "theme"
+	Locale         Kind = "locale"
 	Snapshot       Kind = "snapshot"
 	SnapshotDone   Kind = "snapshot_done"
 	Edit           Kind = "edit"
@@ -52,6 +54,7 @@ type Message struct {
 	Revision     uint64                 `json:"revision,omitempty"`
 	Text         string                 `json:"text,omitempty"`
 	Theme        string                 `json:"theme,omitempty"`
+	Locale       string                 `json:"locale,omitempty"`
 	Home         string                 `json:"home,omitempty"`
 	AppVersion   string                 `json:"app_version,omitempty"`
 	Source       string                 `json:"source,omitempty"`
@@ -73,7 +76,7 @@ func (m Message) Validate(fromHost bool) error {
 	if m.Version != Version || len(m.Session) < 16 || len(m.Session) > 64 || !ValidText(m.Text) {
 		return ErrProtocol
 	}
-	if len(m.Home) > 32768 || len(m.AppVersion) > 64 || len(m.Source) > 64 || len(m.Runtime) > 64 || len(m.Code) > 64 {
+	if len(m.Home) > 32768 || len(m.AppVersion) > 64 || len(m.Source) > 64 || len(m.Runtime) > 64 || len(m.Code) > 64 || len(m.Locale) > 32 {
 		return ErrProtocol
 	}
 	var allowed bool
@@ -95,11 +98,13 @@ func (m Message) Validate(fromHost bool) error {
 	} else {
 		switch m.Kind {
 		case Initialize:
-			allowed = m.Home != "" && m.AppVersion != "" && m.Source != "" && m.Epoch != 0 && validTheme(m.Theme)
+			allowed = m.Home != "" && m.AppVersion != "" && m.Source != "" && m.Epoch != 0 && validTheme(m.Theme) && (m.Locale == "" || i18n.ValidLocale(m.Locale))
 		case Toggle, Snapshot:
 			allowed = m.Request != 0
 		case Theme:
 			allowed = m.Request != 0 && validTheme(m.Theme)
+		case Locale:
+			allowed = m.Request != 0 && i18n.ValidLocale(m.Locale)
 		case Accepted:
 			allowed = m.Epoch != 0 && m.Sequence != 0
 		case Quit, ReplyCompleted:
@@ -139,6 +144,9 @@ func (m Message) Validate(fromHost bool) error {
 		return ErrProtocol
 	}
 	if m.Kind != Initialize && m.Kind != Theme && m.Theme != "" {
+		return ErrProtocol
+	}
+	if m.Kind != Initialize && m.Kind != Locale && m.Locale != "" {
 		return ErrProtocol
 	}
 	if m.Kind != Ready && m.Runtime != "" {

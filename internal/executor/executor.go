@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/jackgan90/Asterhand/internal/config"
+	"github.com/jackgan90/Asterhand/internal/i18n"
 )
 
 type Run struct {
@@ -74,10 +74,10 @@ func (o *OpenClaw) Execute(ctx context.Context, r Run) (Result, error) {
 	}
 	key, err := o.Config.Credential(c.LLM.CredentialRef)
 	if err != nil {
-		return Result{}, errors.New("请在本机设置中配置所选模型的凭据")
+		return Result{}, i18n.Err("err.executor.missing_credential")
 	}
 	if options.NodePath == "" || options.EntryPath == "" {
-		return Result{}, errors.New("OpenClaw 运行环境未安装，请运行 repair")
+		return Result{}, i18n.Err("err.executor.openclaw_missing")
 	}
 	base := filepath.Join(o.Config.Home, "runs", r.ID)
 	for _, name := range []string{"state", "workspace"} {
@@ -108,7 +108,11 @@ func (o *OpenClaw) Execute(ctx context.Context, r Run) (Result, error) {
 		if len(detail) > 3000 {
 			detail = detail[len(detail)-3000:]
 		}
-		return Result{}, fmt.Errorf("OpenClaw 未返回有效结果: %v; %s", err, detail)
+		errText := "<nil>"
+		if err != nil {
+			errText = err.Error()
+		}
+		return Result{}, i18n.Wrap("err.executor.openclaw_invalid_output", map[string]string{"err": errText, "detail": detail}, err)
 	}
 	result.Final = redact(result.Final, key, r.Token)
 	if result.Error != nil {
@@ -116,16 +120,20 @@ func (o *OpenClaw) Execute(ctx context.Context, r Run) (Result, error) {
 		result.Error.Kind = redact(result.Error.Kind, key, r.Token)
 	}
 	if result.Status != "ok" && result.Status != "error" && result.Status != "timeout" {
-		return Result{}, errors.New("OpenClaw 返回未知结果状态，请重新验证运行时兼容性")
+		return Result{}, i18n.Err("err.executor.openclaw_unknown_status")
 	}
 	if result.OK != (result.Status == "ok") || (result.OK && result.Error != nil) {
-		return Result{}, errors.New("OpenClaw 返回不一致的执行结果")
+		return Result{}, i18n.Err("err.executor.openclaw_inconsistent")
 	}
 	if err != nil || !result.OK {
 		if result.Error != nil {
 			return result, fmt.Errorf("OpenClaw: %s", result.Error.Message)
 		}
-		return result, fmt.Errorf("OpenClaw 执行未成功: %v", err)
+		errText := "<nil>"
+		if err != nil {
+			errText = err.Error()
+		}
+		return result, i18n.Wrap("err.executor.openclaw_failed", map[string]string{"err": errText}, err)
 	}
 	return result, nil
 }

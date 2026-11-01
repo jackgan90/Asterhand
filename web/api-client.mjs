@@ -1,17 +1,29 @@
+import {getLocale, localizeMessage, t} from "./i18n.mjs";
+
 export function apiClient({fetch: request = globalThis.fetch, EventSource: Source = globalThis.EventSource} = {}) {
   let csrf = "", authentication = Promise.resolve();
   async function requestJSON(path, options = {}) {
     // The UI only addresses this node; no endpoint or authentication registry.
-    if (!path.startsWith("/api/") || /[\\#]/.test(path)) throw new Error("请求必须使用本机同源 API");
+    if (!path.startsWith("/api/") || /[\\#]/.test(path)) throw new Error(t("web.api.same_origin_only"));
     const response = await request(path, {
       ...options,
-      headers:{"Content-Type":"application/json", "X-Asterhand-CSRF":csrf, ...options.headers},
+      headers:{
+        "Content-Type":"application/json",
+        "X-Asterhand-CSRF":csrf,
+        "X-Asterhand-Locale":getLocale(),
+        ...options.headers,
+      },
     });
     const data = await response.json();
     if (!response.ok) {
-      const error = new Error(data.error || `请求失败 (${response.status})`);
+      const fallback = data?.error || t("web.api.request_failed", {status: response.status});
+      const message = localizeMessage(data?.message_key, data?.message_args, fallback);
+      const error = new Error(message);
       error.status = response.status;
       error.details = data;
+      error.messageKey = data?.message_key || "";
+      error.messageArgs = data?.message_args || null;
+      error.rawMessage = data?.error || "";
       throw error;
     }
     return data;

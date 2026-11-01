@@ -17,6 +17,12 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+func TestRunScriptPickerRejectsInvalidLocale(t *testing.T) {
+	if _, err := RunScriptPicker("fr-FR"); err == nil || !strings.Contains(err.Error(), "fr-FR") && err.Error() == "" {
+		t.Fatalf("expected invalid locale error from RunScriptPicker, got %v", err)
+	}
+}
+
 func TestNativeScriptPicker(t *testing.T) {
 	if os.Getenv("ASTERHAND_SCRIPT_PICKER_TEST") != "1" {
 		t.Skip("explicit native script picker gate required")

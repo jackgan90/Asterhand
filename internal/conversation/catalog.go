@@ -46,13 +46,13 @@ func (c catalog) conversation(id string) (conversationRecord, error) {
 	var record conversationRecord
 	err := c.store.Get("chat-conversation", id, &record)
 	if errors.Is(err, store.ErrNotFound) {
-		return record, Fail("not_found", "会话不存在")
+		return record, FailKey("not_found", "err.conv.not_found")
 	}
 	if err != nil {
 		return record, err
 	}
 	if record.Version != catalogVersion || record.Conversation.Target != c.target {
-		return record, Fail("binding_changed", "会话目录版本或目标不匹配")
+		return record, FailKey("binding_changed", "err.conv.catalog_mismatch")
 	}
 	return record, nil
 }
@@ -61,7 +61,7 @@ func (c catalog) turn(operation string) (turnRecord, error) {
 	var record turnRecord
 	err := c.store.Get("chat-turn", operation, &record)
 	if err == nil && (record.Version != catalogVersion || record.Target != c.target) {
-		err = Fail("binding_changed", "轮次目录版本或目标不匹配")
+		err = FailKey("binding_changed", "err.conv.turn_mismatch")
 	}
 	return record, err
 }
@@ -82,7 +82,7 @@ func (c catalog) list(offset int) ([]Conversation, error) {
 	list := make([]Conversation, 0, len(records))
 	for _, record := range records {
 		if record.Version != catalogVersion {
-			return nil, Fail("binding_changed", "会话目录版本不兼容，请使用匹配的版本")
+			return nil, FailKey("binding_changed", "err.conv.catalog_incompatible")
 		}
 		if record.Conversation.Target == c.target {
 			list = append(list, record.Conversation)
@@ -102,7 +102,7 @@ func (c catalog) turns() ([]turnRecord, error) {
 	}
 	for _, record := range records {
 		if record.Version != catalogVersion || record.Target != c.target {
-			return nil, Fail("binding_changed", "轮次目录版本或目标不匹配")
+			return nil, FailKey("binding_changed", "err.conv.turn_mismatch")
 		}
 	}
 	return records, nil

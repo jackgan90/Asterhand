@@ -6,7 +6,32 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/jackgan90/Asterhand/internal/i18n"
 )
+
+// ApplyInstallationLocale reads an existing node's desktop-settings.json (read-only)
+// to align launcher error dialogs with the user's saved language preference.
+func ApplyInstallationLocale(installationPath string) {
+	if installation, err := ReadInstallation(installationPath); err == nil {
+		applyDataLocale(installation.Data)
+	}
+}
+
+func applyDataLocale(dataDir string) {
+	var prefs struct {
+		Schema int    `json:"schema_version"`
+		Locale string `json:"locale"`
+	}
+	if err := readJSON(filepath.Join(dataDir, "desktop-settings.json"), &prefs); err == nil && prefs.Schema == 1 {
+		if prefs.Locale == "" {
+			prefs.Locale = "auto"
+		}
+		if i18n.ValidPreference(prefs.Locale) {
+			i18n.SetDefaultPreference(prefs.Locale)
+		}
+	}
+}
 
 // LogError returns the directory offered by the native error dialog. Invalid
 // installation or home records fall back to the application directory, never
@@ -29,7 +54,7 @@ func appendDiagnostic(directory string, failure error) error {
 		return err
 	}
 	if err == nil && !info.Mode().IsRegular() {
-		return errors.New("启动器日志必须是普通文件")
+		return i18n.Err("err.launch.log_regular_file")
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {

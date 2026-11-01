@@ -1,13 +1,13 @@
 package executor
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 
 	"github.com/jackgan90/Asterhand/internal/config"
+	"github.com/jackgan90/Asterhand/internal/i18n"
 )
 
 func ValidateWorkspace(c config.Config, home, root string) error {
@@ -30,10 +30,10 @@ func validateWorkspace(adapter Runtime, c config.Config, home, root string) erro
 	for _, path := range append(paths, home) {
 		protected, err := canonicalPath(path)
 		if err != nil {
-			return fmt.Errorf("运行时保护目录无效: %w", err)
+			return i18n.Wrap("err.executor.protected_dir_invalid", nil, err)
 		}
 		if pathContains(canonical, protected) || pathContains(protected, canonical) {
-			return fmt.Errorf("授权目录必须与节点数据和运行时保护目录分离")
+			return i18n.Err("err.executor.workspace_overlap")
 		}
 	}
 	return nil
@@ -43,7 +43,7 @@ func validateWorkspace(adapter Runtime, c config.Config, home, root string) erro
 // Existing paths use the OS resolver, including junctions on Windows.
 func canonicalPath(path string) (string, error) {
 	if path == "" || !filepath.IsAbs(path) {
-		return "", fmt.Errorf("需要绝对目录路径")
+		return "", i18n.Err("err.executor.abs_dir_required")
 	}
 	path = filepath.Clean(path)
 	resolved, err := resolveExistingPath(path)

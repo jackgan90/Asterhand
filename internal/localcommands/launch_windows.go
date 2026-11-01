@@ -3,7 +3,6 @@
 package localcommands
 
 import (
-	"fmt"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -11,6 +10,7 @@ import (
 	"unicode/utf16"
 	"unsafe"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"golang.org/x/sys/windows"
 )
 
@@ -20,7 +20,7 @@ import (
 func StartWindows(command Command, token windows.Token) error {
 	system, err := windows.GetSystemDirectory()
 	if err != nil {
-		return fmt.Errorf("读取 Windows 执行器目录失败：%w", err)
+		return i18n.Wrap("err.localcmd.win_dir_failed", nil, err)
 	}
 	envToken := token
 	if envToken == 0 {
@@ -28,7 +28,7 @@ func StartWindows(command Command, token windows.Token) error {
 	}
 	environment, err := envToken.Environ(false)
 	if err != nil {
-		return fmt.Errorf("读取当前用户环境失败：%w", err)
+		return i18n.Wrap("err.localcmd.env_failed", nil, err)
 	}
 	executable, line, environment, err := windowsInvocation(system, command, environment)
 	if err != nil {
@@ -40,7 +40,7 @@ func StartWindows(command Command, token windows.Token) error {
 	}
 	args, err := windows.UTF16FromString(line)
 	if err != nil || len(args) > 32767 {
-		return problem("invalid", "命令行超过 Windows 长度限制")
+		return problem("invalid", "err.localcmd.cmdline_too_long")
 	}
 	directory, err := windows.UTF16PtrFromString(command.WorkingDirectory())
 	if err != nil {
@@ -60,7 +60,7 @@ func StartWindows(command Command, token windows.Token) error {
 	}
 	runtime.KeepAlive(block)
 	if err != nil {
-		return fmt.Errorf("启动脚本失败：%w", err)
+		return i18n.Wrap("err.localcmd.launch_failed", nil, err)
 	}
 	windows.CloseHandle(info.Thread)
 	windows.CloseHandle(info.Process)
@@ -80,13 +80,13 @@ func windowsInvocation(system string, c Command, environment []string) (string, 
 		return executable, windows.ComposeCommandLine(append(args, c.Arguments...)), environment, nil
 	}
 	if ext := strings.ToLower(filepath.Ext(c.Script)); ext != ".bat" && ext != ".cmd" {
-		return "", "", nil, problem("unsupported", "脚本类型不受支持")
+		return "", "", nil, problem("unsupported", "err.localcmd.unsupported_script")
 	}
 	executable := filepath.Join(system, "cmd.exe")
 	parts := []string{cmdEscape(c.Script)}
 	for _, value := range c.Arguments {
 		if strings.Contains(value, `"`) {
-			return "", "", nil, problem("invalid", "批处理参数不支持字面双引号，请改用 .ps1")
+			return "", "", nil, problem("invalid", "err.localcmd.batch_quote_run")
 		}
 		// Batch scripts read parameters with %~n. Backslashes are literal here,
 		// including immediately before a closing quote; CRT quoting would alter them.
@@ -98,7 +98,7 @@ func windowsInvocation(system string, c Command, environment []string) (string, 
 	}
 	line := windows.EscapeArg(executable) + ` /d /s /v:off` + mode + `"` + strings.Join(parts, " ") + `"`
 	if len(utf16.Encode([]rune(line))) > 8190 {
-		return "", "", nil, problem("invalid", "批处理命令超过 cmd 长度限制")
+		return "", "", nil, problem("invalid", "err.localcmd.cmd_too_long")
 	}
 	return executable, line, environment, nil
 }

@@ -4,16 +4,22 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/model"
 )
 
-func failAdmission(w http.ResponseWriter, request model.Request, err error) {
+func failAdmission(w http.ResponseWriter, locale string, request model.Request, err error) {
 	var rejection *model.TaskRejection
 	if errors.As(err, &rejection) && rejection.Matches(request) {
-		send(w, http.StatusConflict, rejection)
+		out := *rejection
+		out.MessageArgs = i18n.CloneArgs(rejection.MessageArgs)
+		if out.MessageKey != "" {
+			out.Message = i18n.LocalizeMessage(locale, out.MessageKey, out.MessageArgs, out.Message)
+		}
+		send(w, http.StatusConflict, &out)
 		return
 	}
-	fail(w, http.StatusConflict, err)
+	failLocale(w, locale, http.StatusConflict, err)
 }
 
 // The loopback outbox shares the configuration transaction lock with HTTP

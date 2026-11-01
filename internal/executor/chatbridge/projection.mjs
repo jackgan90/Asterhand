@@ -99,7 +99,7 @@ export const messageBytes = native => encoder.encode(textOf(native));
 
 export function fragmentBytes(bytes, id, offset) {
   if (!Number.isInteger(offset) || offset < 0 || offset > bytes.length || offset < bytes.length && (bytes[offset] & 0xc0) === 0x80) {
-    throw failure('invalid_request', '消息片段位置无效');
+    throw failure('invalid_request', 'err.chatbridge.invalid_fragment_offset', 'Invalid message fragment offset.');
   }
   let end = Math.min(bytes.length, offset + 8192);
   while (end < bytes.length && end > offset && (bytes[end] & 0xc0) === 0x80) end--;

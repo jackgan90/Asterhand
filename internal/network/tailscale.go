@@ -10,16 +10,32 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/jackgan90/Asterhand/internal/i18n"
 )
 
 type Status struct {
-	Installed bool   `json:"installed"`
-	State     string `json:"state"`
-	Version   string `json:"version,omitempty"`
-	IPv4      string `json:"ipv4,omitempty"`
-	Endpoint  string `json:"endpoint,omitempty"`
-	Listen    string `json:"listen,omitempty"`
-	Detail    string `json:"detail"`
+	Installed   bool              `json:"installed"`
+	State       string            `json:"state"`
+	Version     string            `json:"version,omitempty"`
+	IPv4        string            `json:"ipv4,omitempty"`
+	Endpoint    string            `json:"endpoint,omitempty"`
+	Listen      string            `json:"listen,omitempty"`
+	Detail      string            `json:"detail"`
+	MessageKey  string            `json:"message_key,omitempty"`
+	MessageArgs map[string]string `json:"message_args,omitempty"`
+}
+
+func (s Status) Localize(locale string) Status {
+	s.MessageArgs = i18n.CloneArgs(s.MessageArgs)
+	s.Detail = i18n.LocalizeMessage(locale, s.MessageKey, s.MessageArgs, s.Detail)
+	return s
+}
+
+func statusWithKey(s Status, key string) Status {
+	s.MessageKey = key
+	s.Detail = i18n.T(i18n.Effective(), key)
+	return s
 }
 
 func Executable() string {
@@ -35,7 +51,7 @@ func Executable() string {
 func Inspect(ctx context.Context, port string) Status {
 	path := Executable()
 	if path == "" {
-		return Status{State: "not_installed", Detail: "未安装 Tailscale。运行 install.ps1 完成安装与登录引导。"}
+		return statusWithKey(Status{State: "not_installed"}, "status.tailscale.not_installed")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
@@ -43,7 +59,7 @@ func Inspect(ctx context.Context, port string) Status {
 	hideWindow(cmd)
 	b, err := cmd.Output()
 	if len(b) > 2*1024*1024 {
-		return Status{Installed: true, State: "error", Detail: "Tailscale 状态输出过大"}
+		return statusWithKey(Status{Installed: true, State: "error"}, "status.tailscale.output_oversized")
 	}
 	var raw struct {
 		Version      string
@@ -52,7 +68,7 @@ func Inspect(ctx context.Context, port string) Status {
 		Self         *struct{ TailscaleIPs []string }
 	}
 	if json.Unmarshal(b, &raw) != nil {
-		return Status{Installed: true, State: "error", Detail: "Tailscale 服务不可用，请打开 Tailscale 并检查登录状态。"}
+		return statusWithKey(Status{Installed: true, State: "error"}, "status.tailscale.service_unavailable")
 	}
 	s := Status{Installed: true, Version: raw.Version, State: raw.BackendState}
 	ips := raw.TailscaleIPs
@@ -67,15 +83,12 @@ func Inspect(ctx context.Context, port string) Status {
 		}
 	}
 	if err != nil || raw.BackendState != "Running" {
-		s.Detail = "请在 Tailscale 中登录，并让两台设备加入同一网络。"
-		return s
+		return statusWithKey(s, "status.tailscale.login_required")
 	}
 	if s.IPv4 == "" {
-		s.Detail = "Tailscale 已启动，但尚未获得地址。"
-		return s
+		return statusWithKey(s, "status.tailscale.no_address")
 	}
 	s.Listen = net.JoinHostPort(s.IPv4, strings.TrimPrefix(port, ":"))
 	s.Endpoint = "https://" + s.Listen
-	s.Detail = "Tailscale 已连接"
-	return s
+	return statusWithKey(s, "status.tailscale.connected")
 }

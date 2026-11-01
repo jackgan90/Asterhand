@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chatPanel} from '../internal/quickinput/assets/chat-ui.mjs';
+import {setLocale} from '../internal/quickinput/assets/i18n.mjs';
+
+setLocale('zh-CN');
 
 const target = {node_id:'reviewer-node-0001', role_id:'default'};
 const A = 'conversation-aaaa', B = 'conversation-bbbb';

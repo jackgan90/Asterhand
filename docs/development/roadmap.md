@@ -32,8 +32,11 @@
 | 正常发送状态与气泡稳定、提示词诊断退出聊天展示、后台完成任务栏提醒（本机用户验收通过） | [聊天发送稳定性与后台完成提醒](features/chat-completion-attention/plan.md) |
 | 快速本地安装：应用与运行时分开更新、目录候选、源码核对及持续进度（工程验证、独立复审和本地提速效果用户验收完成） | [快速本地安装](features/fast-local-install/plan.md)、[验证说明](features/fast-local-install/validation.md) |
 | Web 管理页与快捷面板统一视觉、随面板主题切换、面向普通用户精简文案（用户验收通过） | [Web 管理页视觉升级](features/web-console-visual-refresh/plan.md) |
+| 运行期界面与状态/错误提示中英双语实时无损切换、系统语言优先/浏览器语言次选自动匹配、单一权威词表与四层静态硬编码守卫（工程验证、独立复审及本机双语切换用户验收通过） | [运行期国际化框架](features/internationalization-framework/plan.md)、[验证说明](features/internationalization-framework/validation.md)、[国际化开发指南](i18n-guide.md) |
 
 ## 后续验证与功能
+
+- 运行期国际化的本机双语切换已通过用户验收；实体输入法、多屏/DPI 及双机跨节点任务专项按[验证说明](features/internationalization-framework/validation.md)独立确认。
 
 - 收起态自动高度的本机输入体验及默认恰好容纳策略已通过用户验收；实体输入法、鼠标滚动条、多屏/DPI等专项按[验证说明](features/compact-input-auto-height/validation.md)单独验证，后续调整额外一行策略时重新检查相关体验。
 

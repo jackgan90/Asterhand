@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"unsafe"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"golang.org/x/sys/windows"
 )
 
@@ -24,7 +25,7 @@ func canonicalPath(path string) (string, error) {
 		return "", err
 	}
 	if strings.HasPrefix(abs, `\\.\`) || strings.HasPrefix(abs, `\\?\`) || strings.Contains(strings.TrimPrefix(abs, filepath.VolumeName(abs)), ":") {
-		return "", errors.New("路径不能使用设备命名空间或备用数据流")
+		return "", i18n.Err("err.launch.device_or_ads")
 	}
 	p, err := windows.UTF16PtrFromString(abs)
 	if err != nil {
@@ -46,7 +47,7 @@ func canonicalPath(path string) (string, error) {
 	buffer := make([]uint16, 32768)
 	n, err := windows.GetFinalPathNameByHandle(h, &buffer[0], uint32(len(buffer)), 0)
 	if err != nil || n >= uint32(len(buffer)) {
-		return "", fmt.Errorf("解析路径失败：%v", err)
+		return "", i18n.ErrArgs("err.launch.resolve_path_failed", map[string]string{"err": fmt.Sprint(err)})
 	}
 	resolved := windows.UTF16ToString(buffer[:n])
 	if strings.HasPrefix(resolved, `\\?\UNC\`) {
@@ -70,13 +71,13 @@ func launchMutexName(home string) (string, error) {
 	count, _, callErr := mapString.Call(uintptr(unsafe.Pointer(&locale)), lcmapLowercase,
 		uintptr(unsafe.Pointer(&source[0])), uintptr(len(source)-1), 0, 0, 0, 0, 0)
 	if count == 0 {
-		return "", fmt.Errorf("规范化启动锁路径失败：%w", callErr)
+		return "", i18n.Wrap("err.launch.normalize_lock_failed", nil, callErr)
 	}
 	mapped := make([]uint16, int(count))
 	count, _, callErr = mapString.Call(uintptr(unsafe.Pointer(&locale)), lcmapLowercase,
 		uintptr(unsafe.Pointer(&source[0])), uintptr(len(source)-1), uintptr(unsafe.Pointer(&mapped[0])), uintptr(len(mapped)), 0, 0, 0)
 	if count == 0 {
-		return "", fmt.Errorf("规范化启动锁路径失败：%w", callErr)
+		return "", i18n.Wrap("err.launch.normalize_lock_failed", nil, callErr)
 	}
 	key := windows.UTF16ToString(mapped[:count])
 	return fmt.Sprintf(`Local\AsterhandLaunch-%x`, sha256.Sum256([]byte(key))), nil
@@ -107,7 +108,7 @@ func acquireLaunchLock(ctx context.Context, home string) (func(), error) {
 		if waitErr != nil || ctx.Err() != nil {
 			windows.CloseHandle(h)
 			runtime.UnlockOSThread()
-			return nil, errors.New("另一个启动或安装操作尚未结束，请稍后重试")
+			return nil, i18n.Err("err.launch.mutex_busy")
 		}
 	}
 }
@@ -125,7 +126,7 @@ func serviceBusy(home string) (bool, error) {
 		return true, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("无法核对节点锁，保留现有进程：%w", err)
+		return false, i18n.Wrap("err.launch.service_lock_check_failed", nil, err)
 	}
 	windows.CloseHandle(h)
 	return false, nil

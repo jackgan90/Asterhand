@@ -3,9 +3,9 @@
 package desktop
 
 import (
-	"fmt"
 	"syscall"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/quickinput"
 )
 
@@ -24,14 +24,14 @@ func (r *trayRegistrar) invoke(fn func() (int, error)) (int, error) {
 	select {
 	case r.tray.inputCommands <- request:
 	default:
-		return 0, fmt.Errorf("桌面操作队列已满")
+		return 0, i18n.Err("err.desktop.queue_full")
 	}
 	postMessage.Call(r.tray.window.Load(), wmInputCommand, 0, 0)
 	select {
 	case result := <-request.result:
 		return result.id, result.err
 	case <-r.tray.done:
-		return 0, fmt.Errorf("托盘已关闭")
+		return 0, i18n.Err("err.desktop.tray_closed")
 	}
 }
 
@@ -44,7 +44,7 @@ func (r *trayRegistrar) Register(binding quickinput.Binding) (int, error) {
 		r.tray.nextHotkey++
 		id := r.tray.nextHotkey
 		if id > 0xbfff {
-			return 0, fmt.Errorf("快捷键注册 ID 已耗尽，请重新启动节点")
+			return 0, i18n.Err("err.desktop.hotkey_ids_exhausted")
 		}
 		ok, _, callErr := user32.NewProc("RegisterHotKey").Call(r.tray.window.Load(), uintptr(id), uintptr(modifiers), uintptr(key))
 		if ok == 0 {
@@ -52,7 +52,13 @@ func (r *trayRegistrar) Register(binding quickinput.Binding) (int, error) {
 			if callErr == syscall.Errno(1409) {
 				code = "conflict"
 			}
-			return 0, &quickinput.RegistrationError{Code: code, Detail: fmt.Sprintf("无法注册 %s：%v", binding.String(), callErr)}
+			args := map[string]string{"binding": binding.String(), "err": callErr.Error()}
+			return 0, &quickinput.RegistrationError{
+				Code:   code,
+				Key:    "err.desktop.hotkey_register_failed",
+				Args:   args,
+				Detail: i18n.T(i18n.Effective(), "err.desktop.hotkey_register_failed", args),
+			}
 		}
 		return id, nil
 	})

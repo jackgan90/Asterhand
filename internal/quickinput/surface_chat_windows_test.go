@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackgan90/Asterhand/internal/conversation/wire"
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/model"
 	"github.com/jackgan90/Asterhand/internal/quickinput/hostipc"
 )
@@ -78,6 +79,9 @@ func TestNativeChatPanelWorkflow(t *testing.T) {
 	if err := checkInteractiveDesktop(); err != nil {
 		t.Fatal(err)
 	}
+	prevPref := i18n.DefaultPreference()
+	i18n.SetDefaultPreference("zh-CN")
+	t.Cleanup(func() { i18n.SetDefaultPreference(prevPref) })
 	fixture := &surfaceChatFixture{conversation: model.ID(), submitted: make(chan wire.Request, 2), release: make(chan struct{})}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

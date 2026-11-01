@@ -22,7 +22,7 @@ func (s *Service) reserve(request Request, queued bool) (*turnRecord, bool, erro
 	old, err := s.catalog.turn(request.Operation)
 	if err == nil {
 		if old.Digest != requestDigest(request) {
-			return nil, false, Fail("conflict", "同一操作身份已绑定其他草稿或会话")
+			return nil, false, FailKey("conflict", "err.conv.op_bound_other_draft")
 		}
 		return &old, false, nil
 	}
@@ -32,7 +32,7 @@ func (s *Service) reserve(request Request, queued bool) (*turnRecord, bool, erro
 	var intent queueIntent
 	if err := s.catalog.store.Get("chat-intent", request.Operation, &intent); err == nil {
 		if intent.Digest != requestDigest(request) {
-			return nil, false, Fail("conflict", "操作身份已绑定其他消息")
+			return nil, false, FailKey("conflict", "err.conv.op_bound_other")
 		}
 		if intent.Turn.Delivery == "rejected" {
 			return &turnRecord{Turn: intent.Turn, Digest: intent.Digest}, false, nil
@@ -41,10 +41,10 @@ func (s *Service) reserve(request Request, queued bool) (*turnRecord, bool, erro
 		return nil, false, err
 	}
 	if !queued && len(s.queue) != 0 {
-		return nil, false, Fail("busy", "已有排队消息，请使用发送队列")
+		return nil, false, FailKey("busy", "err.conv.use_send_queue")
 	}
 	if s.stopping || s.configuring || s.active != nil || len(s.creating) != 0 {
-		return nil, false, Fail("busy", "当前节点已有聊天正在运行或核对，草稿已保留")
+		return nil, false, FailKey("busy", "err.conv.active_turn_draft_kept")
 	}
 	// Refresh selection while holding the same admission lock as configuration.
 	// A settings transaction may have completed after Call's public snapshot.
@@ -53,21 +53,23 @@ func (s *Service) reserve(request Request, queued bool) (*turnRecord, bool, erro
 		return nil, false, err
 	}
 	if !descriptor.CanSend {
-		detail := descriptor.SendError
-		if detail == "" {
-			detail = "请先在本机设置配置模型凭据"
+		if descriptor.SendErrorKey != "" {
+			return nil, false, FailKey("not_configured", descriptor.SendErrorKey, descriptor.SendErrorArgs)
 		}
-		return nil, false, Fail("not_configured", detail)
+		if descriptor.SendError != "" {
+			return nil, false, Fail("not_configured", descriptor.SendError)
+		}
+		return nil, false, FailKey("not_configured", "err.conv.configure_key_first")
 	}
 	item, err := s.catalog.conversation(request.Conversation)
 	if err != nil {
 		return nil, false, err
 	}
 	if item.Conversation.State != "ready" {
-		return nil, false, Fail("not_ready", "会话仍在创建，请刷新后发送")
+		return nil, false, FailKey("not_ready", "err.conv.creating_refresh_send")
 	}
 	if item.Binding.Generation != descriptor.Binding || item.Binding.Runtime != descriptor.ID {
-		return nil, false, Fail("binding_changed", "原会话的运行时绑定不可用，请恢复原配置或新建会话")
+		return nil, false, FailKey("binding_changed", "err.conv.binding_unavailable_restore")
 	}
 	now := time.Now().UTC()
 	turnID := model.ID()

@@ -3,7 +3,6 @@ package app
 import (
 	"crypto/subtle"
 	"encoding/json"
-	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -11,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/model"
 	"github.com/jackgan90/Asterhand/internal/network"
 	"github.com/jackgan90/Asterhand/internal/peer"
@@ -24,8 +24,69 @@ func send(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
 }
+
+func requestLocaleFor(r *http.Request, fallback string) string {
+	if r != nil {
+		if hdr := strings.TrimSpace(r.Header.Get("X-Asterhand-Locale")); i18n.ValidLocale(hdr) {
+			return hdr
+		}
+	}
+	if i18n.ValidLocale(fallback) {
+		return fallback
+	}
+	return i18n.Effective()
+}
+
+func (a *App) requestLocale(r *http.Request) string {
+	fallback := ""
+	if a != nil && a.Input != nil {
+		fallback = a.Input.Status().EffectiveLocale
+	}
+	return requestLocaleFor(r, fallback)
+}
+
+func errorPayload(locale string, err error) map[string]any {
+	msg, key, args := i18n.LocalizeError(locale, err)
+	payload := map[string]any{"error": msg}
+	if key != "" {
+		payload["message_key"] = key
+	}
+	if len(args) > 0 {
+		payload["message_args"] = args
+	}
+	return payload
+}
+
+func failLocale(w http.ResponseWriter, locale string, status int, err error) {
+	send(w, status, errorPayload(locale, err))
+}
+
 func fail(w http.ResponseWriter, status int, err error) {
-	send(w, status, map[string]string{"error": err.Error()})
+	failLocale(w, i18n.Effective(), status, err)
+}
+
+func (a *App) fail(w http.ResponseWriter, r *http.Request, status int, err error) {
+	failLocale(w, a.requestLocale(r), status, err)
+}
+
+func localizeJob(locale string, j model.Job) model.Job {
+	j.ErrorArgs = i18n.CloneArgs(j.ErrorArgs)
+	if j.ErrorKey != "" {
+		j.Error = i18n.LocalizeMessage(locale, j.ErrorKey, j.ErrorArgs, j.Error)
+	}
+	return j
+}
+
+func localizeOutbox(locale string, o model.Outbox) model.Outbox {
+	o.ErrorArgs = i18n.CloneArgs(o.ErrorArgs)
+	if o.ErrorKey != "" {
+		o.Error = i18n.LocalizeMessage(locale, o.ErrorKey, o.ErrorArgs, o.Error)
+	}
+	if o.Job != nil {
+		copyJob := localizeJob(locale, *o.Job)
+		o.Job = &copyJob
+	}
+	return o
 }
 func read(w http.ResponseWriter, r *http.Request, v any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, 256*1024)
@@ -45,11 +106,32 @@ func securityHeaders(w http.ResponseWriter) {
 func (a *App) local(w http.ResponseWriter, r *http.Request) {
 	securityHeaders(w)
 	if r.Host != a.webAddress {
-		fail(w, 403, errors.New("无效的本机 Web Host"))
+		a.fail(w, r, 403, i18n.Err("err.http.invalid_host"))
 		return
 	}
 	if r.URL.Path == "/health" && r.Method == "GET" {
-		send(w, 200, map[string]any{"node_id": a.Config.Get().NodeID, "pid": os.Getpid()})
+		locale := i18n.Effective()
+		localeMode := "auto"
+		sysDetected := false
+		if a.Input != nil {
+			st := a.Input.Status()
+			if i18n.ValidLocale(st.EffectiveLocale) {
+				locale = st.EffectiveLocale
+			}
+			if st.Desired.Locale != "" {
+				localeMode = st.Desired.Locale
+			}
+			sysDetected = st.SystemLocaleDetected
+		} else {
+			_, sysDetected = i18n.ResolveLocale("auto")
+		}
+		send(w, 200, map[string]any{
+			"node_id":                a.Config.Get().NodeID,
+			"pid":                    os.Getpid(),
+			"locale":                 locale,
+			"locale_mode":            localeMode,
+			"system_locale_detected": sysDetected,
+		})
 		return
 	}
 	if r.URL.Path == "/internal/tool" {
@@ -73,11 +155,11 @@ func (a *App) local(w http.ResponseWriter, r *http.Request) {
 	}
 	s, ok := a.authorize(r)
 	if !ok {
-		fail(w, 401, errors.New("请使用节点启动时的登录链接"))
+		a.fail(w, r, 401, i18n.Err("err.http.login_link_required"))
 		return
 	}
 	if r.Method != "GET" && (r.Header.Get("Origin") != "http://"+a.webAddress || r.Header.Get("X-Asterhand-CSRF") != s.csrf) {
-		fail(w, 403, errors.New("请求来源校验失败"))
+		a.fail(w, r, 403, i18n.Err("err.http.origin_failed"))
 		return
 	}
 	if r.URL.Path == "/api/session" {
@@ -88,18 +170,18 @@ func (a *App) local(w http.ResponseWriter, r *http.Request) {
 }
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" || r.Header.Get("Origin") != "http://"+a.webAddress {
-		fail(w, 403, errors.New("请从本机设置页面登录"))
+		a.fail(w, r, 403, i18n.Err("err.http.local_login_required"))
 		return
 	}
 	var input struct {
 		Token string `json:"token"`
 	}
 	if err := read(w, r, &input); err != nil {
-		fail(w, 400, err)
+		a.fail(w, r, 400, err)
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(input.Token), []byte(a.loginToken)) != 1 {
-		fail(w, 401, errors.New("登录码无效"))
+		a.fail(w, r, 401, i18n.Err("err.http.invalid_token"))
 		return
 	}
 	id := model.ID()
@@ -133,7 +215,7 @@ func (a *App) tool(w http.ResponseWriter, r *http.Request) {
 	}
 	var call tasks.ToolCall
 	if err := read(w, r, &call); err != nil {
-		fail(w, 400, err)
+		a.fail(w, r, 400, err)
 		return
 	}
 	token := bearer(r)
@@ -148,7 +230,7 @@ func (a *App) tool(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 	result, err := a.Engine.Tool(r.Context(), token, call)
 	if err != nil {
-		fail(w, 409, err)
+		a.fail(w, r, 409, err)
 		return
 	}
 	send(w, 200, result)
@@ -158,17 +240,17 @@ func (a *App) remote(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/v1/pair" && r.Method == "POST" {
 		var input peer.PairRequest
 		if err := read(w, r, &input); err != nil {
-			fail(w, 400, err)
+			a.fail(w, r, 400, err)
 			return
 		}
 		host, _, _ := net.SplitHostPort(r.RemoteAddr)
 		if ip := net.ParseIP(host); ip != nil && !ip.IsLoopback() && network.LoopbackEndpoint(input.Node.Endpoint) {
-			fail(w, 400, errors.New("远端配对地址不能使用本机回环地址，请先设置 Tailscale 地址"))
+			a.fail(w, r, 400, i18n.Err("err.http.pair_loopback_forbidden"))
 			return
 		}
 		result, err := a.Peers.AcceptPair(input)
 		if err != nil {
-			fail(w, 403, err)
+			a.fail(w, r, 403, err)
 			return
 		}
 		send(w, 200, result)
@@ -176,11 +258,11 @@ func (a *App) remote(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := a.Peers.Authenticate(bearer(r))
 	if err != nil {
-		fail(w, 401, err)
+		a.fail(w, r, 401, err)
 		return
 	}
 	if r.URL.Path == "/v1/info" && r.Method == "GET" {
-		send(w, 200, a.info(p.Projects))
+		send(w, 200, a.infoFor(p.Projects, a.requestLocale(r)))
 		return
 	}
 	if r.URL.Path == "/v1/metadata" {
@@ -190,21 +272,21 @@ func (a *App) remote(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/v1/jobs" && r.Method == "POST" {
 		var req model.Request
 		if err := read(w, r, &req); err != nil {
-			fail(w, 400, err)
+			a.fail(w, r, 400, err)
 			return
 		}
 		if !contains(p.Projects, req.ProjectID) || req.Mode != "execute" {
-			fail(w, 403, errors.New("peer 未授权此项目或执行模式"))
+			a.fail(w, r, 403, i18n.Err("err.http.peer_unauthorized_project"))
 			return
 		}
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		j, err := a.Engine.Accept(p.ID, req)
 		if err != nil {
-			failAdmission(w, req, err)
+			failAdmission(w, a.requestLocale(r), req, err)
 			return
 		}
-		send(w, 202, j)
+		send(w, 202, localizeJob(a.requestLocale(r), j))
 		return
 	}
 	if r.URL.Path == "/v1/cancel-request" && r.Method == "POST" {
@@ -212,20 +294,20 @@ func (a *App) remote(w http.ResponseWriter, r *http.Request) {
 			RequestID string `json:"request_id"`
 		}
 		if err := read(w, r, &input); err != nil {
-			fail(w, 400, err)
+			a.fail(w, r, 400, err)
 			return
 		}
 		if len(input.RequestID) < 8 {
-			fail(w, 400, errors.New("无效请求 ID"))
+			a.fail(w, r, 400, i18n.Err("err.http.invalid_request_id"))
 			return
 		}
 		if err := a.Store.Cancel(p.ID, input.RequestID); err != nil {
-			fail(w, 500, err)
+			a.fail(w, r, 500, err)
 			return
 		}
 		var jobs []model.Job
 		if err := a.Store.List("job", &jobs); err != nil {
-			fail(w, 500, err)
+			a.fail(w, r, 500, err)
 			return
 		}
 		for _, j := range jobs {
@@ -251,19 +333,20 @@ func contains(items []string, value string) bool {
 	return false
 }
 func (a *App) jobAPI(w http.ResponseWriter, r *http.Request, actor string, local bool) {
+	reqLocale := a.requestLocale(r)
 	path := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/api/jobs/"), "/v1/jobs/")
 	parts := strings.Split(path, "/")
 	var j model.Job
 	if err := a.Store.Get("job", parts[0], &j); err != nil {
-		fail(w, 404, err)
+		a.fail(w, r, 404, err)
 		return
 	}
 	if !local && j.Origin != actor {
-		fail(w, 403, errors.New("仅任务发起者可访问此任务"))
+		a.fail(w, r, 403, i18n.Err("err.http.job_origin_only"))
 		return
 	}
 	if len(parts) == 1 && r.Method == "GET" {
-		send(w, 200, j)
+		send(w, 200, localizeJob(reqLocale, j))
 		return
 	}
 	if len(parts) != 2 {
@@ -278,12 +361,12 @@ func (a *App) jobAPI(w http.ResponseWriter, r *http.Request, actor string, local
 		}
 		after, err := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
 		if err != nil || after < 0 || after > j.Seq {
-			fail(w, 409, errors.New("游标无效，请重新获取任务快照"))
+			a.fail(w, r, 409, i18n.Err("err.http.invalid_cursor_resync"))
 			return
 		}
 		events, err := a.Store.Events(j.ID, after)
 		if err != nil {
-			fail(w, 500, err)
+			a.fail(w, r, 500, err)
 			return
 		}
 		send(w, 200, map[string]any{"events": events, "watermark": j.Seq})
@@ -294,10 +377,10 @@ func (a *App) jobAPI(w http.ResponseWriter, r *http.Request, actor string, local
 		}
 		j, err := a.Engine.Cancel(j.ID)
 		if err != nil {
-			fail(w, 409, err)
+			a.fail(w, r, 409, err)
 			return
 		}
-		send(w, 202, j)
+		send(w, 202, localizeJob(reqLocale, j))
 	case "answer":
 		if r.Method != "POST" {
 			w.WriteHeader(405)
@@ -310,15 +393,15 @@ func (a *App) jobAPI(w http.ResponseWriter, r *http.Request, actor string, local
 			Answer        string `json:"answer"`
 		}
 		if err := read(w, r, &input); err != nil {
-			fail(w, 400, err)
+			a.fail(w, r, 400, err)
 			return
 		}
 		j, err := a.Engine.Answer(j.ID, input.InteractionID, input.Attempt, input.AnswerID, input.Answer, actor)
 		if err != nil {
-			fail(w, 409, err)
+			a.fail(w, r, 409, err)
 			return
 		}
-		send(w, 200, j)
+		send(w, 200, localizeJob(reqLocale, j))
 	case "resolve":
 		if !local || r.Method != "POST" {
 			w.WriteHeader(403)
@@ -328,15 +411,15 @@ func (a *App) jobAPI(w http.ResponseWriter, r *http.Request, actor string, local
 			Reason string `json:"reason"`
 		}
 		if err := read(w, r, &input); err != nil {
-			fail(w, 400, err)
+			a.fail(w, r, 400, err)
 			return
 		}
 		j, err := a.Engine.Resolve(j.ID, input.Reason)
 		if err != nil {
-			fail(w, 409, err)
+			a.fail(w, r, 409, err)
 			return
 		}
-		send(w, 200, j)
+		send(w, 200, localizeJob(reqLocale, j))
 	default:
 		http.NotFound(w, r)
 	}

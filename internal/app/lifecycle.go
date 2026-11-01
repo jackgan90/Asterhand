@@ -1,9 +1,10 @@
 package app
 
 import (
-	"errors"
 	"net/http"
 	"sync"
+
+	"github.com/jackgan90/Asterhand/internal/i18n"
 )
 
 // requestGate closes admission before waiting. No handler may add background
@@ -19,7 +20,7 @@ func (g *requestGate) wrap(next http.HandlerFunc) http.HandlerFunc {
 		g.mu.Lock()
 		if g.stopped {
 			g.mu.Unlock()
-			fail(w, http.StatusServiceUnavailable, errors.New("节点正在退出，请稍后重新启动"))
+			failLocale(w, requestLocaleFor(r, ""), http.StatusServiceUnavailable, i18n.Err("err.http.node_stopping_restart"))
 			return
 		}
 		g.wg.Add(1)

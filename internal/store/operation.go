@@ -1,8 +1,7 @@
 package store
 
 import (
-	"errors"
-
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/model"
 )
 
@@ -10,7 +9,7 @@ import (
 // It also repairs legacy completed operations whose job evidence was not saved.
 func (s *Store) CompleteOperation(op model.Operation) error {
 	if op.State != "completed" || op.Artifact == nil || op.Artifact.Operation != op.ID {
-		return errors.New("无效的文件完成证据")
+		return i18n.Err("err.store.invalid_operation_evidence")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -31,7 +30,7 @@ func (s *Store) CompleteOperation(op model.Operation) error {
 		return err
 	}
 	if j.Attempt != op.Attempt {
-		return errors.New("文件证据不属于当前 attempt")
+		return i18n.Err("err.store.evidence_wrong_attempt")
 	}
 	for _, artifact := range j.Artifacts {
 		if artifact.Operation == op.ID {

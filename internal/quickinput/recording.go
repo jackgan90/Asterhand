@@ -17,10 +17,10 @@ func (c *Controller) StartRecording(owner string, sessionExpires time.Time) (any
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.stopping || !c.status.Supported || c.status.CleanupPending != 0 {
-		return nil, &Error{409, "当前无法录制快捷键"}
+		return nil, statusError(409, "err.quickinput.record_unavailable")
 	}
 	if c.record != nil && time.Now().Before(c.record.Expires) {
-		return nil, &Error{409, "另一个页面正在录制快捷键"}
+		return nil, statusError(409, "err.quickinput.record_other_page")
 	}
 	expires := time.Now().Add(30 * time.Second)
 	if sessionExpires.Before(expires) {
@@ -34,7 +34,7 @@ func (c *Controller) Recording(id, owner string, cancel bool) (any, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.record == nil || c.record.ID != id || c.record.owner != owner || time.Now().After(c.record.Expires) {
-		return nil, &Error{404, "录制已结束，请重新开始"}
+		return nil, statusError(404, "err.quickinput.record_expired")
 	}
 	result := *c.record
 	if cancel {

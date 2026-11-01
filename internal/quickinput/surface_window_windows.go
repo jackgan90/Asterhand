@@ -4,14 +4,15 @@ package quickinput
 
 import (
 	"context"
-	"fmt"
-	"golang.org/x/sys/windows"
 	"unsafe"
+
+	"github.com/jackgan90/Asterhand/internal/i18n"
+	"golang.org/x/sys/windows"
 )
 
 func checkInteractiveDesktop() error {
 	if windows.GetCurrentProcessToken().IsElevated() {
-		return fmt.Errorf("输入宿主权限异常：必须使用非提权令牌")
+		return i18n.Err("err.quickinput.host_privilege_error")
 	}
 	return checkInteractiveSession()
 }
@@ -22,7 +23,7 @@ func checkInteractiveSession() error {
 	var size uint32
 	ok, _, _ := uiDLL.NewProc("GetUserObjectInformationW").Call(station, 1, uintptr(unsafe.Pointer(&flags)), unsafe.Sizeof(flags), uintptr(unsafe.Pointer(&size)))
 	if ok == 0 || flags.Flags&1 == 0 {
-		return fmt.Errorf("当前没有可用的 Windows 交互桌面")
+		return i18n.Err("err.quickinput.no_interactive_desktop")
 	}
 	return nil
 }
@@ -57,7 +58,7 @@ func (s *nativeSurface) activate() {
 	ok, _, _ := uiDLL.NewProc("SetForegroundWindow").Call(s.hwnd.Load())
 	if ok == 0 {
 		if s.onFailure != nil {
-			s.onFailure(&RegistrationError{"focus_denied", "系统拒绝激活输入框，请从任务栏重试"})
+			s.onFailure(&RegistrationError{Code: "focus_denied", Detail: i18n.T(i18n.Effective(), "err.quickinput.focus_denied_taskbar"), Key: "err.quickinput.focus_denied_taskbar"})
 		}
 		return
 	}

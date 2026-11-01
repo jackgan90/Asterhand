@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {ChatOutbox} from '../internal/quickinput/assets/chat-outbox.mjs';
+import {setLocale} from '../internal/quickinput/assets/i18n.mjs';
+
+setLocale('zh-CN');
 import {operationQueue} from '../internal/quickinput/assets/chat-queue.mjs';
 import {newerTurn} from '../internal/quickinput/assets/chat-model.mjs';
 

@@ -24,25 +24,27 @@ type Request struct {
 }
 
 type Job struct {
-	ID           string       `json:"id"`
-	Origin       string       `json:"origin"`
-	Owner        string       `json:"owner"`
-	Request      Request      `json:"request"`
-	Digest       string       `json:"digest"`
-	State        string       `json:"state"`
-	Attempt      string       `json:"attempt,omitempty"`
-	Created      string       `json:"created"`
-	Updated      string       `json:"updated"`
-	Seq          int64        `json:"seq"`
-	Result       string       `json:"result,omitempty"`
-	Error        string       `json:"error,omitempty"`
-	Execution    string       `json:"execution_outcome"`
-	Verification string       `json:"verification_outcome"`
-	Acceptance   string       `json:"user_acceptance"`
-	Artifacts    []Artifact   `json:"artifacts,omitempty"`
-	Interaction  *Interaction `json:"interaction,omitempty"`
-	RemoteID     string       `json:"remote_id,omitempty"`
-	RemoteOwner  string       `json:"remote_owner,omitempty"`
+	ID           string            `json:"id"`
+	Origin       string            `json:"origin"`
+	Owner        string            `json:"owner"`
+	Request      Request           `json:"request"`
+	Digest       string            `json:"digest"`
+	State        string            `json:"state"`
+	Attempt      string            `json:"attempt,omitempty"`
+	Created      string            `json:"created"`
+	Updated      string            `json:"updated"`
+	Seq          int64             `json:"seq"`
+	Result       string            `json:"result,omitempty"`
+	Error        string            `json:"error,omitempty"`
+	ErrorKey     string            `json:"error_key,omitempty"`
+	ErrorArgs    map[string]string `json:"error_args,omitempty"`
+	Execution    string            `json:"execution_outcome"`
+	Verification string            `json:"verification_outcome"`
+	Acceptance   string            `json:"user_acceptance"`
+	Artifacts    []Artifact        `json:"artifacts,omitempty"`
+	Interaction  *Interaction      `json:"interaction,omitempty"`
+	RemoteID     string            `json:"remote_id,omitempty"`
+	RemoteOwner  string            `json:"remote_owner,omitempty"`
 }
 
 func Terminal(state string) bool {
@@ -96,12 +98,14 @@ type Peer struct {
 	Revoked       bool     `json:"revoked"`
 }
 type Outbox struct {
-	ID      string  `json:"id"`
-	PeerID  string  `json:"peer_id"`
-	Request Request `json:"request"`
-	State   string  `json:"state"`
-	Job     *Job    `json:"job,omitempty"`
-	Error   string  `json:"error,omitempty"`
-	Updated string  `json:"updated"`
-	Cancel  bool    `json:"cancel"`
+	ID        string            `json:"id"`
+	PeerID    string            `json:"peer_id"`
+	Request   Request           `json:"request"`
+	State     string            `json:"state"`
+	Job       *Job              `json:"job,omitempty"`
+	Error     string            `json:"error,omitempty"`
+	ErrorKey  string            `json:"error_key,omitempty"`
+	ErrorArgs map[string]string `json:"error_args,omitempty"`
+	Updated   string            `json:"updated"`
+	Cancel    bool              `json:"cancel"`
 }

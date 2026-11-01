@@ -43,7 +43,7 @@ func NewConversationRuntime(manager *config.Manager) *ConversationRuntime {
 func (r *ConversationRuntime) Describe() (conversation.Descriptor, error) {
 	c := r.config.Get()
 	if c.AgentRuntime != "openclaw" {
-		return conversation.Descriptor{}, conversation.Fail("unsupported", "当前运行时尚未提供持续会话能力")
+		return conversation.Descriptor{}, conversation.FailKey("unsupported", "err.conv.runtime.unsupported")
 	}
 	_, err := clawOptions(c)
 	if err != nil {
@@ -54,10 +54,12 @@ func (r *ConversationRuntime) Describe() (conversation.Descriptor, error) {
 	}
 	status := ConfiguredCapabilities(r.config, c).Chat
 	return conversation.Descriptor{ID: "openclaw", Binding: chatBindingID(), Provider: c.LLM.Provider, Model: c.LLM.Model,
-		Prompt:       conversationPrompt(c).Application,
-		CanSend:      status.Available,
-		SendError:    status.Detail,
-		Capabilities: conversation.Capabilities{History: true, Streaming: true, Cancellation: true, DurableReceipts: true}}, nil
+		Prompt:        conversationPrompt(c).Application,
+		CanSend:       status.Available,
+		SendError:     status.Detail,
+		SendErrorKey:  status.MessageKey,
+		SendErrorArgs: status.MessageArgs,
+		Capabilities:  conversation.Capabilities{History: true, Streaming: true, Cancellation: true, DurableReceipts: true}}, nil
 }
 
 func chatBindingID() string {
@@ -68,7 +70,7 @@ func chatBindingID() string {
 
 func checkConversationBundle(ctx context.Context, options openClawOptions, provider providerBridge, name string) error {
 	if options.NodePath == "" || options.EntryPath == "" || options.ProviderPaths[name] == "" {
-		return conversation.Fail("unavailable", "聊天运行环境未安装，请运行 repair")
+		return conversation.FailKey("unavailable", "err.conv.runtime.env_missing")
 	}
 	catalog := packaging.Dependencies()
 	component, err := catalog.Component("openclaw")
@@ -84,14 +86,14 @@ func checkConversationBundle(ctx context.Context, options openClawOptions, provi
 			Version string `json:"version"`
 		}
 		if readErr != nil || json.Unmarshal(data, &pkg) != nil || pkg.Version != version {
-			return conversation.Fail("incompatible_runtime", "聊天运行时版本与依赖清单不匹配，请修复安装")
+			return conversation.FailKey("incompatible_runtime", "err.conv.runtime.version_mismatch")
 		}
 	}
 	cmd := exec.CommandContext(ctx, options.NodePath, "--version")
 	hideDiagnostic(cmd)
 	output, err := cmd.Output()
 	if err != nil || strings.TrimSpace(string(output)) != "v"+catalog.Node.Version {
-		return conversation.Fail("incompatible_runtime", "Node.js 版本与聊天依赖清单不匹配")
+		return conversation.FailKey("incompatible_runtime", "err.conv.runtime.node_mismatch")
 	}
 	return nil
 }
@@ -157,7 +159,7 @@ func startChatProcess(ctx context.Context, c config.Config, options openClawOpti
 		if cleanupErr := process.close(); cleanupErr != nil {
 			return process, cleanupErr
 		}
-		return nil, conversation.Fail("unavailable", "聊天运行时启动失败，请查看启动诊断后重试")
+		return nil, conversation.FailKey("unavailable", "err.conv.runtime.startup_failed")
 	}
 	diagnostic.finish("ready")
 	return process, nil
@@ -204,7 +206,13 @@ func (r *ConversationRuntime) Prepare(ctx context.Context, binding conversation.
 func (r *ConversationRuntime) Submit(ctx context.Context, binding conversation.Binding, submission conversation.Submission) (conversation.Receipt, error) {
 	process, err := r.ensure(ctx, binding)
 	if err != nil {
-		return conversation.Receipt{}, conversation.Fail("rejected", conversation.PublicError(err).Message)
+		pub := conversation.PublicError(err)
+		return conversation.Receipt{}, &conversation.Error{
+			Code:        "rejected",
+			Message:     pub.Message,
+			MessageKey:  pub.MessageKey,
+			MessageArgs: pub.MessageArgs,
+		}
 	}
 	var receipt conversation.Receipt
 	err = process.call(ctx, chatCommand{Action: "submit", Binding: binding, Run: submission.ID, Text: submission.Text}, &receipt)

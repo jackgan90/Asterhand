@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {replyStatusView} from '../internal/quickinput/assets/chat-status.mjs';
+import {setLocale} from '../internal/quickinput/assets/i18n.mjs';
 import {RenderNode, rendererDocument} from './chat-renderer-fixture.mjs';
+
+setLocale('zh-CN');
 
 test('send, preparation and generation share one reply status; hiding and errors stop animation', t => {
   rendererDocument(t);

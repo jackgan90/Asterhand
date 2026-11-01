@@ -1,3 +1,5 @@
+import {t} from './i18n.mjs';
+
 export const MAX_MESSAGES = 200;
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const encoder = new TextEncoder();
@@ -73,14 +75,24 @@ export function newerTurn(current, incoming) {
 export const awaitingReply = turn => Boolean(turn && (turn.delivery === 'queued' || turn.delivery === 'pending' ||
   turn.delivery === 'accepted' && ['pending', 'running'].includes(turn.run)));
 
+const turnStateKeys = {
+  cancelled: 'quickinput.turn.cancelled',
+  failed: 'quickinput.turn.failed',
+  interrupted: 'quickinput.turn.interrupted',
+  unknown: 'quickinput.turn.run_unknown',
+};
+
 export function turnStatus(turn, submitting = false) {
-  if (submitting) return '正在回复';
-  if (!turn) return 'Enter 发送 · Shift+Enter 换行';
-  if (turn.delivery === 'unknown') return '送达待确认，正在核对';
-  if (turn.delivery === 'rejected') return '消息未送达';
-  const states = {completed: '', cancelled: '回复已停止', failed: '回复失败', interrupted: '运行已中断', unknown: '运行状态待核对'};
-  const state = awaitingReply(turn) ? '正在回复' : states[turn.run] ?? '正在核对';
-  return [state, turn.persistence === 'unknown' ? '回复保存状态待确认' : ''].filter(Boolean).join(' · ');
+  if (submitting) return t('quickinput.turn.replying');
+  if (!turn) return t('quickinput.chat_hint');
+  if (turn.delivery === 'unknown') return t('quickinput.turn.delivery_unknown');
+  if (turn.delivery === 'rejected') return t('quickinput.turn.rejected');
+  const state = awaitingReply(turn)
+    ? t('quickinput.turn.replying')
+    : turn.run === 'completed'
+      ? ''
+      : t(turnStateKeys[turn.run] ?? 'quickinput.turn.checking');
+  return [state, turn.persistence === 'unknown' ? t('quickinput.turn.persistence_unknown') : ''].filter(Boolean).join(' · ');
 }
 
 export const unsettled = turn => Boolean(turn && ['pending', 'running', 'unknown'].includes(turn.run));

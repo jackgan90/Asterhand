@@ -1,13 +1,20 @@
-const labels = {connecting: '连接中', connected: '已连接', unavailable: '无法连接'};
+import {t} from './i18n.mjs';
+
+const labelKeys = {
+  connecting: 'quickinput.conn.connecting',
+  connected: 'quickinput.conn.connected',
+  unavailable: 'quickinput.conn.unavailable',
+};
 
 // Serial, visibility-scoped reads keep delayed replies from overwriting a newer
 // view. Connection status is independent of message delivery and reply feedback.
 export function connectionView(node, client) {
   let active = false, disposed = false, generation = 0, timer = null, running = false, reconnect = false;
+  let currentState = 'connecting';
   function show(state) {
-    state = labels[state] ? state : 'unavailable';
-    node.textContent = labels[state];
-    node.dataset.state = state;
+    currentState = labelKeys[state] ? state : 'unavailable';
+    node.textContent = t(labelKeys[currentState]);
+    node.dataset.state = currentState;
   }
   async function read() {
     if (!active || disposed || running) return;
@@ -40,6 +47,7 @@ export function connectionView(node, client) {
       generation++; reconnect = true; clearTimeout(timer); show('connecting'); void read();
     },
     unavailable() { if (!disposed) show('unavailable'); },
+    relocalize() { if (!disposed) show(currentState); },
     dispose() { disposed = true; active = false; generation++; clearTimeout(timer); },
   };
 }

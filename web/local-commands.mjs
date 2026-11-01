@@ -1,22 +1,68 @@
+import {localizeError, t} from './i18n.mjs';
 import {$, node, dialog} from './ui.mjs';
+
+const statusKeys = {
+  deleted_notice: 'web.commands.deleted_notice',
+  loading: 'web.commands.loading',
+  saving: 'web.commands.saving',
+  deleted_done: 'web.commands.deleted_done',
+  saved_done: 'web.commands.saved_done',
+};
 
 export function localCommands({api, post, session, listen, guarded, actions}) {
   const panel = $('#local-commands');
-  if (!panel) return {open: async () => {}, stop() {}};
+  if (!panel) return {open: async () => {}, relocalize() {}, stop() {}};
   const form = $('#command-form'), list = $('#registered-commands'), status = $('#commands-status');
   const argumentsList = $('#command-arguments'), search = $('#commands-search');
   let catalog = {revision:'', commands:[]}, selected = '', dirty = false, busy = false, generation = 0;
-  let picker = null;
+  let picker = null, statusState = null;
+  const argRows = [];
   const field = name => form.elements.namedItem(name);
-  const message = text => {status.textContent = text;};
-  const canDiscard = () => !dirty || actions.confirm('放弃尚未保存的命令修改？');
+
+  function paintStatus(next = statusState) {
+    statusState = next;
+    if (!next) {
+      status.textContent = '';
+      return;
+    }
+    if (next.kind === 'merged_done') {
+      status.textContent = t('web.commands.merged_done', {name: next.name});
+      return;
+    }
+    if (next.kind === 'error') {
+      status.textContent = localizeError(next.error) + (next.conflict ? t('web.commands.conflict_suffix') : '');
+      return;
+    }
+    status.textContent = t(statusKeys[next.kind] || '');
+  }
+
+  const canDiscard = () => !dirty || actions.confirm(t('web.commands.discard_confirm'));
+
+  function syncArgumentLabels() {
+    argRows.forEach((entry, idx) => {
+      entry.input.setAttribute('aria-label', t('web.commands.arg_aria', {index: idx + 1}));
+      entry.remove.textContent = t('web.commands.arg_remove');
+    });
+  }
 
   function argumentRow(value = '') {
     const row = node('div', null, 'command-argument');
-    const input = node('input'); input.value = value; input.setAttribute('aria-label', `参数 ${argumentsList.children.length + 1}`);
-    const remove = node('button', '移除', 'quiet'); remove.type = 'button';
-    remove.addEventListener('click', () => {row.remove(); dirty = true;});
+    const input = node('input'); input.value = value;
+    const remove = node('button', t('web.commands.arg_remove'), 'quiet'); remove.type = 'button';
+    const entry = {row, input, remove};
+    argRows.push(entry);
+    syncArgumentLabels();
+    remove.addEventListener('click', () => {
+      row.remove();
+      const idx = argRows.indexOf(entry);
+      if (idx >= 0) argRows.splice(idx, 1);
+      syncArgumentLabels();
+      dirty = true;
+    });
     row.append(input, remove); argumentsList.append(row);
+  }
+  function paintFormTitle() {
+    $('#command-form-title').textContent = selected ? t('web.commands.form_edit') : t('web.commands.form_new');
   }
   function populate(command = {}) {
     selected = command.id ?? '';
@@ -24,9 +70,10 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
     field('aliases').value = (command.aliases ?? []).join('\n');
     field('window').value = command.window ?? 'background';
     argumentsList.replaceChildren();
+    argRows.length = 0;
     for (const value of command.arguments ?? []) argumentRow(value);
     $('#command-delete').hidden = !selected;
-    $('#command-form-title').textContent = selected ? '编辑命令' : '新建命令';
+    paintFormTitle();
     dirty = false; paint();
   }
   function paint() {
@@ -38,11 +85,13 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
       const button = node('button', null, 'registered-command'); button.type = 'button';
       button.setAttribute('aria-pressed', String(command.id === selected));
       button.append(node('strong', command.name), node('span', (command.aliases ?? []).join(' / ')), node('small', command.script));
-      button.addEventListener('click', () => {if (!busy && canDiscard()) {populate(command); message('');}});
+      button.addEventListener('click', () => {if (!busy && canDiscard()) {populate(command); paintStatus(null);}});
       list.append(button);
     }
-    if (!list.children.length) list.append(node('p', catalog.commands.length ? '未找到命令' : '还没有命令'));
-    $('#command-count').textContent = `共 ${catalog.commands.length} 个命令`;
+    if (!list.children.length) {
+      list.append(node('p', catalog.commands.length ? t('web.commands.empty_no_match') : t('web.commands.empty_none')));
+    }
+    $('#command-count').textContent = t('web.commands.count', {count: catalog.commands.length});
   }
   async function refresh(id = selected) {
     const scope = session(), version = ++generation;
@@ -51,13 +100,13 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
     catalog = result;
     const command = result.commands.find(value => value.id === id);
     populate(command);
-    message(id && !command ? '该命令已被删除。' : '');
+    paintStatus(id && !command ? {kind: 'deleted_notice'} : null);
   }
   async function open(id = '') {
     if (busy || panel.open && !canDiscard()) return;
     dialog('#local-commands');
-    message('正在加载…');
-    try { await refresh(id); } catch (error) { message(error.message); }
+    paintStatus({kind: 'loading'});
+    try { await refresh(id); } catch (error) { paintStatus({kind: 'error', error, conflict: false}); }
   }
   function readForm() {
     return {
@@ -73,38 +122,44 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
   }
   async function mutate(remove = false) {
     if (busy || !catalog.revision) return;
-    if (remove && !actions.confirm('删除这个命令？脚本文件本身不会被删除。')) return;
+    if (remove && !actions.confirm(t('web.commands.delete_confirm'))) return;
     const scope = session(), version = generation, command = readForm();
-    setBusy(true); message('正在保存…');
+    setBusy(true); paintStatus({kind: 'saving'});
     try {
       const result = await post(remove ? '/api/local-commands/delete' : '/api/local-commands', remove ?
         {id:selected, revision:catalog.revision} : {revision:catalog.revision, command});
       if (!scope?.active || version !== generation) return;
       catalog = remove ? result : result.catalog;
       populate(remove ? undefined : catalog.commands.find(value => value.id === result.id));
-      message(remove ? '已删除（脚本文件保留）。' : result.merged ? `与已有命令配置相同，已合并为 ${field('name').value} 的别名。` : '已保存，快捷面板中立即可用。');
+      paintStatus(remove ? {kind: 'deleted_done'} : result.merged ? {kind: 'merged_done', name: field('name').value} : {kind: 'saved_done'});
     } catch (error) {
-      if (scope?.active && version === generation) message(error.message + (error.status === 409 ? ' 请复制需要保留的内容后点击刷新。' : ''));
+      if (scope?.active && version === generation) paintStatus({kind: 'error', error, conflict: error.status === 409});
     } finally { if (version === generation) setBusy(false); }
   }
   async function browse() {
     if (busy) return;
     const scope = session(), version = generation, request = new AbortController();
-    picker = request; setBusy(true); message('');
+    picker = request; setBusy(true); paintStatus(null);
     try {
       const result = await api('/api/local-commands/browse', {method:'POST', body:'{}', signal:request.signal});
       if (!scope?.active || version !== generation) return;
       if (result.path) { field('script').value = result.path; dirty = true; }
     } catch (error) {
-      if (scope?.active && version === generation && !request.signal.aborted) message(error.message);
+      if (scope?.active && version === generation && !request.signal.aborted) paintStatus({kind: 'error', error, conflict: false});
     } finally {
       if (picker === request) picker = null;
       if (version === generation) setBusy(false);
     }
   }
+  function relocalize() {
+    paintFormTitle();
+    syncArgumentLabels();
+    paint();
+    paintStatus();
+  }
   listen($('#commands-open'), 'click', () => guarded(() => open()));
   listen($('#commands-refresh'), 'click', () => {if (!busy && canDiscard()) guarded(() => refresh());});
-  listen($('#command-new'), 'click', () => {if (!busy && canDiscard()) {populate(); message('');}});
+  listen($('#command-new'), 'click', () => {if (!busy && canDiscard()) {populate(); paintStatus(null);}});
   listen($('#command-add-argument'), 'click', () => {argumentRow(); dirty = true;});
   listen(form, 'input', () => {dirty = true;});
   listen(form, 'change', () => {dirty = true;});
@@ -115,5 +170,5 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
   listen($('#commands-close'), 'click', () => {if (!busy && canDiscard()) panel.close();});
   listen(panel, 'cancel', event => {if (busy || !canDiscard()) event.preventDefault();});
   function stop() { generation++; picker?.abort(); picker = null; setBusy(false); }
-  return {open, stop};
+  return {open, relocalize, stop};
 }

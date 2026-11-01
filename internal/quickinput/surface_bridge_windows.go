@@ -4,10 +4,12 @@ package quickinput
 
 import (
 	"context"
-	"fmt"
 	"time"
+	"unsafe"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/model"
+	"golang.org/x/sys/windows"
 )
 
 func NativeFactory(c *Controller) SurfaceFactory {
@@ -37,7 +39,7 @@ func (s *nativeSurface) bridgeMessage(raw string) {
 	if m.Kind == "ready" && !s.documentReady {
 		s.documentReady = true
 		text, revision := s.draft.Read()
-		if err := s.postJSON(map[string]any{"kind": "init", "generation": s.epoch, "text": text, "revision": revision, "theme": s.theme}); err != nil {
+		if err := s.postJSON(map[string]any{"kind": "init", "generation": s.epoch, "text": text, "revision": revision, "theme": s.theme, "locale": s.locale}); err != nil {
 			s.ready <- err
 		}
 		return
@@ -63,7 +65,14 @@ func (s *nativeSurface) bridgeMessage(raw string) {
 		}
 	case "draft_updated", "snapshot":
 		if err := s.draft.Update(m.Text, m.Revision); err != nil {
-			_ = s.postJSON(map[string]string{"kind": "error", "message": err.Error()})
+			msg := map[string]any{"kind": "error", "message": err.Error()}
+			if key, args, ok := i18n.ErrorDetails(err); ok {
+				msg["message_key"] = key
+				if len(args) > 0 {
+					msg["message_args"] = args
+				}
+			}
+			_ = s.postJSON(msg)
 			return
 		}
 		if s.remoteDraft != nil {
@@ -85,7 +94,7 @@ func (s *nativeSurface) bridgeMessage(raw string) {
 	case "copy":
 		if len(m.Text) <= 64*1024 {
 			if err := writeChatClipboard(s.hwnd.Load(), m.Text); err != nil {
-				_ = s.postJSON(map[string]string{"kind": "error", "message": "复制失败，请重试"})
+				_ = s.postJSON(map[string]string{"kind": "error", "message": i18n.T(s.locale, "err.quickinput.copy_failed"), "message_key": "err.quickinput.copy_failed"})
 			}
 		}
 	case "chat":
@@ -108,12 +117,29 @@ func (s *nativeSurface) completeSnapshot(id string) {
 
 func (s *nativeSurface) Update(theme string) error {
 	if theme != "star" && theme != "frost" {
-		return fmt.Errorf("主题无效")
+		return i18n.Err("err.quickinput.invalid_theme")
 	}
 	return s.dispatch(context.Background(), func() {
 		s.theme = theme
 		if !s.wantsSuspended {
 			_ = s.postJSON(map[string]string{"kind": "theme", "theme": theme})
+		}
+	})
+}
+
+func (s *nativeSurface) UpdateLocale(locale string) error {
+	if !i18n.ValidLocale(locale) {
+		return i18n.Err("err.quickinput.prefs_invalid_locale")
+	}
+	return s.dispatch(context.Background(), func() {
+		s.locale = locale
+		if hwnd := s.hwnd.Load(); hwnd != 0 {
+			if title, err := windows.UTF16PtrFromString(i18n.T(locale, "brand.quickinput_window_title")); err == nil {
+				uiDLL.NewProc("SetWindowTextW").Call(hwnd, uintptr(unsafe.Pointer(title)))
+			}
+		}
+		if !s.wantsSuspended && s.documentReady {
+			_ = s.postJSON(map[string]string{"kind": "locale", "locale": locale})
 		}
 	})
 }
@@ -134,13 +160,13 @@ func (s *nativeSurface) Snapshot(ctx context.Context) error {
 	case <-done:
 		return nil
 	case <-s.done:
-		return fmt.Errorf("输入界面已关闭")
+		return i18n.Err("err.quickinput.surface_closed")
 	case <-ctx.Done():
 		_ = s.dispatch(context.Background(), func() { s.cancelSnapshot(id) })
 		return ctx.Err()
 	case <-time.After(2 * time.Second):
 		_ = s.dispatch(context.Background(), func() { s.cancelSnapshot(id) })
-		return fmt.Errorf("请先完成输入法候选，再重试")
+		return i18n.Err("err.quickinput.snapshot_ime")
 	}
 }
 

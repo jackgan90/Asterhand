@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
 
 	"github.com/jackgan90/Asterhand/internal/desktop"
+	"github.com/jackgan90/Asterhand/internal/i18n"
 )
 
 type processRecord struct {
@@ -38,6 +38,7 @@ func (r runner) run(path string, noBrowser bool) error {
 	if err != nil {
 		return err
 	}
+	applyDataLocale(installation.Data)
 	ctx, cancel := context.WithTimeout(context.Background(), r.timeout)
 	defer cancel()
 	unlock, err := acquireLaunchLock(ctx, installation.Data)
@@ -47,11 +48,11 @@ func (r runner) run(path string, noBrowser bool) error {
 	address, err := r.launchLocked(path, installation)
 	unlock()
 	if err != nil {
-		return fmt.Errorf("%w\n日志目录：%s", err, installation.Data)
+		return i18n.Wrap("err.launch.with_log_dir", map[string]string{"err": err.Error(), "dir": installation.Data}, err)
 	}
 	if !noBrowser {
 		if err := r.open(address); err != nil {
-			return fmt.Errorf("节点已运行，但浏览器打开失败；可从托盘重试：%w", err)
+			return i18n.Wrap("err.launch.browser_open_failed", nil, err)
 		}
 	}
 	return nil
@@ -63,7 +64,7 @@ func (r runner) launchLocked(path string, initial Installation) (string, error) 
 		return "", err
 	}
 	if !samePath(installation.Data, initial.Data) {
-		return "", errors.New("安装期间数据目录已变化，请重新打开 Asterhand")
+		return "", i18n.Err("err.launch.data_dir_changed")
 	}
 	if err = prepareHome(installation.Data); err != nil {
 		return "", err
@@ -88,19 +89,19 @@ func (r runner) launchLocked(path string, initial Installation) (string, error) 
 		return r.waitReady(ctx, installation.Data, nil)
 	}
 	if ctx.Err() != nil {
-		return "", errors.New("节点启动检查超时，请检查现有节点状态")
+		return "", i18n.Err("err.launch.start_check_timeout")
 	}
 	process, exited, err := r.start(installation)
 	if err != nil {
 		return "", err
 	}
 	if err := saveProcess(installation.Data, process); err != nil {
-		return "", fmt.Errorf("节点已启动但启动记录保存失败，请检查节点状态后再操作：%w", err)
+		return "", i18n.Wrap("err.launch.save_state_failed", nil, err)
 	}
 	address, err = r.waitReady(ctx, installation.Data, exited)
 	if err == nil {
 		if removeErr := os.Remove(filepath.Join(installation.Data, "launch-state.json")); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			return "", fmt.Errorf("节点已运行，但清理启动记录失败：%w", removeErr)
+			return "", i18n.Wrap("err.launch.remove_state_failed", nil, removeErr)
 		}
 	}
 	return address, err
@@ -121,9 +122,9 @@ func (r runner) waitReady(ctx context.Context, home string, exited <-chan error)
 			if address, err := existingURL(ctx, home); err == nil {
 				return address, nil
 			}
-			return "", errors.New("节点在启动期间退出，请查看 error.log")
+			return "", i18n.Err("err.launch.exited_during_start")
 		case <-ctx.Done():
-			return "", errors.New("节点健康检查超时；已有进程已保留，请检查 error.log，勿强制重复启动")
+			return "", i18n.Err("err.launch.health_timeout")
 		case <-time.After(r.poll):
 		}
 	}
@@ -136,17 +137,17 @@ func pendingProcess(home string) (bool, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
-		return false, errors.New("启动记录损坏，请核对现有节点进程后再重试")
+		return false, i18n.Err("err.launch.state_corrupt")
 	}
 	if saved.PID <= 0 || saved.Executable == "" {
-		return false, errors.New("启动记录缺少进程身份，请先核对现有节点")
+		return false, i18n.Err("err.launch.state_missing_pid")
 	}
 	current, err := inspectProcess(saved.PID)
 	if errors.Is(err, os.ErrProcessDone) || (err == nil && saved.Created != 0 && current.Created != saved.Created) {
 		return false, os.Remove(path)
 	}
 	if err != nil || saved.Created == 0 || !samePath(saved.Executable, current.Executable) {
-		return false, errors.New("无法确认先前启动的进程身份，保留现场，请先检查现有节点")
+		return false, i18n.Err("err.launch.process_unverified")
 	}
 	return true, nil
 }
@@ -186,7 +187,7 @@ func startNode(installation Installation) (processRecord, <-chan error, error) {
 			return processRecord{}, nil, err
 		}
 		if err == nil && !info.Mode().IsRegular() {
-			return processRecord{}, nil, fmt.Errorf("日志 %s 必须是普通文件", name)
+			return processRecord{}, nil, i18n.ErrArgs("err.launch.named_log_regular", map[string]string{"name": name})
 		}
 	}
 	stdout, err := os.OpenFile(filepath.Join(installation.Data, "startup.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
@@ -204,7 +205,7 @@ func startNode(installation Installation) (processRecord, <-chan error, error) {
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	configureChild(cmd)
 	if err = cmd.Start(); err != nil {
-		return processRecord{}, nil, fmt.Errorf("节点程序启动失败：%w", err)
+		return processRecord{}, nil, i18n.Wrap("err.launch.spawn_failed", nil, err)
 	}
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()

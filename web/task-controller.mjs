@@ -1,3 +1,4 @@
+import {t} from "./i18n.mjs";
 import {taskViews} from "./view-model.mjs";
 import {definitiveTaskRejection} from "./task-admission.mjs";
 
@@ -48,7 +49,7 @@ export function taskController({api, post, view, selection, session, notice, act
       interaction_id:interaction.id, attempt:interaction.attempt, answer_id:answerIDs.get(key), answer:text,
     });
     if (!scope?.active) return false;
-    notice("回答已发送");
+    notice(t("web.task.answer_sent"));
     return true;
   }
   async function cancel(job, out) {
@@ -57,7 +58,7 @@ export function taskController({api, post, view, selection, session, notice, act
     if (scope?.active) await refresh(scope);
   }
   async function resolve(job) {
-    const reason = actions.prompt("请先确认实际文件和执行情况，再填写关闭原因（任务不会被标记为成功）：");
+    const reason = actions.prompt(t("web.task.resolve_prompt"));
     if (!reason) return;
     const scope = session();
     await post(`/api/jobs/${job.id}/resolve`, {reason});

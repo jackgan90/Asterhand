@@ -4,9 +4,9 @@ package quickinput
 
 import (
 	"encoding/json"
-	"fmt"
 	"unsafe"
 
+	"github.com/jackgan90/Asterhand/internal/i18n"
 	"golang.org/x/sys/windows"
 )
 
@@ -35,7 +35,7 @@ func (s *nativeSurface) configureContent() error {
 	// WebView2.h puts its BOOL setter at slot 38, not the binding's slot 4.
 	regions, err := settings.query("{0528a73b-e92d-49f4-927a-e547dddaa37d}")
 	if err != nil {
-		return fmt.Errorf("WebView2 不支持窗口拖动区域: %w", err)
+		return i18n.Wrap("err.quickinput.drag_unsupported", map[string]string{"err": err.Error()}, err)
 	}
 	defer regions.release()
 	if err = regions.call(38, 1); err != nil {
@@ -93,7 +93,7 @@ func (s *nativeSurface) events() error {
 	}
 	if err := add(subscribe[processCallback](s.core, 25, func(_ uintptr, _ *comRef) uintptr {
 		if !s.closing && s.onFailure != nil {
-			go s.onFailure(fmt.Errorf("WebView2 渲染进程中断，请重试快捷输入"))
+			go s.onFailure(i18n.Err("err.quickinput.renderer_crashed_retry"))
 		}
 		return 0
 	})); err != nil {
@@ -170,7 +170,7 @@ func (s *nativeSurface) resourceRequested(_ uintptr, args *comRef) uintptr {
 func (s *nativeSurface) postJSON(value any) error {
 	current, err := s.core.text(4)
 	if err != nil || current != surfaceURL {
-		return fmt.Errorf("输入界面来源不正确")
+		return i18n.Err("err.quickinput.invalid_origin")
 	}
 	data, err := json.Marshal(value)
 	if err != nil {

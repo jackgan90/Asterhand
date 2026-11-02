@@ -858,6 +858,8 @@
   "err.launch.port_identity_mismatch": "监听端口的节点身份校验失败",
   "err.launch.port_pid_mismatch": "监听端口与运行记录中的节点进程不一致",
   "brand.log_window_title": "Asterhand · 命令日志",
+  "quickinput.log.loading": "正在加载日志…",
+  "quickinput.log.failed_retry": "日志界面加载失败。请关闭此窗口，再点击“查看日志”重试。命令会继续执行。",
   "err.localcmd.invalid_execution_mode": "请选择托管或非托管类型。",
   "err.localcmd.invalid_timeout": "超时必须为 1 到 9223372036 之间的整数秒，或留空。",
   "err.localcmd.running": "命令仍在执行或收尾，请等待完成。",

@@ -51,6 +51,9 @@ func (s *remoteSurface) commandCall(message hostipc.Message) error {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), budget)
 		defer cancel()
+		if message.Anchor != nil && request.Action == "logs" {
+			ctx = context.WithValue(ctx, logAnchorContextKey{}, *message.Anchor)
+		}
 		respond(handler(ctx, request))
 	}()
 	return nil

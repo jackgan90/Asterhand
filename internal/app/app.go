@@ -177,13 +177,14 @@ func (a *App) Close() error {
 		commandCtx, commandCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		commandErr := a.Commands.Close(commandCtx)
 		commandCancel()
+		var logErr error
 		if a.CommandLogs != nil {
-			_ = a.CommandLogs.Close()
+			logErr = a.CommandLogs.Close()
 		}
 		if a.Input != nil {
 			a.Input.Close()
 		}
-		a.closeErr = errors.Join(chatErr, commandErr, a.Store.Close())
+		a.closeErr = errors.Join(chatErr, commandErr, logErr, a.Store.Close())
 	})
 	return a.closeErr
 }

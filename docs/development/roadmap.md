@@ -33,6 +33,7 @@
 | 快速本地安装：应用与运行时分开更新、目录候选、源码核对及持续进度（工程验证、独立复审和本地提速效果用户验收完成） | [快速本地安装](features/fast-local-install/plan.md)、[验证说明](features/fast-local-install/validation.md) |
 | Web 管理页与快捷面板统一视觉、随面板主题切换、面向普通用户精简文案（用户验收通过） | [Web 管理页视觉升级](features/web-console-visual-refresh/plan.md) |
 | 运行期界面与状态/错误提示中英双语实时无损切换、系统语言优先/浏览器语言次选自动匹配、单一权威词表与四层静态硬编码守卫（工程验证、独立复审及本机双语切换用户验收通过） | [运行期国际化框架](features/internationalization-framework/plan.md)、[验证说明](features/internationalization-framework/validation.md)、[国际化开发指南](i18n-guide.md) |
+| 日志窗口快速显示与关闭复用、初始化失败恢复和同屏定位（工程验证、独立审计修复复审及本机日志体验与双屏用户验收通过） | [日志窗口响应与定位](features/log-window-responsiveness-and-placement/plan.md)、[验证说明](features/log-window-responsiveness-and-placement/validation.md) |
 
 ## 后续验证与功能
 

@@ -22,6 +22,8 @@
 
 ## 其他入口
 
+- [日志窗口快速显示与同屏定位](development/features/log-window-responsiveness-and-placement/plan.md)、[验证说明](development/features/log-window-responsiveness-and-placement/validation.md)：关闭复用、加载/失败反馈、宿主恢复和输入框所在屏幕定位（工程验证、独立审计复审及本机用户验收通过）。
+
 - [托管本地命令计划](development/features/managed-local-commands/plan.md)、[托管命令设计](executors/managed-local-commands.md)、[生命周期 ADR](executors/adr/003-managed-local-command-lifecycle.md)：托管/非托管分类、独立日志窗口、最近日志与结果、强制中断及可选超时；公共核心与平台适配分离，首个实现为 Windows，验收边界见功能验证说明。
 
 - [运行期界面与提示国际化框架](development/features/internationalization-framework/plan.md)、[验证说明](development/features/internationalization-framework/validation.md)、[国际化开发指南](development/i18n-guide.md)、[国际化架构 ADR](web/adr/002-runtime-internationalization-framework.md)：单一权威翻译表、中英双语无损实时切换、系统优先/浏览器次选自动匹配及四层静态硬编码守卫（工程验证、独立复审及本机双语切换用户验收通过，其余专项边界见验证说明）。

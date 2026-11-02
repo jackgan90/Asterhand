@@ -40,6 +40,7 @@ const (
 	CommandCall    Kind = "command_call"
 	CommandResult  Kind = "command_result"
 	OpenLog        Kind = "open_log"
+	LogProgress    Kind = "log_progress"
 )
 
 // Message contains only input-surface capabilities. Request is a command ID;
@@ -70,6 +71,8 @@ type Message struct {
 	Command      *commandswire.Request  `json:"command,omitempty"`
 	CommandReply *commandswire.Response `json:"command_reply,omitempty"`
 	WindowID     string                 `json:"window_id,omitempty"`
+	Anchor       *WindowAnchor          `json:"window_anchor,omitempty"`
+	LogEvent     *LogWindowEvent        `json:"log_event,omitempty"`
 }
 
 var ErrProtocol = errors.New("invalid input host protocol")
@@ -96,6 +99,8 @@ func (m Message) Validate(fromHost bool) error {
 			allowed = wire.ValidID(m.ChatID) && m.Chat != nil && m.Chat.Validate() == nil && m.Epoch != 0
 		case CommandCall:
 			allowed = commandswire.ValidID(m.CommandID) && m.Command != nil && m.Command.Validate() == nil && m.Epoch != 0
+		case LogProgress:
+			allowed = m.LogEvent != nil && m.LogEvent.Valid()
 		}
 	} else {
 		switch m.Kind {
@@ -123,6 +128,12 @@ func (m Message) Validate(fromHost bool) error {
 		return ErrProtocol
 	}
 	if m.Kind != OpenLog && m.WindowID != "" {
+		return ErrProtocol
+	}
+	if m.Anchor != nil && (!m.Anchor.Valid() || m.Kind != OpenLog && (m.Kind != CommandCall || m.Command == nil || m.Command.Action != "logs")) {
+		return ErrProtocol
+	}
+	if m.Kind != LogProgress && m.LogEvent != nil {
 		return ErrProtocol
 	}
 	if m.Kind != CommandCall && m.Command != nil || m.Kind != CommandResult && m.CommandReply != nil ||

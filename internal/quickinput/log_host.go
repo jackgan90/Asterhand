@@ -3,6 +3,10 @@ package quickinput
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,6 +32,7 @@ type logHost struct {
 	call                CommandHandler
 	launch              func() (hostProcess, error)
 	connection          *logConnection
+	connections         map[*logConnection]struct{}
 	closed              bool
 }
 type logConnection struct {
@@ -35,14 +40,17 @@ type logConnection struct {
 	session  string
 	out      chan hostipc.Message
 	done     chan struct{}
-	ready    chan error
+	ready    chan struct{}
+	stopped  chan struct{}
+	reaped   chan struct{}
+	stopErr  error
 	requests sync.Map
 	sequence atomic.Uint64
 	once     sync.Once
 }
 
 func newLogWindowHost(home string, call CommandHandler, launch func() (hostProcess, error)) LogWindowHost {
-	return &logHost{home: home, theme: "star", locale: i18n.Effective(), call: call, launch: launch}
+	return &logHost{home: home, theme: "star", locale: i18n.Effective(), call: call, launch: launch, connections: make(map[*logConnection]struct{})}
 }
 
 func (h *logHost) connect() (*logConnection, error) {
@@ -63,8 +71,10 @@ func (h *logHost) connect() (*logConnection, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &logConnection{process: p, session: model.ID(), out: make(chan hostipc.Message, 32), done: make(chan struct{}), ready: make(chan error, 1)}
+	c := &logConnection{process: p, session: model.ID(), out: make(chan hostipc.Message, 32), done: make(chan struct{}), ready: make(chan struct{}), stopped: make(chan struct{}), reaped: make(chan struct{})}
 	h.connection = c
+	h.connections[c] = struct{}{}
+	go h.reap(c)
 	go c.writeLoop()
 	go h.readLoop(c)
 	go func() { <-p.Exited(); c.close() }()
@@ -79,19 +89,20 @@ func (h *logHost) Open(ctx context.Context, id string) error {
 	if !commandswire.ValidID(id) {
 		return hostipc.ErrProtocol
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	anchor := logOpenAnchor(ctx)
 	c, err := h.connect()
 	if err != nil {
 		return err
 	}
 	select {
-	case err = <-c.ready:
-		c.ready <- err
-		if err != nil {
-			return err
-		}
+	case <-c.ready:
 	case <-c.done:
 		return i18n.Err("err.quickinput.host_exited")
 	case <-ctx.Done():
+		c.close()
 		return ctx.Err()
 	}
 	_ = c.process.GrantForeground()
@@ -99,7 +110,7 @@ func (h *logHost) Open(ctx context.Context, id string) error {
 	reply := make(chan error, 1)
 	c.requests.Store(seq, reply)
 	defer c.requests.Delete(seq)
-	if err = c.send(hostipc.Message{Kind: hostipc.OpenLog, Request: seq, WindowID: id}); err != nil {
+	if err = c.send(hostipc.Message{Kind: hostipc.OpenLog, Request: seq, WindowID: id, Anchor: anchor}); err != nil {
 		return err
 	}
 	select {
@@ -108,6 +119,7 @@ func (h *logHost) Open(ctx context.Context, id string) error {
 	case <-c.done:
 		return i18n.Err("err.quickinput.host_exited")
 	case <-ctx.Done():
+		c.close()
 		return ctx.Err()
 	}
 }
@@ -124,14 +136,55 @@ func (h *logHost) Update(theme, locale string) {
 func (h *logHost) Close() error {
 	h.mu.Lock()
 	h.closed = true
-	c := h.connection
+	connections := make([]*logConnection, 0, len(h.connections))
+	for c := range h.connections {
+		connections = append(connections, c)
+	}
 	h.mu.Unlock()
-	if c != nil {
+	for _, c := range connections {
 		c.close()
 	}
-	return nil
+	ctx, cancel := context.WithTimeout(context.Background(), hostStopTimeout)
+	defer cancel()
+	var result error
+	for _, c := range connections {
+		select {
+		case <-c.reaped:
+			result = errors.Join(result, c.stopErr)
+		case <-ctx.Done():
+			return errors.Join(result, i18n.Err("err.quickinput.host_exit_unconfirmed"))
+		}
+	}
+	return result
 }
-func (c *logConnection) close() { c.once.Do(func() { close(c.done); _ = c.process.Stop() }) }
+
+func (h *logHost) reap(c *logConnection) {
+	defer close(c.reaped)
+	<-c.stopped
+	if c.stopErr == nil {
+		// The generated session is the only profile subtree this connection owns.
+		if err := os.RemoveAll(filepath.Join(h.home, "command-log-profiles", c.session)); err != nil {
+			log.Printf("command_log_window stage=profile_cleanup_failed session=%s", c.session)
+		}
+	}
+	h.mu.Lock()
+	// Failed retirement remains owned so a later node Close reports the
+	// unconfirmed process exit instead of silently treating it as success.
+	if c.stopErr == nil {
+		delete(h.connections, c)
+	}
+	h.mu.Unlock()
+}
+
+func (c *logConnection) close() {
+	c.once.Do(func() {
+		close(c.done)
+		go func() {
+			c.stopErr = c.process.Stop()
+			close(c.stopped)
+		}()
+	})
+}
 func (c *logConnection) send(m hostipc.Message) error {
 	m.Version, m.Session = hostipc.Version, c.session
 	select {
@@ -176,17 +229,24 @@ func (h *logHost) readLoop(c *logConnection) {
 				return
 			}
 			select {
-			case c.ready <- nil:
-			default:
+			case <-c.ready:
 				return
+			default:
+				close(c.ready)
 			}
+		case hostipc.LogProgress:
+			e := m.LogEvent
+			log.Printf("command_log_window stage=%s command_id=%s session=%s elapsed_ms=%d code=%s", e.Stage, e.ID, c.session, e.ElapsedMS, e.Code)
 		case hostipc.State:
 			if value, ok := c.requests.Load(m.Request); ok {
 				var err error
 				if m.Code != "" {
 					err = i18n.Err("err.localcmd.log_window_failed")
 				}
-				value.(chan error) <- err
+				select {
+				case value.(chan error) <- err:
+				default:
+				}
 			}
 		case hostipc.CommandCall:
 			// The log host cannot start commands, browse or open arbitrary UI.

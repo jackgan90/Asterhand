@@ -86,6 +86,9 @@ func (s *nativeSurface) hide(restore bool) {
 	s.showContent(false)
 	foreground, _, _ := uiDLL.NewProc("GetForegroundWindow").Call()
 	uiDLL.NewProc("ShowWindow").Call(s.hwnd.Load(), 0)
+	if s.log != nil && !s.pageInitialized {
+		return
+	}
 	// Snapshot/initialization may have resumed an already hidden WebView.
 	s.suspend(nil)
 	if restore && foreground == s.hwnd.Load() && s.previous != 0 {

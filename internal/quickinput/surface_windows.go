@@ -100,7 +100,7 @@ func startConfiguredSurface(home string, onMessage func(string), onFailure func(
 	return startWindowSurface(home, onMessage, onFailure, relay, nil, source...)
 }
 
-func startWindowSurface(home string, onMessage func(string), onFailure func(error), relay *editorRelay, log *logSurface, source ...*Draft) (*nativeSurface, error) {
+func newWindowSurface(home string, onMessage func(string), onFailure func(error), relay *editorRelay, log *logSurface, source ...*Draft) *nativeSurface {
 	s := &nativeSurface{log: log, home: home, ready: make(chan error, 1), done: make(chan struct{}), commands: make(chan func(), 32), onMessage: onMessage, onFailure: onFailure}
 	s.remoteDraft = relay
 	s.height = initialSurfaceHeight
@@ -108,6 +108,11 @@ func startWindowSurface(home string, onMessage func(string), onFailure func(erro
 	if len(source) != 0 {
 		s.draft = source[0]
 	}
+	return s
+}
+
+func startWindowSurface(home string, onMessage func(string), onFailure func(error), relay *editorRelay, log *logSurface, source ...*Draft) (*nativeSurface, error) {
+	s := newWindowSurface(home, onMessage, onFailure, relay, log, source...)
 	go s.run()
 	select {
 	case err := <-s.ready:
@@ -145,32 +150,16 @@ func (s *nativeSurface) run() {
 		s.ready <- err
 		return
 	}
-	defer s.dispose()
-	available, err := webviewloader.GetAvailableCoreWebView2BrowserVersionString("")
-	minimum := packaging.Dependencies().WebView2.MinimumRuntimeVersion
-	if err != nil || !runtimeVersionAtLeast(available, minimum) {
-		args := map[string]string{"minimum": minimum, "available": strconv.Quote(available)}
-		s.ready <- &RegistrationError{
-			Code:   "runtime_unavailable",
-			Key:    "err.quickinput.webview2_version_need",
-			Args:   args,
-			Detail: i18n.T(i18n.Effective(), "err.quickinput.webview2_version_need", args),
+	defer func() {
+		s.dispose()
+		s.cleanupLogProfile()
+	}()
+	if err := s.initializeWebView(); err != nil {
+		s.ready <- err
+		if s.log == nil {
+			return
 		}
-		return
-	}
-	profile := filepath.Join(s.home, "quick-input-profile")
-	if s.log != nil {
-		profile = filepath.Join(s.home, "command-log-profiles", s.log.id)
-	}
-	if err := os.MkdirAll(profile, 0700); err != nil {
-		s.ready <- err
-		return
-	}
-	s.creationPending = true
-	if err := webviewloader.CreateCoreWebView2EnvironmentWithOptions(s, webviewloader.WithUserDataFolder(profile)); err != nil {
-		s.creationPending = false
-		s.ready <- err
-		return
+		s.showLogFailure()
 	}
 	var msg nativeMessage
 	for {
@@ -181,6 +170,33 @@ func (s *nativeSurface) run() {
 		uiDLL.NewProc("TranslateMessage").Call(uintptr(unsafe.Pointer(&msg)))
 		uiDLL.NewProc("DispatchMessageW").Call(uintptr(unsafe.Pointer(&msg)))
 	}
+}
+
+func (s *nativeSurface) initializeWebView() error {
+	available, err := webviewloader.GetAvailableCoreWebView2BrowserVersionString("")
+	minimum := packaging.Dependencies().WebView2.MinimumRuntimeVersion
+	if err != nil || !runtimeVersionAtLeast(available, minimum) {
+		args := map[string]string{"minimum": minimum, "available": strconv.Quote(available)}
+		return &RegistrationError{
+			Code:   "runtime_unavailable",
+			Key:    "err.quickinput.webview2_version_need",
+			Args:   args,
+			Detail: i18n.T(i18n.Effective(), "err.quickinput.webview2_version_need", args),
+		}
+	}
+	profile := filepath.Join(s.home, "quick-input-profile")
+	if s.log != nil {
+		profile = s.logProfileDirectory()
+	}
+	if err := os.MkdirAll(profile, 0700); err != nil {
+		return err
+	}
+	s.creationPending = true
+	if err := webviewloader.CreateCoreWebView2EnvironmentWithOptions(s, webviewloader.WithUserDataFolder(profile)); err != nil {
+		s.creationPending = false
+		return err
+	}
+	return nil
 }
 
 func (s *nativeSurface) createWindow() error {
@@ -206,17 +222,29 @@ func (s *nativeSurface) createWindow() error {
 	if s.log == nil {
 		s.positionForShow()
 	} else {
-		uiDLL.NewProc("SetWindowPos").Call(hwnd, 0, 160, 120, 920, 640, 0)
+		s.positionLogWindow(s.log.anchor)
 	}
 	uiHosts.Store(hwnd, s)
+	// dispatch can accept work before CreateWindow publishes its HWND. Those
+	// calls could not post a window message; replay one wakeup per queued item.
+	for range len(s.commands) {
+		uiDLL.NewProc("PostMessageW").Call(hwnd, 0x8021, 0, 0)
+	}
 	s.setWindowIcons()
 	windows.NewLazySystemDLL("wtsapi32.dll").NewProc("WTSRegisterSessionNotification").Call(hwnd, 0)
+	if s.log != nil {
+		err := s.showLogWindow(s.log.anchor)
+		uiDLL.NewProc("UpdateWindow").Call(hwnd)
+		if s.log.shown != nil {
+			s.log.shown <- err
+		}
+	}
 	return nil
 }
 
 func (s *nativeSurface) EnvironmentCompleted(code webviewloader.HRESULT, environment *webviewloader.ICoreWebView2Environment) webviewloader.HRESULT {
 	s.creationPending = false
-	if s.closing {
+	if s.closing || s.log != nil && s.log.failed.Load() {
 		return 0
 	}
 	if code < 0 || environment == nil {
@@ -224,6 +252,7 @@ func (s *nativeSurface) EnvironmentCompleted(code webviewloader.HRESULT, environ
 		return 0
 	}
 	s.environment = (*comRef)(unsafe.Pointer(environment)).retain()
+	s.logProgress("environment_ready", "")
 	s.version, _ = s.environment.text(5)
 	minimum := packaging.Dependencies().WebView2.MinimumRuntimeVersion
 	if !runtimeVersionAtLeast(s.version, minimum) {
@@ -289,7 +318,7 @@ func runtimeVersionAtLeast(actual, minimum string) bool {
 
 func (s *nativeSurface) controllerCompleted(code uintptr, value *comRef) uintptr {
 	s.creationPending = false
-	if s.closing {
+	if s.closing || s.log != nil && s.log.failed.Load() {
 		if value != nil {
 			_ = value.call(24)
 		}
@@ -299,6 +328,7 @@ func (s *nativeSurface) controllerCompleted(code uintptr, value *comRef) uintptr
 		s.ready <- i18n.ErrArgs("err.quickinput.controller_create_failed", map[string]string{"code": fmt.Sprintf("%x", uint32(code))})
 		return 0
 	}
+	s.logProgress("controller_ready", "")
 	s.controller = value.retain()
 	core, err := s.controller.object(25)
 	if err == nil {
@@ -309,7 +339,9 @@ func (s *nativeSurface) controllerCompleted(code uintptr, value *comRef) uintptr
 		s.ready <- err
 		return 0
 	}
-	_ = s.controller.call(4, 0)
+	if s.log == nil {
+		_ = s.controller.call(4, 0)
+	}
 	var rect nativeRect
 	uiDLL.NewProc("GetClientRect").Call(s.hwnd.Load(), uintptr(unsafe.Pointer(&rect)))
 	_ = s.controller.call(6, uintptr(unsafe.Pointer(&rect)))
@@ -426,7 +458,11 @@ func surfaceWindowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uin
 		}
 	case 0x0010:
 		if s.log != nil {
-			s.beginClose()
+			s.hide(false)
+			s.log.visible.Store(false)
+			if s.log.hidden != nil {
+				s.log.hidden()
+			}
 		} else {
 			s.hide(true)
 		}

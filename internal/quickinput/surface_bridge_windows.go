@@ -121,7 +121,8 @@ func (s *nativeSurface) Update(theme string) error {
 	}
 	return s.dispatch(context.Background(), func() {
 		s.theme = theme
-		if !s.wantsSuspended {
+		s.invalidateLogShell()
+		if !s.wantsSuspended && s.documentReady && s.core != nil {
 			_ = s.postJSON(map[string]string{"kind": "theme", "theme": theme})
 		}
 	})
@@ -133,6 +134,7 @@ func (s *nativeSurface) UpdateLocale(locale string) error {
 	}
 	return s.dispatch(context.Background(), func() {
 		s.locale = locale
+		s.invalidateLogShell()
 		if hwnd := s.hwnd.Load(); hwnd != 0 {
 			if title, err := windows.UTF16PtrFromString(i18n.T(locale, s.titleKey())); err == nil {
 				uiDLL.NewProc("SetWindowTextW").Call(hwnd, uintptr(unsafe.Pointer(title)))

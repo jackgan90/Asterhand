@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +13,33 @@ import (
 	"github.com/jackgan90/Asterhand/internal/model"
 	"github.com/jackgan90/Asterhand/internal/store"
 )
+
+type failingLogWindowHost struct {
+	failure error
+	closes  int
+}
+
+func (h *failingLogWindowHost) Open(context.Context, string) error { return nil }
+func (h *failingLogWindowHost) Update(string, string)              {}
+func (h *failingLogWindowHost) Close() error                       { h.closes++; return h.failure }
+
+func TestCloseReportsLogHostExitFailure(t *testing.T) {
+	n := newNode(t, &fakeExecutor{})
+	if err := n.app.CommandLogs.Close(); err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("fixture: log host exit unconfirmed")
+	host := &failingLogWindowHost{failure: failure}
+	n.app.CommandLogs = host
+	for range 2 {
+		if err := n.app.Close(); !errors.Is(err, failure) {
+			t.Fatal("log host shutdown error discarded", err)
+		}
+	}
+	if host.closes != 1 {
+		t.Fatal("shutdown repeated", host.closes)
+	}
+}
 
 func exitRequest() model.Request {
 	return model.Request{RequestID: model.ID(), ProjectID: "workspace", Goal: "write after gate", Mode: "execute", StartBefore: time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)}

@@ -22,8 +22,8 @@ export function commandPanel(bridge, {input, post, changed, sendText}) {
     message.textContent = ''; message.hidden = true;
     measure();
   }
-  function showError(err) {
-    messageState = {err};
+  function showError(err, operation = false) {
+    messageState = {err, operation};
     const text = localizeError(err);
     message.textContent = text; message.hidden = !text;
     measure();
@@ -124,7 +124,7 @@ export function commandPanel(bridge, {input, post, changed, sendText}) {
       entries = all; results.retain(ids);
       const keep = new Set(ids);
       for (const id of errorMeta.keys()) if (!keep.has(id)) errorMeta.delete(id);
-      clearMessage(); paint();
+      if (!messageState?.operation) clearMessage(); paint();
     } catch (error) {
       if (!disposed) { entries = []; showError(error); paint(); }
     } finally {
@@ -134,6 +134,7 @@ export function commandPanel(bridge, {input, post, changed, sendText}) {
   }
   async function execute(entry) {
     if (composing || !entry || runBusy(entry)) return;
+    clearMessage();
     if(entry.execution_mode==='managed'&&!managedAvailable){showError({messageKey:'err.localcmd.managed_unavailable'});return;}
     const version = results.begin(entry.id);
     if (entry.state === 'missing') {
@@ -154,12 +155,14 @@ export function commandPanel(bridge, {input, post, changed, sendText}) {
     input.focus();
   }
   async function control(action,entry,button){
+    clearMessage();
     button.disabled=true;
     try{await client.call(action,{command_id:entry.id,...(action==='stop'?{run_id:entry.run_id}:{})});}
-    catch(err){showError(err);}
+    catch(err){showError(err, true);}
     finally{button.disabled=false;void refresh();}
   }
   async function settings(id = '') {
+    clearMessage();
     try { await client.call('settings', {command_id:id}); }
     catch (error) { if (!disposed) showError(error); }
   }

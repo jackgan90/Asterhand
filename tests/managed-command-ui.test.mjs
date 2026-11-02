@@ -68,3 +68,33 @@ test('keyboard selection refreshes launch availability even when list rendering 
   panel.key({key:'ArrowUp'}); panel.paint();
   assert.equal(view.get('command-run').disabled,true);
 });
+
+test('log open errors survive automatic refresh and clear on the next explicit operation', async () => {
+  const view = dom(); view.get('input').value = '/';
+  let rejectOpen = true;
+  const entry = {id:'one',name:'managed',state:'ready',execution_mode:'managed',phase:'finished',run_id:'run'};
+  const context = vm.createContext({...view, ...labels, localizeError:error=>error.message,
+    commandClient:()=>({call:async action=>{
+      if(action==='list')return {entries:[entry],managed_available:true};
+      if(rejectOpen)throw new Error('Could not open logs');
+      return {};
+    },dispose(){}}), commandQuery:()=>'',filterCommands:entries=>entries,
+    commandResults:()=>({error:()=>'',retain(){}}),runBusy:()=>false,runStoppable:()=>false,
+    setTimeout(){},clearTimeout(){},
+  });
+  const code=(await source('command-ui.mjs')).replace('export function commandPanel','function commandPanel')
+    .replace('return {changed: textChanged, key, submit, relocalize, dispose};',
+      'return {control,refresh,setup(){ready=true;visible=true;}};');
+  vm.runInContext(code+'\nglobalThis.factory=commandPanel;',context);
+  const panel=context.factory({subscribe(){return ()=>{};}},{input:view.get('input'),post(){},changed(){},sendText(){}});
+  panel.setup(); await panel.refresh();
+  const button=new Element();
+  await panel.control('logs',entry,button);
+  await panel.refresh();
+  assert.equal(view.get('command-message').textContent,'Could not open logs');
+  assert.equal(view.get('command-message').hidden,false);
+  assert.equal(button.disabled,false);
+  rejectOpen=false;
+  await panel.control('logs',entry,button);
+  assert.equal(view.get('command-message').hidden,true);
+});

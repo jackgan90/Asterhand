@@ -12,5 +12,9 @@ func (s *nativeSurface) commandRequest(message bridgeMessage) {
 		return
 	}
 	epoch, _, _ := s.remoteDraft.state()
-	_ = s.commandSend(hostipc.Message{Kind: hostipc.CommandCall, Epoch: epoch, CommandID: message.ID, Command: message.Command})
+	call := hostipc.Message{Kind: hostipc.CommandCall, Epoch: epoch, CommandID: message.ID, Command: message.Command}
+	if message.Command.Action == "logs" {
+		call.Anchor = logAnchorForWindow(s.hwnd.Load())
+	}
+	_ = s.commandSend(call)
 }

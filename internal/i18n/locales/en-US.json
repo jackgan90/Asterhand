@@ -858,6 +858,8 @@
   "err.launch.port_identity_mismatch": "Listening port node identity verification failed",
   "err.launch.port_pid_mismatch": "Listening port does not match the recorded node process",
   "brand.log_window_title": "Asterhand Command Log",
+  "quickinput.log.loading": "Loading logs…",
+  "quickinput.log.failed_retry": "The log view could not load. Close this window and select View logs to retry. The command will keep running.",
   "err.localcmd.invalid_execution_mode": "Choose managed or unmanaged execution.",
   "err.localcmd.invalid_timeout": "Timeout must be an integer from 1 to 9223372036 seconds, or empty.",
   "err.localcmd.running": "The command is running or finishing. Please wait.",

@@ -51,3 +51,5 @@ Windows PowerShell 5.1 运行 `test-installer-desktop.ps1` 验证 11 组隔离�
 [test-installer-bootstrap.ps1](../scripts/test-installer-bootstrap.ps1) 可独立在 Windows PowerShell 5.1 和 PowerShell 7 运行，验证一行在线安装入口及版本/标签参数，网络和安装内容使用受控替代，不执行真实安装。
 
 托管脚本的状态、日志、超时、恢复与独立桌面窗口分层测试见[托管命令验证](../docs/development/features/managed-local-commands/validation.md)。
+
+日志窗口的快速显示、关闭复用、初始化失败恢复及双屏定位见[日志窗口响应与定位验证](../docs/development/features/log-window-responsiveness-and-placement/validation.md)。

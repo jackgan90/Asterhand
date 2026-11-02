@@ -14,3 +14,14 @@ button:focus-visible,select:focus-visible,#log-output:focus-visible {outline:2px
 :root[data-theme=frost] #log-output span[data-stream=stderr],:root[data-theme=frost] #log-warning {color:#a52b32}
 footer {padding:8px 22px;flex:none}
 [hidden] {display:none!important}
+#log-graph{flex:none;padding:8px 22px;border-bottom:1px solid var(--line);max-height:210px;overflow:auto}
+#log-nodes{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+#log-nodes button{font-size:12px;text-align:left}#log-nodes button[data-failed=true]{border-color:#ffb4a5}
+.log-filters{display:flex;flex-wrap:wrap;gap:12px}.log-filters label{display:flex;gap:6px;align-items:center;font-size:12px}
+#log-graph small{color:var(--muted);font-size:11px}
+#log-columns{display:flex;flex:1;min-height:0;overflow:hidden}
+#log-output,#log-output-right{flex:1;min-width:0}
+#log-output-right{padding:16px 22px;overflow:auto;overscroll-behavior:contain;font:13px/1.6 Consolas,"Microsoft YaHei",monospace;white-space:pre-wrap;overflow-wrap:anywhere;tab-size:4;border-left:1px solid var(--line)}
+#log-output-right span[data-stream=stderr]{color:#ffb4a5}
+:root[data-theme=frost] #log-output-right span[data-stream=stderr]{color:#a52b32}
+.log-source{color:var(--muted);font-size:11px;user-select:none}

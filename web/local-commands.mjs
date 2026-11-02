@@ -1,6 +1,7 @@
 import {localizeError, t} from './i18n.mjs';
 import {modeKey, runKey, runBusy, runStoppable, timeoutSeconds} from './command-run.mjs';
 import {$, node, dialog} from './ui.mjs';
+import {graphEditor} from './graph-editor.mjs';
 
 const modeLabel = command => t(modeKey(command));
 const runLabel = run => t(runKey(run));
@@ -22,6 +23,8 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
   let picker = null, statusState = null, runStates = {}, stateTimer = null, stateLoading = false, managedAvailable=true;
   const argRows = [];
   const field = name => form.elements.namedItem(name);
+  const editor = graphEditor({container:$('#command-graph-editor'),onChange:()=>{dirty=true;},browse,getCommands:()=>catalog.commands});
+  const isGraph = () => field('kind').value === 'graph';
 
   function paintStatus(next = statusState) {
     statusState = next;
@@ -34,7 +37,9 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
       return;
     }
     if (next.kind === 'error') {
-      status.textContent = localizeError(next.error) + (next.conflict ? t('web.commands.conflict_suffix') : '');
+      const detail = localizeError(next.error), args = next.error?.messageArgs || next.error?.message_args;
+      const message = args?.graph_node ? t('err.graph.script', {node:args.graph_node, err:detail}) : detail;
+      status.textContent = message + (next.conflict ? t('web.commands.conflict_suffix') : '');
       return;
     }
     status.textContent = t(statusKeys[next.kind] || '');
@@ -73,6 +78,8 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
     for (const name of ['name', 'description', 'script', 'directory']) field(name).value = command[name] ?? '';
     field('aliases').value = (command.aliases ?? []).join('\n');
     field('window').value = command.window ?? 'background';
+    field('kind').value=command.kind ?? 'script';
+    editor.load(command.graph);
     field('execution_mode').value=command.execution_mode ?? 'unmanaged';
     field('timeout').value=command.timeout_seconds ?? '';field('timeout_unit').value='1';syncMode();
     argumentsList.replaceChildren();
@@ -83,13 +90,19 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
     dirty = false; paint();
   }
   function syncMode(){
+    const graph=isGraph();
+    if(graph)field('execution_mode').value='managed';
     const managed=field('execution_mode').value==='managed';
+    $('#command-script-fields').hidden=graph;$('#command-graph-editor').hidden=!graph;
+    field('script').required=!graph;
     $('#command-window-field').hidden=managed;$('#command-timeout-field').hidden=!managed;
     $('#command-log-delete-hint').hidden=managed||catalog.commands.find(c=>c.id===selected)?.execution_mode!=='managed';
   }
   function lockForm(){
     const locked=busy||runBusy(runStates[selected]);
     for(const control of form.querySelectorAll('button,input,textarea,select'))control.disabled=locked;
+    editor.setLocked(locked||!isGraph());
+    field('execution_mode').disabled=locked||isGraph();
     const managedOption=field('execution_mode').querySelector?.('option[value=managed]');if(managedOption)managedOption.disabled=!managedAvailable;
   }
   function paint() {
@@ -100,7 +113,7 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
       if (![command.name, ...(command.aliases ?? [])].some(name => name.toLocaleLowerCase('en-US').includes(term))) continue;
       const button = node('button', null, 'registered-command'); button.type = 'button';
       button.setAttribute('aria-pressed', String(command.id === selected));
-      button.append(node('strong',modeLabel(command)+' '+command.name), node('span',runLabel(runStates[command.id])), node('span', (command.aliases ?? []).join(' / ')), node('small', command.script));
+      button.append(node('strong',modeLabel(command)+' '+command.name), node('span',runLabel(runStates[command.id])), node('span', (command.aliases ?? []).join(' / ')), node('small', command.kind==='graph'?t('common.graph.title'):command.script));
       button.addEventListener('click', () => {if (!busy && canDiscard()) {populate(command); paintStatus(null);}});
       const row=node('div',null,'registered-command-row');row.append(button);
       const run=runStates[command.id];
@@ -149,6 +162,7 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
       description:field('description').value.trim(), script:field('script').value.trim(), directory:field('directory').value.trim(),
       arguments:[...argumentsList.querySelectorAll('input')].map(input => input.value), window:field('window').value,
       execution_mode:field('execution_mode').value,timeout_seconds:field('execution_mode').value==='managed'?timeoutSeconds(field('timeout').value,field('timeout_unit').value):null,
+      kind:field('kind').value,graph:isGraph()?editor.read():null,
     };
   }
   function setBusy(value) {
@@ -173,14 +187,14 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
       if (scope?.active && version === generation) paintStatus({kind: 'error', error, conflict: error.status === 409});
     } finally { if (version === generation) setBusy(false); }
   }
-  async function browse() {
+  async function browse(apply = path => {field('script').value=path;}) {
     if (busy) return;
     const scope = session(), version = generation, request = new AbortController();
     picker = request; setBusy(true); paintStatus(null);
     try {
       const result = await api('/api/local-commands/browse', {method:'POST', body:'{}', signal:request.signal});
       if (!scope?.active || version !== generation) return;
-      if (result.path) { field('script').value = result.path; dirty = true; }
+      if (result.path) { apply(result.path); dirty = true; }
     } catch (error) {
       if (scope?.active && version === generation && !request.signal.aborted) paintStatus({kind: 'error', error, conflict: false});
     } finally {
@@ -191,6 +205,7 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
   function relocalize() {
     paintFormTitle();
     syncArgumentLabels();
+    editor.relocalize();
     paint();
     paintStatus();
   }
@@ -199,10 +214,10 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
   listen($('#command-new'), 'click', () => {if (!busy && canDiscard()) {populate(); paintStatus(null);}});
   listen($('#command-add-argument'), 'click', () => {argumentRow(); dirty = true;});
   listen(form, 'input', () => {dirty = true;});
-  listen(form, 'change', event => {dirty = true;if(event.target===field('execution_mode')){field('timeout').value='';syncMode();}});
+  listen(form, 'change', event => {dirty = true;if(event.target===field('execution_mode'))field('timeout').value='';if(event.target===field('execution_mode')||event.target===field('kind')){syncMode();lockForm();}});
   listen(form, 'submit', event => {event.preventDefault(); void mutate();});
   listen($('#command-delete'), 'click', () => mutate(true));
-  listen($('#command-browse'), 'click', browse);
+  listen($('#command-browse'), 'click', () => browse());
   listen(search, 'input', paint);
   listen($('#commands-close'), 'click', () => {if (!busy && canDiscard()) panel.close();});
   listen(panel, 'cancel', event => {if (busy || !canDiscard()) event.preventDefault();});

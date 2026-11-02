@@ -22,6 +22,8 @@
 
 ## 其他入口
 
+- [本地脚本图计划](development/features/local-script-graphs/plan.md)、[脚本图设计](executors/script-graphs.md)、[验证说明](development/features/local-script-graphs/validation.md)：快捷命令关联本机静态 DAG、串并行依赖、失败停止、节点日志与图编辑；工程验证、独立审计复审及本机用户验收通过。
+
 - [日志窗口快速显示与同屏定位](development/features/log-window-responsiveness-and-placement/plan.md)、[验证说明](development/features/log-window-responsiveness-and-placement/validation.md)：关闭复用、加载/失败反馈、宿主恢复和输入框所在屏幕定位（工程验证、独立审计复审及本机用户验收通过）。
 
 - [托管本地命令计划](development/features/managed-local-commands/plan.md)、[托管命令设计](executors/managed-local-commands.md)、[生命周期 ADR](executors/adr/003-managed-local-command-lifecycle.md)：托管/非托管分类、独立日志窗口、最近日志与结果、强制中断及可选超时；公共核心与平台适配分离，首个实现为 Windows，验收边界见功能验证说明。

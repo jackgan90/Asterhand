@@ -14,6 +14,7 @@ import (
 )
 
 type managedRun struct {
+	graph       *graphRun
 	mu          sync.Mutex
 	record      RunRecord
 	execution   Execution
@@ -27,17 +28,18 @@ type managedRun struct {
 // RunManager owns accepted work independently of request and UI lifetimes.
 // Lock order is registry -> manager -> run; workers only acquire the run lock.
 type RunManager struct {
-	mu      sync.Mutex
-	store   runStore
-	backend ExecutionBackend
-	clock   ExecutionClock
-	runs    map[string]*managedRun
-	closed  bool
-	loadErr error
+	graphSlots chan struct{}
+	mu         sync.Mutex
+	store      runStore
+	backend    ExecutionBackend
+	clock      ExecutionClock
+	runs       map[string]*managedRun
+	closed     bool
+	loadErr    error
 }
 
 func NewRunManager(home string, backend ExecutionBackend, clock ExecutionClock) *RunManager {
-	m := &RunManager{store: runStore{filepath.Join(home, "command-runs")}, backend: backend, clock: clock, runs: map[string]*managedRun{}}
+	m := &RunManager{store: runStore{filepath.Join(home, "command-runs")}, backend: backend, clock: clock, runs: map[string]*managedRun{}, graphSlots: make(chan struct{}, GraphExecutionSlots)}
 	if clock == nil {
 		m.clock = platformClock{}
 	}
@@ -96,6 +98,10 @@ func (m *RunManager) recover() error {
 }
 
 func (m *RunManager) reconcile(run *managedRun) {
+	if run.record.Command.Kind == "graph" {
+		m.reconcileGraph(run)
+		return
+	}
 	for {
 		if m.backend != nil {
 			empty, err := m.backend.Reconcile(run.record.ID)
@@ -112,6 +118,7 @@ func (m *RunManager) reconcile(run *managedRun) {
 }
 
 func cloneRecord(record RunRecord) RunRecord {
+	record.Nodes = cloneNodeRecords(record.Nodes)
 	record.Command = cloneCatalog(Catalog{Commands: []Command{record.Command}}).Commands[0]
 	if record.Ended != nil {
 		value := *record.Ended
@@ -126,11 +133,11 @@ func cloneRecord(record RunRecord) RunRecord {
 
 // snapshotLocked derives live duration from the same clock as the timeout.
 func (m *RunManager) snapshotLocked(run *managedRun) RunRecord {
-	record := cloneRecord(run.record)
-	if run.execution != nil && (record.Phase == "running" || record.Phase == "stopping") {
+	record := cloneRecord(publicRun(run.record))
+	if (run.execution != nil || run.graph != nil) && (record.Phase == "running" || record.Phase == "stopping") {
 		record.Elapsed = max(0, (m.clock.Now() - run.started).Seconds())
 	}
-	return record
+	return publicRun(record)
 }
 
 func (m *RunManager) Current(id string) *RunRecord {
@@ -170,6 +177,16 @@ func (m *RunManager) Busy(id string) bool {
 }
 
 func (m *RunManager) Start(command Command) (*RunRecord, error) {
+	if command.Kind == "graph" {
+		graph, err := normalizeGraph(command.Graph, commandPolicy)
+		if err != nil {
+			return nil, err
+		}
+		if command.ExecutionMode != "managed" {
+			return nil, graphProblem("err.graph.managed", "")
+		}
+		command.Graph = graph
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
@@ -187,6 +204,9 @@ func (m *RunManager) Start(command Command) (*RunRecord, error) {
 		}
 	}
 	run := &managedRun{record: RunRecord{ID: model.ID(), Command: command, Phase: "starting", Started: time.Now().UTC(), LogComplete: true}, busy: true, done: make(chan struct{})}
+	if command.Kind == "graph" {
+		initializeGraph(run)
+	}
 	f, err := m.store.prepare(run.record)
 	if err != nil {
 		return nil, err
@@ -202,7 +222,11 @@ func (m *RunManager) Start(command Command) (*RunRecord, error) {
 		run.record.Reason = "log_io_error"
 		m.finishLocked(run, ExitEvidence{Kind: "unknown"})
 	} else {
-		go m.execute(run)
+		if run.graph != nil {
+			go m.executeGraph(run)
+		} else {
+			go m.execute(run)
+		}
 	}
 	record := m.snapshotLocked(run)
 	return &record, nil
@@ -331,6 +355,9 @@ func (m *RunManager) stopLocked(run *managedRun, reason string) error {
 			run.record.LogComplete = false
 		}
 	}
+	if run.graph != nil {
+		return m.stopGraphLocked(run)
+	}
 	if run.execution != nil {
 		if err := run.execution.ForceStop(); err != nil {
 			run.record.CleanupPending = true
@@ -364,6 +391,13 @@ func (m *RunManager) finishLocked(run *managedRun, evidence ExitEvidence) {
 	if !run.busy {
 		return
 	}
+	if run.graph != nil {
+		for i := range run.record.Nodes {
+			if run.record.Nodes[i].Phase == "waiting" || run.record.Nodes[i].Phase == "ready" {
+				finishStructuralNode(&run.record.Nodes[i], "skipped")
+			}
+		}
+	}
 	if run.file != nil {
 		err := run.file.Sync()
 		closeErr := run.file.Close()
@@ -380,18 +414,9 @@ func (m *RunManager) finishLocked(run *managedRun, evidence ExitEvidence) {
 	run.record.Exit = evidence
 	ended := time.Now().UTC()
 	run.record.Ended = &ended
-	switch run.record.Reason {
-	case "user_stop", "node_shutdown", "unexpected_shutdown":
-		run.record.Result = "interrupted"
-	case "":
-		if evidence.Kind == "exited" && evidence.Code != nil && *evidence.Code == 0 && run.record.LogComplete {
-			run.record.Result = "succeeded"
-		} else {
-			run.record.Result = "failed"
-			run.record.Reason = "exit_error"
-		}
-	default:
-		run.record.Result = "failed"
+	run.record.Result, run.record.Reason = executionResult(run.record.Reason, evidence, run.record.LogComplete)
+	if run.record.Command.Kind == "graph" && evidence.Kind == "graph_succeeded" && run.record.Reason == "exit_error" && run.record.LogComplete {
+		run.record.Result, run.record.Reason = "succeeded", ""
 	}
 	if err := m.store.save(run.record); err != nil {
 		run.record.StorageError = true

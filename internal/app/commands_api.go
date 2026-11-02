@@ -81,7 +81,7 @@ func (a *App) commandsAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 func readCommand(w http.ResponseWriter, r *http.Request, value any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, 32*1024)
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
 	if err := d.Decode(value); err != nil {

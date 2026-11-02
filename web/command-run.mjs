@@ -5,12 +5,13 @@ const reasons = {
   node_shutdown:'common.command.node_shutdown', unexpected_shutdown:'common.command.unexpected_shutdown', timeout:'common.command.timeout_reason',
   log_io_error:'common.command.log_io_error', capture_error:'common.command.capture_error', execution_error:'common.command.execution_error',
   log_drain_timeout:'common.command.log_drain_timeout',
+  node_failed:'common.graph.node_failed',graph_aborted:'common.graph.aborted',
 };
 export const runBusy = run => Boolean(run?.phase && run.phase !== 'finished');
 export const runStoppable = run => runBusy(run) && run.phase !== 'stopping' && run.phase !== 'draining';
 export function runKey(run) {
   if (!run?.phase) return '';
-  if (run.phase === 'stopping') return 'common.command.stopping';
+  if (run.phase === 'stopping') return run.reason==='node_failed'?'common.graph.failed_stopping':'common.command.stopping';
   if (run.phase !== 'finished') return 'common.command.running';
   return results[run.result] || 'common.unconfirmed';
 }

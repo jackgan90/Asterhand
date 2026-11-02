@@ -15,7 +15,14 @@ import (
 
 const logBlockSize = 16 * 1024
 
+// A full 64-node graph can exceed 2 MiB after JSON escapes paths and names.
+// Use one bounded limit for both publishing and reopening its private record.
+const maxRunRecordBytes = 4 * 1024 * 1024
+
 type RunRecord struct {
+	Nodes          []NodeRecord `json:"nodes,omitempty"`
+	FailedNodeID   string       `json:"failed_node_id,omitempty"`
+	LogFormat      int          `json:"log_format,omitempty"`
 	ID             string       `json:"run_id"`
 	Command        Command      `json:"command"`
 	Phase          string       `json:"phase"`
@@ -31,6 +38,7 @@ type RunRecord struct {
 }
 
 type LogChunk struct {
+	NodeID    string    `json:"node_id,omitempty"`
 	IgnoreBOM bool      `json:"ignore_bom,omitempty"`
 	Stream    string    `json:"stream"`
 	Data      []byte    `json:"data"`
@@ -57,6 +65,9 @@ func (s runStore) save(r RunRecord) error {
 	b, err := json.Marshal(r)
 	if err != nil {
 		return err
+	}
+	if len(b) > maxRunRecordBytes {
+		return problem("configuration", "err.localcmd.invalid_run")
 	}
 	return config.AtomicFile(s.metadata(r.Command.ID), b, 0600)
 }
@@ -89,11 +100,15 @@ func (s runStore) prepare(r RunRecord) (*logFile, error) {
 // Each binary frame contains stream, UTC nanoseconds, byte length, then raw
 // bytes. A partial crash tail is visible as incomplete, never silently skipped.
 func appendLog(f *logFile, stream byte, data []byte) error {
+	return appendLogWithContext(f, &f.context, stream, data)
+}
+
+func appendLogWithContext(f *logFile, context *logContext, stream byte, data []byte) error {
 	var header [logHeaderSize]byte
 	header[0] = stream
 	binary.LittleEndian.PutUint64(header[1:9], uint64(time.Now().UTC().UnixNano()))
 	binary.LittleEndian.PutUint32(header[9:13], uint32(len(data)))
-	f.context.marshal(header[13:])
+	context.marshal(header[13:])
 	if _, err := f.Write(header[:]); err != nil {
 		return err
 	}
@@ -104,12 +119,20 @@ func appendLog(f *logFile, stream byte, data []byte) error {
 	binary.LittleEndian.PutUint32(footer[:], uint32(len(data)))
 	_, err := f.Write(footer[:])
 	if err == nil {
-		f.context.advance(stream, data)
+		context.advance(stream%2, data)
 	}
 	return err
 }
 
 func (s runStore) read(r RunRecord, cursor int64) (LogPage, error) {
+	if r.Command.Kind == "graph" {
+		// Log rendering needs graph-node IDs, not platform execution IDs. Keep
+		// those in status/durable records and reserve page space for a full frame.
+		r.Nodes = cloneNodeRecords(r.Nodes)
+		for i := range r.Nodes {
+			r.Nodes[i].RunID = ""
+		}
+	}
 	page := LogPage{Run: &r, Chunks: []LogChunk{}, Next: cursor, Start: cursor}
 	f, err := os.Open(s.logPath(r.Command.ID, r.ID))
 	if err != nil {
@@ -137,6 +160,7 @@ func (s runStore) read(r RunRecord, cursor int64) (LogPage, error) {
 		return page, err
 	}
 	wireBytes := len(metadata) + 2048
+	seenNodes := map[string]bool{}
 	for size := 0; size < logPageBytes && len(page.Chunks) < logPageFrames; {
 		var header [logHeaderSize]byte
 		_, err = io.ReadFull(f, header[:])
@@ -148,16 +172,26 @@ func (s runStore) read(r RunRecord, cursor int64) (LogPage, error) {
 			return page, err
 		}
 		n := binary.LittleEndian.Uint32(header[9:13])
-		if n > logBlockSize || n == 0 || header[0] > 1 {
+		nodeID, streamByte, frameErr := logFrameSource(r, header[0])
+		if n > logBlockSize || n == 0 || frameErr != nil {
 			return page, problem("invalid", "err.localcmd.invalid_log_cursor")
 		}
 		if len(page.Chunks) > 0 && size+int(n) > logPageBytes {
 			break
 		}
-		if len(page.Chunks) == 0 {
-			page.Context, err = decodeLogContext(header[13:])
+		var context map[string][]LogChunk
+		contextBytes := 0
+		if !seenNodes[nodeID] {
+			context, err = decodeLogContext(header[13:])
 			if err != nil {
 				return page, err
+			}
+			for _, chunks := range context {
+				for i := range chunks {
+					chunks[i].NodeID = nodeID
+					encoded, _ := json.Marshal(chunks[i])
+					contextBytes += len(encoded) + 1
+				}
 			}
 		}
 		b := make([]byte, n)
@@ -177,21 +211,30 @@ func (s runStore) read(r RunRecord, cursor int64) (LogPage, error) {
 		if binary.LittleEndian.Uint32(footer[:]) != n {
 			return page, problem("invalid", "err.localcmd.invalid_log_cursor")
 		}
-		if header[0] == 1 {
+		if streamByte == 1 {
 			stream = "stderr"
 		}
-		chunk := LogChunk{Stream: stream, Data: b, Time: time.Unix(0, int64(binary.LittleEndian.Uint64(header[1:9]))).UTC()}
+		chunk := LogChunk{NodeID: nodeID, Stream: stream, Data: b, Time: time.Unix(0, int64(binary.LittleEndian.Uint64(header[1:9]))).UTC()}
 		encoded, err := json.Marshal(chunk)
 		if err != nil {
 			return page, err
 		}
-		if wireBytes+len(encoded)+1 > 90*1024 {
+		if wireBytes+contextBytes+len(encoded)+1 > 96*1024 {
 			if len(page.Chunks) == 0 {
 				return page, problem("invalid", "err.localcmd.limit_exceeded")
 			}
 			break
 		}
-		wireBytes += len(encoded) + 1
+		wireBytes += contextBytes + len(encoded) + 1
+		if len(context) > 0 {
+			if page.Context == nil {
+				page.Context = map[string][]LogChunk{}
+			}
+			for encoding, chunks := range context {
+				page.Context[encoding] = append(page.Context[encoding], chunks...)
+			}
+		}
+		seenNodes[nodeID] = true
 		page.Chunks = append(page.Chunks, chunk)
 		page.Next += int64(logFrameOverhead) + int64(n)
 		size += int(n)
@@ -237,16 +280,24 @@ func (s runStore) tailCursor(r RunRecord) (int64, error) {
 }
 
 func (s runStore) load(id string) (*RunRecord, error) {
-	b, err := os.ReadFile(s.metadata(id))
+	f, err := os.Open(s.metadata(id))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxRunRecordBytes+1))
+	if err != nil {
+		return nil, err
+	}
 	var r RunRecord
-	if len(b) > 64*1024 || json.Unmarshal(b, &r) != nil || r.Command.ID != id || !wire.ValidID(r.ID) {
+	if len(b) > maxRunRecordBytes || json.Unmarshal(b, &r) != nil || r.Command.ID != id || !wire.ValidID(r.ID) {
 		return nil, problem("configuration", "err.localcmd.invalid_run")
+	}
+	if err := validateGraphRecord(r); err != nil {
+		return nil, err
 	}
 	return &r, nil
 }

@@ -12,6 +12,11 @@
       <option value="big5" data-i18n="common.command.big5"></option><option value="utf-16le" data-i18n="common.command.utf16"></option>
     </select></label>
   </nav>
-  <div id="log-output" tabindex="0" role="log" aria-live="off"></div>
+  <section id="log-graph" hidden>
+    <div id="log-nodes" data-i18n-aria-label="common.graph.nodes"></div>
+    <div class="log-filters"><label><span data-i18n="common.graph.left"></span><select id="log-node-left"></select></label><label><span data-i18n="common.graph.right"></span><select id="log-node-right"></select></label></div>
+    <small data-i18n="common.graph.split_hint"></small>
+  </section>
+  <div id="log-columns" data-split="false"><div id="log-output" tabindex="0" role="log" aria-live="off"></div><div id="log-output-right" hidden tabindex="0" role="log" aria-live="off" data-i18n-aria-label="common.graph.right"></div></div>
   <footer><span id="log-follow"></span><span id="log-range"></span></footer>
 </main><script type="module" src="command-log.mjs"></script></body></html>

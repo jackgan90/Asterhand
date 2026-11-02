@@ -25,6 +25,16 @@ type probeTask struct {
 }
 
 func inspect(c Command) fileStatus {
+	if c.Kind == "graph" && c.Graph != nil {
+		for _, n := range c.Graph.Nodes {
+			if n.Kind == "script" {
+				if status := inspect(nodeCommand(c, n)); status.state != "ready" {
+					return status
+				}
+			}
+		}
+		return fileStatus{state: "ready"}
+	}
 	f, err := os.Stat(c.Script)
 	if errors.Is(err, os.ErrNotExist) {
 		return fileStatus{state: "missing", detailKey: "status.localcmd.missing"}

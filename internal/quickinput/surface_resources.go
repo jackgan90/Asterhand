@@ -26,7 +26,7 @@ func resourceTypes() map[string]string {
 	}
 	for _, name := range []string{"input.js", "i18n.mjs", "i18n-catalog.mjs", "input-model.mjs", "composer-layout.mjs", "webview2-bridge.mjs", "chat-client.mjs",
 		"chat-model.mjs", "chat-renderer.mjs", "chat-ui.mjs", "chat-outbox.mjs", "chat-status.mjs", "chat-queue.mjs", "chat-connection.mjs",
-		"chat-markup.mjs", "chat-math.mjs", "command-client.mjs", "command-model.mjs", "command-results.mjs", "command-ui.mjs", "command-log.mjs", "command-run.mjs", "log-model.mjs"} {
+		"chat-markup.mjs", "chat-math.mjs", "command-client.mjs", "command-model.mjs", "command-results.mjs", "command-ui.mjs", "command-log.mjs", "command-run.mjs", "log-model.mjs", "log-graph.mjs"} {
 		allowed[name] = "application/javascript; charset=utf-8"
 	}
 	// The checked-in vendor manifest is the exact asset inventory, not a directory

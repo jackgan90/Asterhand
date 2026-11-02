@@ -11,13 +11,18 @@ export class Element extends EventTarget {
     this.checked = false;
     this.hidden = false;
     this.elements = {};
+    this.style = {};
+    this.classList = {add:(...names)=>{this.className=[this.className||'',...names].join(' ').trim();}};
   }
   get options() { return this.children; }
   append(...elements) {
-    this.children.push(...elements);
+    for(const element of elements){element.parentElement=this;this.children.push(element);}
     if (this.tagName === "SELECT" && !this.value) this.value = elements[0]?.value || "";
   }
   replaceChildren(...elements) { this.children = []; if (this.tagName === "SELECT") this.value = ""; this.append(...elements); }
+  remove(){if(this.parentElement)this.parentElement.children=this.parentElement.children.filter(child=>child!==this);this.parentElement=null;}
+  querySelectorAll(selector){const tags=selector.split(',').map(tag=>tag.trim().toUpperCase());return descendants(this).filter(el=>tags.includes(el.tagName));}
+  setPointerCapture() {}
   setAttribute(key, value) { this.attributes[key] = value; }
   getAttribute(key) { return this.attributes[key] ?? null; }
   hasAttribute(key) { return Object.hasOwn(this.attributes, key); }
@@ -48,6 +53,8 @@ export function domFixture() {
   document.querySelector = selector => optional.has(selector) && !elements.has(selector) ? null : selector === ".question input:focus" ? document.activeElement : select(selector);
   document.querySelectorAll = () => [];
   document.createElement = tag => new Element(tag, document);
+  document.createElementNS = (namespaceURI,tag) => Object.assign(new Element(tag,document),{namespaceURI});
+  document.createDocumentFragment = () => new Element('fragment',document);
   document.createTextNode = text => ({textContent:text});
   document.getElementById = id => document.querySelector("#"+id);
   document.documentElement = {dataset:{}};

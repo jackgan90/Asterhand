@@ -2,11 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {localCommands} from '../web/local-commands.mjs';
 import {domFixture, deferred, tick} from './web-fixture.mjs';
+import {setLocale, t as translate} from '../web/i18n.mjs';
 
 async function harness(t) {
   const dom = domFixture(), panel = dom.select('#local-commands'), form = dom.select('#command-form');
   const requests = [], selections = [], scope = {active:true};
-  for (const name of ['name','aliases','description','script','directory','window','execution_mode','timeout','timeout_unit']) form.elements[name] = dom.document.createElement('input');
+  for (const name of ['kind','name','aliases','description','script','directory','window','execution_mode','timeout','timeout_unit']) form.elements[name] = dom.document.createElement('input');
   form.elements.namedItem = name => form.elements[name];
   panel.querySelectorAll = () => [...dom.elements.values()];
   form.querySelectorAll = () => Object.values(form.elements).filter(value => typeof value !== "function");
@@ -51,4 +52,16 @@ test('ending the session cancels Browse and a late selection cannot change the f
   assert.equal(h.requests[0].signal.aborted,true);
   h.selections[0].resolve({path:'C:\\late.bat'}); await tick();
   assert.equal(h.script.value,'C:\\original.bat');
+});
+
+test('graph validation reason and node context both relocalize in the command form', async t => {
+  const h = await harness(t);
+  setLocale('zh-CN');
+  h.select('#command-browse').fire('click');
+  h.selections[0].reject({code:'invalid_graph',messageKey:'err.localcmd.unsupported_ext',messageArgs:{graph_node:'build'}});
+  await tick();
+  for(const locale of ['zh-CN','en-US']){
+    setLocale(locale);h.controller.relocalize();
+    assert.equal(h.select('#commands-status').textContent,translate('err.graph.script',{node:'build',err:translate('err.localcmd.unsupported_ext')}));
+  }
 });

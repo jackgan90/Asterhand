@@ -343,11 +343,11 @@ func TestManagedLegacySchemaMigrationAndValidation(t *testing.T) {
 	saved := saveCommand(t, r, c)
 	path := r.path
 	b, _ := os.ReadFile(path)
-	b = []byte(strings.Replace(string(b), `"schema_version": 2`, `"schema_version": 1`, 1))
+	b = []byte(strings.Replace(string(b), `"schema_version": 3`, `"schema_version": 1`, 1))
 	os.WriteFile(path, b, 0600)
 	reopened := Open(home, nil)
 	catalog := mustSnapshot(t, reopened)
-	if catalog.Schema != 2 || catalog.Commands[0].ExecutionMode != "unmanaged" {
+	if catalog.Schema != 3 || catalog.Commands[0].ExecutionMode != "unmanaged" || catalog.Commands[0].Kind != "script" {
 		t.Fatal(catalog)
 	}
 	c = saved.Catalog.Commands[0]

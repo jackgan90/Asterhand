@@ -29,6 +29,7 @@ test('log navigation keeps polling when the refresh timer fires while awaiting a
   const record = {run_id:'run1234567890abcd', phase:'running', elapsed_seconds:0, command:{name:'test'}};
   const page = {start:0, previous:0, next:20, end:true, run:record, chunks:[]};
   const context = vm.createContext({...view, ...labels, logDecoder,
+    logGraphView:()=>({metadata(){},reset(){},append(){},follow(){},relocalize(){},chunkCount:0}),
     webview2Bridge:()=>({send(){}, subscribe(){}}),
     commandClient:()=>({call:async action => action === 'status' ? {run:record} : pending ? await pending : {log:page}}),
     runBusy:r=>r?.phase !== 'finished', runStoppable:()=>true,

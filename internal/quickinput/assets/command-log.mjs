@@ -3,6 +3,7 @@ import {commandClient} from './command-client.mjs';
 import {applyI18n, setLocale, t, localizeError, formatDateTime} from './i18n.mjs';
 import {runBusy, runStoppable, runLabel, reasonLabel} from './command-run.mjs';
 import {logDecoder} from './log-model.mjs';
+import {logGraphView} from './log-graph.mjs';
 
 const bridge = webview2Bridge(), byID = id => document.getElementById(id);
 const output = byID('log-output'), stop = byID('log-stop'), encoding = byID('log-encoding');
@@ -10,8 +11,10 @@ let epoch = '', commandID = '', record = null, page = null, follow = true, loadi
 let timer = null, visible = true, decoder = logDecoder(), characters = 0, error = null, finished = false;
 const post = (kind, fields = {}) => bridge.send({version:1, kind, generation:epoch, ...fields});
 const client = commandClient(bridge, post);
+const graphView = logGraphView({byID,output,onPause:()=>{follow=false;renderMetadata();}});
 
 function renderMetadata() {
+  graphView.metadata(record);
   byID('log-name').textContent = record?.command?.name || t('brand.log_window_title');
   byID('log-state').textContent = runLabel(record);
   stop.disabled = stopping || !runStoppable(record);
@@ -35,25 +38,22 @@ function renderMetadata() {
   byID('log-latest').disabled = loading || !record;
 }
 function append(chunks) {
-  const fragment = document.createDocumentFragment();
-  for (const chunk of chunks) {
-    if (!chunk.text) continue;
-    const span = document.createElement('span');span.dataset.stream=chunk.stream;span.textContent=chunk.text;
-    fragment.append(span);characters+=chunk.text.length;
-  }
-  output.append(fragment);
+  graphView.append(chunks);
+  characters+=chunks.reduce((sum,chunk)=>sum+chunk.text.length,0);
 }
-function resetView() { output.replaceChildren();characters=0;decoder=logDecoder(encoding.value);finished=false; }
+function resetView() { graphView.reset();characters=0;decoder=logDecoder(encoding.value);finished=false; }
 async function loadPage(cursor, tail = false, extend = false) {
   if (!record) return;
   const result = await client.call(tail ? 'tail_log' : 'read_log', {command_id:commandID,run_id:record.run_id,...(tail ? {} : {cursor})});
   const next = result.log;
-  if (!extend) {resetView();decoder.seed(next.context?.[encoding.value] ?? []);}
+  if (!extend) resetView();
+  decoder.seed(next.context?.[encoding.value] ?? [],extend);
   page = extend && page ? {...next,start:page.start,previous:page.previous} : next;
   record=next.run;
+  graphView.metadata(record);
   append(next.chunks.map(chunk=>decoder.decode(chunk)));
   if (!runBusy(record) && next.end && !finished) {append(decoder.finish());finished=true;}
-  if (follow) output.scrollTop=output.scrollHeight;
+  if (follow) graphView.follow();
 }
 function scheduleRefresh() {
   clearTimeout(timer);
@@ -71,7 +71,7 @@ async function refresh() {
     const changed = current.run_id !== record?.run_id;
     record=current;error=null;
     if (changed) {follow=true;page=null;resetView();}
-    if (!page || follow && (characters>128*1024 || output.childElementCount>1024)) await loadPage(0,true);
+    if (!page || follow && (characters>128*1024 || graphView.chunkCount>512)) await loadPage(0,true);
     else if (follow) await loadPage(page.next,false,true);
   } catch (err) { error=err; if (err.code==='conflict') {record=null;page=null;resetView();} }
   finally {loading=false;renderMetadata();scheduleRefresh();}
@@ -100,7 +100,7 @@ stop.onclick=async()=>{
 bridge.subscribe(message=>{
   if(message.kind==='init'){epoch=message.generation;commandID=message.command_id;setLocale(message.locale);document.documentElement.dataset.theme=message.theme;applyI18n();post('initialized');void refresh();}
   if(message.kind==='theme')document.documentElement.dataset.theme=message.theme;
-  if(message.kind==='locale'){setLocale(message.locale);applyI18n();renderMetadata();}
+  if(message.kind==='locale'){setLocale(message.locale);applyI18n();renderMetadata();graphView.relocalize();}
   if(message.kind==='visibility'){visible=message.visible;if(visible)void refresh();else clearTimeout(timer);}
 });
 post('ready');

@@ -16,17 +16,19 @@ import (
 )
 
 type Command struct {
-	ExecutionMode  string   `json:"execution_mode"`
-	TimeoutSeconds *int64   `json:"timeout_seconds,omitempty"`
-	ID             string   `json:"id"`
-	Revision       string   `json:"revision"`
-	Name           string   `json:"name"`
-	Aliases        []string `json:"aliases"`
-	Description    string   `json:"description"`
-	Script         string   `json:"script"`
-	Arguments      []string `json:"arguments"`
-	Directory      string   `json:"directory"`
-	Window         string   `json:"window"`
+	Kind           string       `json:"kind,omitempty"`
+	Graph          *ScriptGraph `json:"graph,omitempty"`
+	ExecutionMode  string       `json:"execution_mode"`
+	TimeoutSeconds *int64       `json:"timeout_seconds,omitempty"`
+	ID             string       `json:"id"`
+	Revision       string       `json:"revision"`
+	Name           string       `json:"name"`
+	Aliases        []string     `json:"aliases"`
+	Description    string       `json:"description"`
+	Script         string       `json:"script"`
+	Arguments      []string     `json:"arguments"`
+	Directory      string       `json:"directory"`
+	Window         string       `json:"window"`
 }
 
 type Catalog struct {
@@ -60,6 +62,12 @@ func cleanText(text string, limit int) bool {
 func normalize(command Command) (Command, error) { return normalizeWithPolicy(command, commandPolicy) }
 
 func normalizeWithPolicy(command Command, policy CommandPolicy) (Command, error) {
+	if command.Kind == "" {
+		command.Kind = "script"
+	}
+	if command.Kind != "script" && command.Kind != "graph" {
+		return command, graphProblem("err.graph.kind", "")
+	}
 	command.Name = strings.TrimSpace(command.Name)
 	if !englishName.MatchString(command.Name) {
 		return command, problem("invalid", "err.localcmd.invalid_name")
@@ -92,6 +100,18 @@ func normalizeWithPolicy(command Command, policy CommandPolicy) (Command, error)
 		}
 	} else {
 		command.TimeoutSeconds = nil
+	}
+	if command.Kind == "graph" {
+		if command.ExecutionMode != "managed" {
+			return command, graphProblem("err.graph.managed", "")
+		}
+		graph, err := normalizeGraph(command.Graph, policy)
+		command.Graph = graph
+		command.Script, command.Directory, command.Arguments = "", "", []string{}
+		return command, err
+	}
+	if command.Graph != nil {
+		return command, graphProblem("err.graph.kind", "")
 	}
 	var err error
 	if command.Script, err = policy.ScriptPath(command.Script); err != nil {
@@ -138,6 +158,9 @@ func (c Command) WorkingDirectory() string {
 func sameLaunch(a, b Command) bool { return sameLaunchWithPolicy(a, b, commandPolicy) }
 
 func sameLaunchWithPolicy(a, b Command, policy CommandPolicy) bool {
+	if a.Kind == "graph" || b.Kind == "graph" {
+		return false
+	}
 	return policy.EqualPath(a.Script, b.Script) && policy.EqualPath(a.WorkingDirectory(), b.WorkingDirectory()) && executionMode(a) == executionMode(b) && timeoutEqual(a.TimeoutSeconds, b.TimeoutSeconds) && a.Window == b.Window && slices.Equal(a.Arguments, b.Arguments)
 }
 
@@ -150,7 +173,7 @@ func commandNames(c Command) []string { return append([]string{c.Name}, c.Aliase
 func validateCatalog(c Catalog) error { return validateCatalogWithPolicy(c, commandPolicy) }
 
 func validateCatalogWithPolicy(c Catalog, policy CommandPolicy) error {
-	if c.Schema != 2 || !wire.ValidID(c.Revision) || len(c.Commands) > 10000 {
+	if c.Schema != 3 || !wire.ValidID(c.Revision) || len(c.Commands) > 10000 {
 		return i18n.Err("err.localcmd.catalog_version_size")
 	}
 	ids := map[string]bool{}

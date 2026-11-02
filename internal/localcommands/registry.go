@@ -41,7 +41,7 @@ func Open(home string, launch Launcher) *Registry { return OpenWithPolicy(home, 
 
 func OpenWithPolicy(home string, launch Launcher, policy CommandPolicy) *Registry {
 	r := &Registry{policy: policy, path: filepath.Join(home, "local-commands.json"), launch: launch,
-		catalog: Catalog{Schema: 2, Revision: model.ID(), Commands: []Command{}},
+		catalog: Catalog{Schema: 3, Revision: model.ID(), Commands: []Command{}},
 		probes:  make(chan struct{}, 4), statuses: map[string]*fileStatus{}}
 	r.loadErr = r.load()
 	return r
@@ -66,8 +66,8 @@ func (r *Registry) load() error {
 	if decoder.Decode(&catalog) != nil || decoder.Decode(new(any)) != io.EOF {
 		return i18n.Err("err.localcmd.invalid_json")
 	}
-	if catalog.Schema == 1 {
-		catalog.Schema = 2
+	if catalog.Schema == 1 || catalog.Schema == 2 {
+		catalog.Schema = 3
 	}
 	// Normalize loaded definitions before uniqueness checks, just like API edits.
 	for i := range catalog.Commands {
@@ -95,6 +95,7 @@ func cloneCatalog(c Catalog) Catalog {
 	c.PendingCleanup = slices.Clone(c.PendingCleanup)
 	c.Commands = slices.Clone(c.Commands)
 	for i := range c.Commands {
+		c.Commands[i].Graph = cloneGraph(c.Commands[i].Graph)
 		if c.Commands[i].TimeoutSeconds != nil {
 			value := *c.Commands[i].TimeoutSeconds
 			c.Commands[i].TimeoutSeconds = &value

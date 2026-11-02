@@ -134,7 +134,7 @@ func (s *nativeSurface) UpdateLocale(locale string) error {
 	return s.dispatch(context.Background(), func() {
 		s.locale = locale
 		if hwnd := s.hwnd.Load(); hwnd != 0 {
-			if title, err := windows.UTF16PtrFromString(i18n.T(locale, "brand.quickinput_window_title")); err == nil {
+			if title, err := windows.UTF16PtrFromString(i18n.T(locale, s.titleKey())); err == nil {
 				uiDLL.NewProc("SetWindowTextW").Call(hwnd, uintptr(unsafe.Pointer(title)))
 			}
 		}

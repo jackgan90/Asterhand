@@ -39,6 +39,7 @@ const (
 	ReplyCompleted Kind = "reply_completed"
 	CommandCall    Kind = "command_call"
 	CommandResult  Kind = "command_result"
+	OpenLog        Kind = "open_log"
 )
 
 // Message contains only input-surface capabilities. Request is a command ID;
@@ -68,6 +69,7 @@ type Message struct {
 	CommandID    string                 `json:"command_request_id,omitempty"`
 	Command      *commandswire.Request  `json:"command,omitempty"`
 	CommandReply *commandswire.Response `json:"command_reply,omitempty"`
+	WindowID     string                 `json:"window_id,omitempty"`
 }
 
 var ErrProtocol = errors.New("invalid input host protocol")
@@ -101,6 +103,8 @@ func (m Message) Validate(fromHost bool) error {
 			allowed = m.Home != "" && m.AppVersion != "" && m.Source != "" && m.Epoch != 0 && validTheme(m.Theme) && (m.Locale == "" || i18n.ValidLocale(m.Locale))
 		case Toggle, Snapshot:
 			allowed = m.Request != 0
+		case OpenLog:
+			allowed = m.Request != 0 && commandswire.ValidID(m.WindowID)
 		case Theme:
 			allowed = m.Request != 0 && validTheme(m.Theme)
 		case Locale:
@@ -116,6 +120,9 @@ func (m Message) Validate(fromHost bool) error {
 		}
 	}
 	if !allowed {
+		return ErrProtocol
+	}
+	if m.Kind != OpenLog && m.WindowID != "" {
 		return ErrProtocol
 	}
 	if m.Kind != CommandCall && m.Command != nil || m.Kind != CommandResult && m.CommandReply != nil ||

@@ -48,7 +48,7 @@ func (s *nativeSurface) configureContent() error {
 	if err = s.core.call(57, uintptr(unsafe.Pointer(pattern)), 0); err != nil {
 		return err
 	}
-	return s.core.putText(5, surfaceURL)
+	return s.core.putText(5, s.pageURL())
 }
 
 func (s *nativeSurface) events() error {
@@ -66,7 +66,7 @@ func (s *nativeSurface) events() error {
 	}
 	if err := add(subscribe[navigationCallback](s.core, 7, func(_ uintptr, args *comRef) uintptr {
 		uri, err := args.text(3)
-		if err != nil || uri != surfaceURL || s.documentReady {
+		if err != nil || uri != s.pageURL() || s.documentReady {
 			_ = args.call(8, 1)
 		}
 		return 0
@@ -121,16 +121,20 @@ func (s *nativeSurface) events() error {
 
 func (s *nativeSurface) receiveMessage(_ uintptr, args *comRef) uintptr {
 	source, err := args.text(3)
-	if err != nil || source != surfaceURL || s.closing {
+	if err != nil || source != s.pageURL() || s.closing {
 		return 0
 	}
 	current, err := s.core.text(4)
-	if err != nil || current != surfaceURL {
+	if err != nil || current != s.pageURL() {
 		return 0
 	}
 	message, err := args.boundedText(4, 128*1024)
 	if err == nil && len(message) <= 128*1024 {
-		s.bridgeMessage(message)
+		if s.log != nil {
+			s.logBridgeMessage(message)
+		} else {
+			s.bridgeMessage(message)
+		}
 		if s.onMessage != nil {
 			s.onMessage(message)
 		}
@@ -169,7 +173,7 @@ func (s *nativeSurface) resourceRequested(_ uintptr, args *comRef) uintptr {
 
 func (s *nativeSurface) postJSON(value any) error {
 	current, err := s.core.text(4)
-	if err != nil || current != surfaceURL {
+	if err != nil || current != s.pageURL() {
 		return i18n.Err("err.quickinput.invalid_origin")
 	}
 	data, err := json.Marshal(value)

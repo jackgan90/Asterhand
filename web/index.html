@@ -252,8 +252,10 @@
           <h3 id="command-form-title" data-i18n="web.commands.form_new">新建命令</h3>
           <div class="field-grid">
             <label class="field"><span data-i18n="web.commands.name_label">命令名</span><input name="name" required maxlength="64" pattern="[A-Za-z][A-Za-z0-9_\-]*" placeholder="backup" title="以英文字母开头，可含数字、- 和 _" data-i18n-title="web.commands.name_title" /></label>
-            <label class="field"><span data-i18n="web.commands.window_label">启动方式</span><select name="window"><option value="background" data-i18n="web.commands.window_background">后台运行</option><option value="terminal" data-i18n="web.commands.window_terminal">打开终端窗口</option></select></label>
+            <label class="field" id="command-window-field"><span data-i18n="web.commands.window_label">启动方式</span><select name="window"><option value="background" data-i18n="web.commands.window_background">后台运行</option><option value="terminal" data-i18n="web.commands.window_terminal">打开终端窗口</option></select></label>
           </div>
+          <label class="field"><span data-i18n="common.command.mode"></span><select name="execution_mode"><option value="unmanaged" data-i18n="common.command.unmanaged"></option><option value="managed" data-i18n="common.command.managed"></option></select><small id="command-log-delete-hint" hidden data-i18n="common.command.delete_log_hint"></small></label>
+          <div id="command-timeout-field" hidden><label class="field"><span data-i18n="common.command.timeout"></span><input name="timeout" type="number" min="0" step="any" data-i18n-placeholder="common.command.no_timeout" /><select name="timeout_unit"><option value="1" data-i18n="common.command.seconds"></option><option value="60" data-i18n="common.command.minutes"></option><option value="3600" data-i18n="common.command.hours"></option></select></label><small data-i18n="common.command.noninteractive"></small></div>
           <label class="field"><span><span data-i18n="web.commands.aliases_label">别名</span> <em data-i18n="web.commands.aliases_note">可选，每行一个</em></span><textarea name="aliases" rows="2" placeholder="备份" data-i18n-placeholder="web.commands.aliases_placeholder"></textarea></label>
           <label class="field"><span><span data-i18n="web.commands.desc_label">说明</span> <em data-i18n="web.commands.optional_note">可选</em></span><input name="description" maxlength="512" /></label>
           <div class="field">
@@ -266,7 +268,7 @@
             <span class="command-argument-title" data-i18n="web.commands.args_label">固定参数</span>
             <div id="command-arguments"></div>
             <button id="command-add-argument" type="button" class="quiet" data-i18n="web.commands.arg_add">＋ 添加参数</button>
-            <small data-i18n="web.commands.args_hint">每项一个参数，无需加引号。需要查看输出时请选择“打开终端窗口”。</small>
+            <small data-i18n="web.commands.args_hint">每项一个参数，无需加引号。托管模式可查看输出和停止脚本。</small>
           </div>
           <div class="actions"><button type="submit" data-i18n="web.commands.save">保存命令</button><span class="spacer"></span><button id="command-delete" type="button" class="danger" hidden data-i18n="web.commands.delete">删除命令</button></div>
         </form>

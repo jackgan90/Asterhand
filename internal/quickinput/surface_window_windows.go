@@ -115,6 +115,9 @@ func (s *nativeSurface) windowSizeChanged(hwnd, kind uintptr) {
 }
 
 func (s *nativeSurface) windowEvent(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
+	if s.log != nil {
+		return s.logWindowEvent(hwnd, message, wParam, lParam)
+	}
 	switch message {
 	case 0x0005: // WM_SIZE
 		s.windowSizeChanged(hwnd, wParam)

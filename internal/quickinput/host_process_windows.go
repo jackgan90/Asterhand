@@ -41,6 +41,10 @@ func launchWindowsHost() (hostProcess, error) {
 }
 
 func launchWindowsHostFrom(directory string) (hostProcess, error) {
+	return launchWindowsHostMode(directory, false)
+}
+
+func launchWindowsHostMode(directory string, logs bool) (hostProcess, error) {
 	if err := checkInteractiveSession(); err != nil {
 		return nil, err
 	}
@@ -72,7 +76,7 @@ func launchWindowsHostFrom(directory string) (hostProcess, error) {
 	p := &windowsHostProcess{input: commandWrite, output: statusRead, exited: make(chan struct{})}
 	p.job, err = newHostJob()
 	if err == nil {
-		err = p.create(guard.Name(), token, commandRead, statusWrite)
+		err = p.createMode(guard.Name(), token, commandRead, statusWrite, logs)
 	}
 	if err != nil {
 		commandWrite.Close()
@@ -102,6 +106,10 @@ func newHostJob() (windows.Handle, error) {
 }
 
 func (p *windowsHostProcess) create(path string, token windows.Token, commands, status *os.File) error {
+	return p.createMode(path, token, commands, status, false)
+}
+
+func (p *windowsHostProcess) createMode(path string, token windows.Token, commands, status *os.File, logs bool) error {
 	handles := []windows.Handle{windows.Handle(commands.Fd()), windows.Handle(status.Fd())}
 	for _, handle := range handles {
 		if err := windows.SetHandleInformation(handle, windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT); err != nil {
@@ -130,6 +138,9 @@ func (p *windowsHostProcess) create(path string, token windows.Token, commands, 
 		return err
 	}
 	args := windows.ComposeCommandLine([]string{path, "--command-handle", strconv.FormatUint(uint64(handles[0]), 10), "--status-handle", strconv.FormatUint(uint64(handles[1]), 10)})
+	if logs {
+		args += " --log-host"
+	}
 	command, _ := windows.UTF16PtrFromString(args)
 	directory, _ := windows.UTF16PtrFromString(filepath.Dir(path))
 	environment := hostEnvironment()

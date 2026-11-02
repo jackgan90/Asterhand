@@ -3,6 +3,7 @@ package quickinput
 import (
 	"embed"
 	"encoding/json"
+	"github.com/jackgan90/Asterhand/web"
 	"path"
 	"strings"
 )
@@ -19,13 +20,13 @@ const inputCSP = "default-src 'none'; script-src 'self'; style-src 'self'; font-
 var inputResourceTypes = resourceTypes()
 
 func resourceTypes() map[string]string {
-	allowed := map[string]string{"index.html": "text/html; charset=utf-8"}
-	for _, name := range []string{"input.css", "chat.css", "commands.css"} {
+	allowed := map[string]string{"index.html": "text/html; charset=utf-8", "command-log.html": "text/html; charset=utf-8"}
+	for _, name := range []string{"input.css", "chat.css", "commands.css", "command-log.css"} {
 		allowed[name] = "text/css; charset=utf-8"
 	}
 	for _, name := range []string{"input.js", "i18n.mjs", "i18n-catalog.mjs", "input-model.mjs", "composer-layout.mjs", "webview2-bridge.mjs", "chat-client.mjs",
 		"chat-model.mjs", "chat-renderer.mjs", "chat-ui.mjs", "chat-outbox.mjs", "chat-status.mjs", "chat-queue.mjs", "chat-connection.mjs",
-		"chat-markup.mjs", "chat-math.mjs", "command-client.mjs", "command-model.mjs", "command-results.mjs", "command-ui.mjs"} {
+		"chat-markup.mjs", "chat-math.mjs", "command-client.mjs", "command-model.mjs", "command-results.mjs", "command-ui.mjs", "command-log.mjs", "command-run.mjs", "log-model.mjs"} {
 		allowed[name] = "application/javascript; charset=utf-8"
 	}
 	// The checked-in vendor manifest is the exact asset inventory, not a directory
@@ -53,10 +54,17 @@ func resourceTypes() map[string]string {
 // inputResource is also used by the native resource callback. Query strings,
 // traversal, foreign origins and writes are rejected by exact-name lookup.
 func inputResource(method, uri string) ([]byte, string, int) {
+	if method == "GET" && uri == surfaceOrigin+"/web/command-run.mjs" {
+		data, err := web.Files.ReadFile("command-run.mjs")
+		if err == nil {
+			return data, "application/javascript; charset=utf-8", 200
+		}
+	}
 	const prefix = surfaceOrigin + "/quick-input/"
 	if method == "GET" && strings.HasPrefix(uri, prefix) {
 		file := strings.TrimPrefix(uri, prefix)
 		if mime, ok := inputResourceTypes[file]; ok {
+
 			if data, err := inputAssets.ReadFile("assets/" + file); err == nil {
 				return data, mime, 200
 			}

@@ -36,6 +36,8 @@
 
 ## 后续验证与功能
 
+- [托管本地命令](features/managed-local-commands/plan.md)：实现、工程检查、独立审计修复复审及用户验收已完成，真实环境专项和平台支持边界见功能验证说明。新增托管/非托管类型、独立 Asterhand 日志窗口、最近执行结果和完整日志、按命令单实例、强制中断及可选超时；退出节点停止托管脚本，非托管行为保持。首个实现为 Windows，注册策略、执行/计时、窗口/传输及文件操作留出窄平台边界，macOS/Linux 接入后独立验收。
+
 - 运行期国际化的本机双语切换已通过用户验收；实体输入法、多屏/DPI 及双机跨节点任务专项按[验证说明](features/internationalization-framework/validation.md)独立确认。
 
 - 收起态自动高度的本机输入体验及默认恰好容纳策略已通过用户验收；实体输入法、鼠标滚动条、多屏/DPI等专项按[验证说明](features/compact-input-auto-height/validation.md)单独验证，后续调整额外一行策略时重新检查相关体验。

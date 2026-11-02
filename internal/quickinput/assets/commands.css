@@ -17,3 +17,7 @@ main:has(#command-panel:not([hidden]):not([data-layout-settled="true"])) { overf
 #command-message { max-width: 42%; font-size: 11px; color: #ff9f9f; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 :root[data-theme=frost] .command-error, :root[data-theme=frost] #command-message { color: #b42332; }
 @media (forced-colors: active) { .command-option[aria-selected=true] { background: Highlight; color: HighlightText; } }
+
+.command-controls {display:flex;gap:5px;flex:none;font-size:11px}
+.command-controls button {padding:4px 6px}
+.command-option {cursor:pointer}

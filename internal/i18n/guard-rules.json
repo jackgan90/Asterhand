@@ -13,6 +13,7 @@
     "internal/launch",
     "internal/llm",
     "internal/localcommands",
+    "internal/platform/userprocess",
     "internal/network",
     "internal/peer",
     "internal/quickinput",
@@ -26,7 +27,8 @@
   ],
   "html_checked_files": [
     "web/index.html",
-    "internal/quickinput/assets/index.html"
+    "internal/quickinput/assets/index.html",
+    "internal/quickinput/assets/command-log.html"
   ],
   "excluded_paths": [
     "internal/prompt/",

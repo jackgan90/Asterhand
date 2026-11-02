@@ -6,13 +6,15 @@ import {domFixture, deferred, tick} from './web-fixture.mjs';
 async function harness(t) {
   const dom = domFixture(), panel = dom.select('#local-commands'), form = dom.select('#command-form');
   const requests = [], selections = [], scope = {active:true};
-  for (const name of ['name','aliases','description','script','directory','window']) form.elements[name] = dom.document.createElement('input');
+  for (const name of ['name','aliases','description','script','directory','window','execution_mode','timeout','timeout_unit']) form.elements[name] = dom.document.createElement('input');
   form.elements.namedItem = name => form.elements[name];
   panel.querySelectorAll = () => [...dom.elements.values()];
+  form.querySelectorAll = () => Object.values(form.elements).filter(value => typeof value !== "function");
   dom.select('#command-arguments').querySelectorAll = () => [];
   globalThis.document = dom.document;
   const controller = localCommands({
     api: async (path, options) => {
+      if (path === '/api/local-commands/state') return {runs:{},managed_available:true};
       if (path === '/api/local-commands') return {revision:'catalog',commands:[]};
       requests.push({path,...options}); const pending = deferred(); selections.push(pending); return pending.promise;
     },

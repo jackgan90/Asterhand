@@ -20,6 +20,12 @@ var imports = regexp.MustCompile(`(?m)^[\t ]*(?:import\s+(?:[^;"']*?\bfrom\s*)?|
 // Closure starts at the actual HTML entry and follows every static import.
 // The project uses native static imports only, with no bundler or bare imports.
 func Closure(t *testing.T, files fs.FS, entry string) []string {
+	return ClosureWithAliases(t, files, entry, nil)
+}
+
+// ClosureWithAliases permits only explicitly supplied embedded resource aliases.
+// Other parent-relative, absolute, network and bare imports remain rejected.
+func ClosureWithAliases(t *testing.T, files fs.FS, entry string, aliases map[string]string) []string {
 	t.Helper()
 	html, err := fs.ReadFile(files, entry)
 	if err != nil {
@@ -38,6 +44,10 @@ func Closure(t *testing.T, files fs.FS, entry string) []string {
 		}
 		for _, match := range imports.FindAllSubmatch(data, -1) {
 			specifier := string(match[1])
+			if target, ok := aliases[specifier]; ok {
+				visit(target)
+				continue
+			}
 			if !strings.HasPrefix(specifier, "./") {
 				t.Fatalf("module %s has nonlocal dependency %q", name, specifier)
 			}

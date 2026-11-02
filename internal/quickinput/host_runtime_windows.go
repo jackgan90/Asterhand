@@ -24,6 +24,7 @@ func RunInputHost(args []string) error {
 	flags.SetOutput(io.Discard)
 	inputHandle := flags.String("command-handle", "", "inherited command pipe")
 	outputHandle := flags.String("status-handle", "", "inherited status pipe")
+	logs := flags.Bool("log-host", false, "independent command log windows")
 	if flags.Parse(args) != nil || flags.NArg() != 0 || *inputHandle == *outputHandle {
 		return hostipc.ErrProtocol
 	}
@@ -47,6 +48,9 @@ func RunInputHost(args []string) error {
 	initial, err := hostipc.Read(input, false)
 	if err != nil || initial.Kind != hostipc.Initialize || initial.AppVersion != config.Version || initial.Source != config.SourceDigest || !filepath.IsAbs(initial.Home) {
 		return hostipc.ErrProtocol
+	}
+	if *logs {
+		return serveLogHost(input, output, initial)
 	}
 	return serveInputHost(input, output, initial)
 }

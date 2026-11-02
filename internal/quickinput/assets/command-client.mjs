@@ -28,7 +28,7 @@ export function commandClient(bridge, post) {
         pending.delete(id);
         const key = action === 'launch' ? 'quickinput.commands_launch_unknown' : 'quickinput.commands_no_response';
         reject(Object.assign(new Error(t(key)), {code: 'unknown', messageKey: key}));
-      }, 6000);
+      }, action === 'logs' ? 22000 : 6000);
       pending.set(id, {resolve, reject, timer});
       post('command', {id, command: request});
     });

@@ -97,7 +97,7 @@ func (r *Registry) List(request wire.Request) wire.Response {
 		return Failure(problem("conflict", "err.localcmd.list_updated"))
 	}
 	end := min(request.Offset+32, len(catalog.Commands))
-	reply := wire.Response{Catalog: catalog.Revision, Entries: []wire.Entry{}}
+	reply := wire.Response{Catalog: catalog.Revision, Entries: []wire.Entry{}, ManagedAvailable: r.ManagedAvailable()}
 	for _, c := range catalog.Commands[request.Offset:end] {
 		status := r.status(c)
 		detail := ""
@@ -105,7 +105,14 @@ func (r *Registry) List(request wire.Request) wire.Response {
 			detail = i18n.T(i18n.Effective(), status.detailKey)
 		}
 		reply.Entries = append(reply.Entries, wire.Entry{ID: c.ID, Revision: c.Revision, Name: c.Name,
-			Aliases: c.Aliases, Description: c.Description, State: status.state, Detail: detail, DetailKey: status.detailKey})
+			Aliases: c.Aliases, Description: c.Description, State: status.state, Detail: detail, DetailKey: status.detailKey, ExecutionMode: c.ExecutionMode})
+		if run := r.CurrentRun(c.ID); run != nil {
+			entry := &reply.Entries[len(reply.Entries)-1]
+			entry.RunID = run.ID
+			entry.Phase = run.Phase
+			entry.Result = run.Result
+			entry.Reason = run.Reason
+		}
 		encoded, _ := json.Marshal(reply)
 		if len(encoded) > 96*1024 {
 			reply.Entries = reply.Entries[:len(reply.Entries)-1]
@@ -143,6 +150,19 @@ func (r *Registry) Launch(ctx context.Context, id, revision string) wire.Respons
 	}
 	if ctx.Err() != nil {
 		return Failure(problem("unavailable", "err.localcmd.precheck_timeout"))
+	}
+	if r.closing {
+		return Failure(problem("unavailable", "err.app.node_stopping"))
+	}
+	if command.ExecutionMode == "managed" {
+		if r.managed == nil {
+			return Failure(problem("unsupported", "err.localcmd.managed_unavailable"))
+		}
+		_, err := r.managed.Start(command)
+		if err != nil {
+			return Failure(err)
+		}
+		return wire.Response{Started: true}
 	}
 	if r.launch == nil {
 		return Failure(problem("unsupported", "err.localcmd.platform_unsupported"))

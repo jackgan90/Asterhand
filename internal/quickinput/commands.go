@@ -45,7 +45,11 @@ func (s *remoteSurface) commandCall(message hostipc.Message) error {
 		return nil
 	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		budget := 3 * time.Second
+		if request.Action == "logs" {
+			budget = 20 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), budget)
 		defer cancel()
 		respond(handler(ctx, request))
 	}()

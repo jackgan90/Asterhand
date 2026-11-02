@@ -49,6 +49,8 @@ type nativeWindowClass struct {
 }
 
 type nativeSurface struct {
+	log *logSurface
+
 	hwnd                          atomic.Uintptr
 	ready                         chan error
 	done                          chan struct{}
@@ -95,7 +97,11 @@ func startNativeSurface(home string, onMessage func(string), onFailure func(erro
 }
 
 func startConfiguredSurface(home string, onMessage func(string), onFailure func(error), relay *editorRelay, source ...*Draft) (*nativeSurface, error) {
-	s := &nativeSurface{home: home, ready: make(chan error, 1), done: make(chan struct{}), commands: make(chan func(), 32), onMessage: onMessage, onFailure: onFailure}
+	return startWindowSurface(home, onMessage, onFailure, relay, nil, source...)
+}
+
+func startWindowSurface(home string, onMessage func(string), onFailure func(error), relay *editorRelay, log *logSurface, source ...*Draft) (*nativeSurface, error) {
+	s := &nativeSurface{log: log, home: home, ready: make(chan error, 1), done: make(chan struct{}), commands: make(chan func(), 32), onMessage: onMessage, onFailure: onFailure}
 	s.remoteDraft = relay
 	s.height = initialSurfaceHeight
 	s.draft, s.theme, s.locale, s.epoch, s.waiters = &Draft{}, "star", i18n.Effective(), model.ID(), map[string]chan struct{}{}
@@ -153,6 +159,9 @@ func (s *nativeSurface) run() {
 		return
 	}
 	profile := filepath.Join(s.home, "quick-input-profile")
+	if s.log != nil {
+		profile = filepath.Join(s.home, "command-log-profiles", s.log.id)
+	}
 	if err := os.MkdirAll(profile, 0700); err != nil {
 		s.ready <- err
 		return
@@ -183,15 +192,22 @@ func (s *nativeSurface) createWindow() error {
 	if ok, _, err := uiDLL.NewProc("RegisterClassExW").Call(uintptr(unsafe.Pointer(&cls))); ok == 0 {
 		return err
 	}
-	title, _ := windows.UTF16PtrFromString(i18n.T(s.locale, "brand.quickinput_window_title"))
-	const appWindow = 0x00040000                             // WS_EX_APPWINDOW; no owner or TOOLWINDOW suppression.
-	const windowStyle = 0x80000000 | 0x00080000 | 0x00020000 // POPUP | SYSMENU | MINIMIZEBOX
+	title, _ := windows.UTF16PtrFromString(i18n.T(s.locale, s.titleKey()))
+	const appWindow = 0x00040000                                 // WS_EX_APPWINDOW; no owner or TOOLWINDOW suppression.
+	windowStyle := uintptr(0x80000000 | 0x00080000 | 0x00020000) // POPUP | SYSMENU | MINIMIZEBOX
+	if s.log != nil {
+		windowStyle = 0x00cf0000
+	}
 	hwnd, _, err := uiDLL.NewProc("CreateWindowExW").Call(appWindow, uintptr(unsafe.Pointer(s.class)), uintptr(unsafe.Pointer(title)), windowStyle, 0, 0, 680, initialSurfaceHeight, 0, 0, instance, 0)
 	if hwnd == 0 {
 		return err
 	}
 	s.hwnd.Store(hwnd)
-	s.positionForShow()
+	if s.log == nil {
+		s.positionForShow()
+	} else {
+		uiDLL.NewProc("SetWindowPos").Call(hwnd, 0, 160, 120, 920, 640, 0)
+	}
 	uiHosts.Store(hwnd, s)
 	s.setWindowIcons()
 	windows.NewLazySystemDLL("wtsapi32.dll").NewProc("WTSRegisterSessionNotification").Call(hwnd, 0)
@@ -409,7 +425,11 @@ func surfaceWindowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uin
 		default:
 		}
 	case 0x0010:
-		s.hide(true)
+		if s.log != nil {
+			s.beginClose()
+		} else {
+			s.hide(true)
+		}
 	case 0x0002:
 		uiDLL.NewProc("PostQuitMessage").Call(0)
 	case 0x0113:

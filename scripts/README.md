@@ -90,3 +90,5 @@ powershell.exe -NoProfile -File .\scripts\test-desktop-launch.ps1 -NodeExecutabl
 `test-installer-system-dependencies.ps1` 通过模拟边界检查 VC++ 缺失、复用、升级和失败处理。真正安装时会使用固定 Microsoft 安装器并验证原生模块加载；普通开发机回归应预先具有清单要求的 VC++ 版本，避免在工程测试中触发系统安装。Tailscale 与 VC++ 官方安装器在发布准备阶段均下载校验，但不进入 Release 附件。
 
 `test-installer-release-selection.ps1` 在 Windows PowerShell 5.1 验证固定入口的 Latest、指定版本、预发布版、自定义标签、本地清单与失败保护，GitHub 边界使用可控响应。`test-release-download.ps1 -InstallerPath <candidate-install.ps1>` 可使用本地候选入口安装真实公开包；省略 InstallerPath 时下载 Release 附件中的入口。该回归总是显式选择 Tag，以复现同一发布物。
+
+Windows 命令日志窗口使用同一 AsterhandInputHost.exe 的独立 --log-host 进程模式；现有宿主构建、图标和 manifest 校验同时覆盖快捷输入与日志窗口，测试入口见[托管命令验证](../docs/development/features/managed-local-commands/validation.md)。

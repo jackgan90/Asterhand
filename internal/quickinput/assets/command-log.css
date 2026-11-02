@@ -1,0 +1,16 @@
+main {display:flex;flex-direction:column;border-radius:0;min-width:360px}
+header {app-region:no-drag;padding:18px 22px 10px;gap:18px;flex:none}
+header > div {min-width:0;display:flex;gap:18px;align-items:center}
+#log-name {overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+button,select {font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 10px}
+button {cursor:pointer} button:hover {border-color:var(--accent)} button:disabled {opacity:.45;cursor:default}
+button:focus-visible,select:focus-visible,#log-output:focus-visible {outline:2px solid var(--accent);outline-offset:2px}
+#log-stop {flex:none} #log-details {display:flex;gap:6px 20px;flex-wrap:wrap;padding:0 22px 10px;font-size:12px;color:var(--muted)}
+#log-warning {margin:0;padding:6px 22px;color:#ffb4a5;font-size:12px}
+.log-tools {display:flex;flex-wrap:wrap;gap:7px;padding:10px 22px;border-block:1px solid var(--line);position:relative}
+.log-tools label {margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px}
+#log-output {flex:1;min-height:0;margin:0;padding:16px 22px;overflow:auto;overscroll-behavior:contain;position:relative;font:13px/1.6 Consolas,"Microsoft YaHei",monospace;white-space:pre-wrap;overflow-wrap:anywhere;tab-size:4}
+#log-output span[data-stream=stderr] {color:#ffb4a5}
+:root[data-theme=frost] #log-output span[data-stream=stderr],:root[data-theme=frost] #log-warning {color:#a52b32}
+footer {padding:8px 22px;flex:none}
+[hidden] {display:none!important}

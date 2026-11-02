@@ -2,6 +2,7 @@
 package wire
 
 import (
+	"encoding/json"
 	"regexp"
 
 	"github.com/jackgan90/Asterhand/internal/i18n"
@@ -18,6 +19,8 @@ type Request struct {
 	Offset   int    `json:"offset,omitempty"`
 	Catalog  string `json:"catalog,omitempty"`
 	Sequence uint64 `json:"sequence,omitempty"`
+	RunID    string `json:"run_id,omitempty"`
+	Cursor   int64  `json:"cursor,omitempty"`
 }
 
 func (r Request) Validate() error {
@@ -29,6 +32,13 @@ func (r Request) Validate() error {
 		valid = ValidID(r.ID) && ValidID(r.Revision) && r.Sequence > 0 && r.Offset == 0 && r.Catalog == ""
 	case "settings":
 		valid = (r.ID == "" || ValidID(r.ID)) && r.Revision == "" && r.Sequence == 0 && r.Offset == 0 && r.Catalog == ""
+	case "status", "logs":
+		valid = ValidID(r.ID) && r.Revision == "" && r.Sequence == 0 && r.Offset == 0 && r.Catalog == ""
+	case "stop", "read_log", "tail_log":
+		valid = ValidID(r.ID) && ValidID(r.RunID) && r.Cursor >= 0 && r.Revision == "" && r.Sequence == 0 && r.Offset == 0 && r.Catalog == ""
+	}
+	if r.Action != "read_log" && r.Cursor != 0 || r.Action != "read_log" && r.Action != "stop" && r.Action != "tail_log" && r.RunID != "" {
+		valid = false
 	}
 	if !valid {
 		return i18n.Err("err.localcmd.invalid_wire_req")
@@ -37,15 +47,20 @@ func (r Request) Validate() error {
 }
 
 type Entry struct {
-	ID          string            `json:"id"`
-	Revision    string            `json:"revision"`
-	Name        string            `json:"name"`
-	Aliases     []string          `json:"aliases"`
-	Description string            `json:"description"`
-	State       string            `json:"state"`
-	Detail      string            `json:"detail,omitempty"`
-	DetailKey   string            `json:"detail_key,omitempty"`
-	DetailArgs  map[string]string `json:"detail_args,omitempty"`
+	ExecutionMode string            `json:"execution_mode"`
+	RunID         string            `json:"run_id,omitempty"`
+	Phase         string            `json:"phase,omitempty"`
+	Result        string            `json:"result,omitempty"`
+	Reason        string            `json:"reason,omitempty"`
+	ID            string            `json:"id"`
+	Revision      string            `json:"revision"`
+	Name          string            `json:"name"`
+	Aliases       []string          `json:"aliases"`
+	Description   string            `json:"description"`
+	State         string            `json:"state"`
+	Detail        string            `json:"detail,omitempty"`
+	DetailKey     string            `json:"detail_key,omitempty"`
+	DetailArgs    map[string]string `json:"detail_args,omitempty"`
 }
 
 type Error struct {
@@ -86,9 +101,12 @@ func FailKey(code, key string, args ...map[string]string) *Error {
 }
 
 type Response struct {
-	Entries []Entry `json:"entries,omitempty"`
-	Catalog string  `json:"catalog,omitempty"`
-	Next    int     `json:"next,omitempty"`
-	Started bool    `json:"started,omitempty"`
-	Error   *Error  `json:"error,omitempty"`
+	Run              json.RawMessage `json:"run,omitempty"`
+	Log              json.RawMessage `json:"log,omitempty"`
+	ManagedAvailable bool            `json:"managed_available,omitempty"`
+	Entries          []Entry         `json:"entries,omitempty"`
+	Catalog          string          `json:"catalog,omitempty"`
+	Next             int             `json:"next,omitempty"`
+	Started          bool            `json:"started,omitempty"`
+	Error            *Error          `json:"error,omitempty"`
 }

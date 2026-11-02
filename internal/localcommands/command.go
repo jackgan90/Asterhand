@@ -16,21 +16,24 @@ import (
 )
 
 type Command struct {
-	ID          string   `json:"id"`
-	Revision    string   `json:"revision"`
-	Name        string   `json:"name"`
-	Aliases     []string `json:"aliases"`
-	Description string   `json:"description"`
-	Script      string   `json:"script"`
-	Arguments   []string `json:"arguments"`
-	Directory   string   `json:"directory"`
-	Window      string   `json:"window"`
+	ExecutionMode  string   `json:"execution_mode"`
+	TimeoutSeconds *int64   `json:"timeout_seconds,omitempty"`
+	ID             string   `json:"id"`
+	Revision       string   `json:"revision"`
+	Name           string   `json:"name"`
+	Aliases        []string `json:"aliases"`
+	Description    string   `json:"description"`
+	Script         string   `json:"script"`
+	Arguments      []string `json:"arguments"`
+	Directory      string   `json:"directory"`
+	Window         string   `json:"window"`
 }
 
 type Catalog struct {
-	Schema   int       `json:"schema_version"`
-	Revision string    `json:"revision"`
-	Commands []Command `json:"commands"`
+	PendingCleanup []string  `json:"pending_cleanup,omitempty"`
+	Schema         int       `json:"schema_version"`
+	Revision       string    `json:"revision"`
+	Commands       []Command `json:"commands"`
 }
 
 type Mutation struct {
@@ -54,7 +57,9 @@ func cleanText(text string, limit int) bool {
 	return len(text) <= limit && utf8.ValidString(text) && !strings.ContainsFunc(text, unicode.IsControl)
 }
 
-func normalize(command Command) (Command, error) {
+func normalize(command Command) (Command, error) { return normalizeWithPolicy(command, commandPolicy) }
+
+func normalizeWithPolicy(command Command, policy CommandPolicy) (Command, error) {
 	command.Name = strings.TrimSpace(command.Name)
 	if !englishName.MatchString(command.Name) {
 		return command, problem("invalid", "err.localcmd.invalid_name")
@@ -74,12 +79,26 @@ func normalize(command Command) (Command, error) {
 		}
 	}
 	command.Aliases = aliases
+	if command.ExecutionMode == "" {
+		command.ExecutionMode = "unmanaged"
+	}
+	if command.ExecutionMode != "managed" && command.ExecutionMode != "unmanaged" {
+		return command, problem("invalid", "err.localcmd.invalid_execution_mode")
+	}
+	if command.ExecutionMode == "managed" {
+		command.Window = "background"
+		if command.TimeoutSeconds != nil && (*command.TimeoutSeconds <= 0 || *command.TimeoutSeconds > 9223372036) {
+			return command, problem("invalid", "err.localcmd.invalid_timeout")
+		}
+	} else {
+		command.TimeoutSeconds = nil
+	}
 	var err error
-	if command.Script, err = ScriptPath(command.Script); err != nil {
+	if command.Script, err = policy.ScriptPath(command.Script); err != nil {
 		return command, err
 	}
 	if command.Directory != "" {
-		if command.Directory, err = localPath(command.Directory); err != nil {
+		if command.Directory, err = policy.LocalPath(command.Directory); err != nil {
 			return command, err
 		}
 	}
@@ -100,38 +119,14 @@ func normalize(command Command) (Command, error) {
 		if !cleanText(arg, 4096) {
 			return command, problem("invalid", "err.localcmd.invalid_arg")
 		}
-		if !strings.EqualFold(filepath.Ext(command.Script), ".ps1") && strings.Contains(arg, `"`) {
+		if !policy.ValidArgument(command.Script, arg) {
 			return command, problem("invalid", "err.localcmd.batch_quote_save")
 		}
 	}
 	return command, nil
 }
 
-// ScriptPath applies the same path/type boundary to manual and picked paths.
-func ScriptPath(value string) (string, error) {
-	value, err := localPath(value)
-	if err != nil {
-		return "", err
-	}
-	switch strings.ToLower(filepath.Ext(value)) {
-	case ".bat", ".cmd", ".ps1":
-		return value, nil
-	default:
-		return "", problem("invalid", "err.localcmd.unsupported_ext")
-	}
-}
-
-func localPath(value string) (string, error) {
-	if !cleanText(value, 2048) || strings.TrimSpace(value) != value || !filepath.IsAbs(value) || strings.HasPrefix(value, `\\`) || strings.HasPrefix(value, "//") {
-		return "", problem("invalid", "err.localcmd.local_abs_path_only")
-	}
-	value = filepath.Clean(value)
-	// A colon outside the volume could select an NTFS stream, not a script file.
-	if strings.Contains(strings.TrimPrefix(value, filepath.VolumeName(value)), ":") {
-		return "", problem("invalid", "err.localcmd.no_ads")
-	}
-	return value, nil
-}
+func ScriptPath(value string) (string, error) { return commandPolicy.ScriptPath(value) }
 
 func (c Command) WorkingDirectory() string {
 	if c.Directory == "" {
@@ -140,8 +135,10 @@ func (c Command) WorkingDirectory() string {
 	return c.Directory
 }
 
-func sameLaunch(a, b Command) bool {
-	return strings.EqualFold(a.Script, b.Script) && strings.EqualFold(a.WorkingDirectory(), b.WorkingDirectory()) && a.Window == b.Window && slices.Equal(a.Arguments, b.Arguments)
+func sameLaunch(a, b Command) bool { return sameLaunchWithPolicy(a, b, commandPolicy) }
+
+func sameLaunchWithPolicy(a, b Command, policy CommandPolicy) bool {
+	return policy.EqualPath(a.Script, b.Script) && policy.EqualPath(a.WorkingDirectory(), b.WorkingDirectory()) && executionMode(a) == executionMode(b) && timeoutEqual(a.TimeoutSeconds, b.TimeoutSeconds) && a.Window == b.Window && slices.Equal(a.Arguments, b.Arguments)
 }
 
 func containsName(names []string, name string) bool {
@@ -150,8 +147,10 @@ func containsName(names []string, name string) bool {
 
 func commandNames(c Command) []string { return append([]string{c.Name}, c.Aliases...) }
 
-func validateCatalog(c Catalog) error {
-	if c.Schema != 1 || !wire.ValidID(c.Revision) || len(c.Commands) > 10000 {
+func validateCatalog(c Catalog) error { return validateCatalogWithPolicy(c, commandPolicy) }
+
+func validateCatalogWithPolicy(c Catalog, policy CommandPolicy) error {
+	if c.Schema != 2 || !wire.ValidID(c.Revision) || len(c.Commands) > 10000 {
 		return i18n.Err("err.localcmd.catalog_version_size")
 	}
 	ids := map[string]bool{}
@@ -160,11 +159,11 @@ func validateCatalog(c Catalog) error {
 			return i18n.Err("err.localcmd.invalid_id")
 		}
 		ids[command.ID] = true
-		if _, err := normalize(command); err != nil {
+		if _, err := normalizeWithPolicy(command, policy); err != nil {
 			return err
 		}
 		for _, other := range c.Commands[:i] {
-			if sameLaunch(command, other) {
+			if sameLaunchWithPolicy(command, other, policy) {
 				return i18n.Err("err.localcmd.duplicate_entry")
 			}
 			for _, name := range commandNames(command) {

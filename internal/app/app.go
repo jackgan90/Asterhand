@@ -37,6 +37,7 @@ type App struct {
 	Input           *quickinput.Controller
 	Chat            *conversation.Service
 	Commands        *localcommands.Registry
+	CommandLogs     quickinput.LogWindowHost
 	pickScript      func(context.Context) (string, error)
 	commandPicking  bool
 	desktopRequests chan struct{}
@@ -101,7 +102,13 @@ func New(c *config.Manager, x executor.Executor) (*App, error) {
 	a.loginToken = string(b)
 	a.Input = quickinput.New(c.Home)
 	a.Commands = localcommands.Open(c.Home, quickinput.StartLocalCommand)
+	if err = a.Commands.ConfigureManaged(localcommands.NewRunManager(c.Home, localcommands.NewPlatformBackend(), nil)); err != nil {
+		log.Printf("%s", i18n.T(i18n.Effective(), "err.localcmd.managed_unavailable"))
+	}
 	a.Input.SetCommandHandler(a.commandCall)
+	a.CommandLogs = quickinput.NewLogWindowHost(c.Home, a.commandCall)
+	preferences := a.Input.Status()
+	a.CommandLogs.Update(preferences.Desired.Theme, preferences.EffectiveLocale)
 	a.Chat = conversation.New(c.Get().NodeID, s, executor.NewConversationRuntime(c))
 	a.Input.SetConversationClient(conversation.Client{Target: a.Chat.Target(), Transport: a.Chat})
 	a.Chat.SetCompletionHandler(a.Input.ReplyCompleted)
@@ -167,10 +174,16 @@ func (a *App) Close() error {
 		a.requests.wg.Wait()
 		a.wg.Wait()
 		chatErr := a.Chat.Close()
+		commandCtx, commandCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		commandErr := a.Commands.Close(commandCtx)
+		commandCancel()
+		if a.CommandLogs != nil {
+			_ = a.CommandLogs.Close()
+		}
 		if a.Input != nil {
 			a.Input.Close()
 		}
-		a.closeErr = errors.Join(chatErr, a.Store.Close())
+		a.closeErr = errors.Join(chatErr, commandErr, a.Store.Close())
 	})
 	return a.closeErr
 }

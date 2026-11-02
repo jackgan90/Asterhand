@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title data-i18n="brand.log_window_title"></title><link rel="stylesheet" href="input.css"><link rel="stylesheet" href="command-log.css"></head>
+<body><main>
+  <header><div><strong id="log-name"></strong><span id="log-state" role="status"></span></div><button id="log-stop" data-i18n="common.command.stop"></button></header>
+  <section id="log-details"></section><p id="log-warning" role="status" hidden></p>
+  <nav class="log-tools">
+    <button id="log-first" data-i18n="common.command.first"></button><button id="log-previous" data-i18n="common.command.previous"></button>
+    <button id="log-next" data-i18n="common.command.next"></button><button id="log-latest" data-i18n="common.command.latest"></button>
+    <label><span data-i18n="common.command.encoding"></span><select id="log-encoding">
+      <option value="utf-8" data-i18n="common.command.utf8"></option><option value="gbk" data-i18n="common.command.gbk"></option>
+      <option value="big5" data-i18n="common.command.big5"></option><option value="utf-16le" data-i18n="common.command.utf16"></option>
+    </select></label>
+  </nav>
+  <div id="log-output" tabindex="0" role="log" aria-live="off"></div>
+  <footer><span id="log-follow"></span><span id="log-range"></span></footer>
+</main><script type="module" src="command-log.mjs"></script></body></html>

@@ -74,6 +74,8 @@ func TestNativeChatDesktopWindow(t *testing.T) {
 		return
 	}
 	s := experienceSurface(t)
+	shortcutCoverWindow(t, s) // Keep the return-focus window on the same monitor as this placement fixture.
+	s.Toggle()
 	waitChatScript(t, s, `document.querySelector('#input') && !document.querySelector('#input').disabled`)
 	state := experienceState(t, s)
 	if !state.visible || state.topmost || state.extended&0x40000 == 0 || state.extended&0x80 != 0 || state.owner != 0 {

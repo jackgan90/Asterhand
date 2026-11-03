@@ -31,14 +31,17 @@ func checkInteractiveSession() error {
 func (s *nativeSurface) Toggle() {
 	_ = s.dispatch(context.Background(), func() {
 		visible, _, _ := uiDLL.NewProc("IsWindowVisible").Call(s.hwnd.Load())
-		if visible != 0 {
+		foreground, _, _ := uiDLL.NewProc("GetForegroundWindow").Call()
+		// Covered and minimized windows are still visible to Windows. Only the
+		// foreground window treats the shortcut as an explicit hide request.
+		if visible != 0 && foreground == s.hwnd.Load() {
 			s.hide(true)
 			return
 		}
 		if s.closing || !s.pageInitialized {
 			return
 		}
-		s.previous, _, _ = uiDLL.NewProc("GetForegroundWindow").Call()
+		s.previous = foreground
 		if minimized, _, _ := uiDLL.NewProc("IsIconic").Call(s.hwnd.Load()); minimized != 0 {
 			uiDLL.NewProc("ShowWindow").Call(s.hwnd.Load(), 4) // Restore without activating before placement.
 		}

@@ -6,6 +6,7 @@
 
 | 能力 | 设计与维护入口 |
 |---|---|
+| 快捷输入按前台状态处理快捷键：前台隐藏，失焦/遮挡或最小化后跟随当前工作屏幕恢复激活（工程验证及本机用户验收通过） | [快捷键焦点修复](features/quick-input-shortcut-focus/plan.md) |
 | 普通消息发送、异常气泡与独立停止回复（工程验证及本机用户验收通过） | [聊天发送与停止回复](features/chat-send-intent/plan.md) |
 | Web 管理本机脚本、快捷输入 `/` 列表与模糊搜索、普通用户独立启动（工程验证及本机用户验收通过） | [本地快捷命令](features/local-quick-commands/plan.md)、[验证说明](features/local-quick-commands/validation.md) |
 | 本地脚本图编辑、静态串并行调度、节点失败停止和并行日志查看（工程验证、独立审计修复复审及本机用户验收通过） | [本地脚本图](features/local-script-graphs/plan.md)、[验证说明](features/local-script-graphs/validation.md) |

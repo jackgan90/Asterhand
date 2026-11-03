@@ -26,11 +26,13 @@ go vet ./...
 ```powershell
 $env:ASTERHAND_CHAT_GATE = '1'
 $env:ASTERHAND_CHAT_EXPERIENCE_CAPTURE = [IO.Path]::GetFullPath('./out/chat-desktop-experience/validation')
-go test ./internal/quickinput -run '^TestNativeChat(DesktopWindow|ConstrainedPlacement|MathAndStatus)$' -count=1 -timeout=150s -v
+go test ./internal/quickinput -run '^TestNativeChat(DesktopWindow|ConstrainedPlacement|MathAndStatus|ShortcutActivation)$' -count=1 -timeout=150s -v
 Remove-Item Env:ASTERHAND_CHAT_GATE, Env:ASTERHAND_CHAT_EXPERIENCE_CAPTURE
 ```
 
 `TestNativeChatDesktopWindow` 检查原生窗口样式、WebView2 拖动能力、位置保留、失焦、最小化/恢复和显式隐藏；`TestNativeChatMathAndStatus` 检查实际公式 DOM、随包字体、CSP、复制原文及 CSS 动画，并输出双主题截图。测试自动使用非提权 UI 令牌；需在允许创建隔离 profile 的正常 Windows 用户环境运行。窗口消息和样式检查不替代实体任务栏点击与鼠标拖动。
+
+`TestNativeChatShortcutActivation` 覆盖另一个真实顶层窗口遮挡聊天后快捷键呼回、前台再次隐藏、最小化恢复、输入焦点与草稿保留，详见[快捷键焦点修复](../quick-input-shortcut-focus/plan.md)。该回归需要测试窗口取得前台权限；Windows 拒绝自动激活时会等待最多 30 秒，可激活隔离的测试聊天窗口后继续。
 
 公式依赖校验使用 `node scripts/verify-frontend-assets.mjs`；源文件见 [KaTeX 清单](../../../../internal/quickinput/assets/vendor/katex/manifest.json)。公式解析/预算、回复状态及既有聊天恢复用例分别位于 `tests/chat-math.test.mjs`、`tests/chat-status.test.mjs`、`tests/chat-ui.test.mjs`；窗口工作区/DPI 逻辑用例位于 `internal/quickinput/window_layout_test.go`。
 
@@ -44,7 +46,7 @@ Remove-Item Env:ASTERHAND_CHAT_GATE, Env:ASTERHAND_CHAT_EXPERIENCE_CAPTURE
 | UX04—07 | 发送含行内、块级、矩阵及长公式的消息，查看历史；在两主题和离线环境重复 | 公式排版、滚动与复制源码正确；无外部下载；不支持内容保留原文 |
 | UX08 | 拖动顶部品牌及空白区；再点击历史/新对话/展开、选择正文和输入 | 只在标题区拖动；展开/折叠保留位置；控件与文本选择不触发拖动 |
 | UX09 | 双显示器不同 DPI 下拖动，隐藏后同屏/跨屏呼出，改变可用工作区 | 使用目标屏记录/默认位置；布局留在可见工作区；小屏仍可访问输入和标题 |
-| UX10—11 | 切到另一应用，再点任务栏；最小化/恢复；Esc/同键/Alt+F4/任务栏关闭 | 未固定模式已移除；失焦保留；任务栏激活同一窗口；显式隐藏移除运行按钮且不停止生成 |
+| UX10—11 | 切到另一应用遮挡聊天或切换到另一屏的窗口，再按快捷键或点任务栏；最小化后按快捷键；聊天在前台时按快捷键或 Esc；Alt+F4/任务栏关闭 | 失焦保留；快捷键在当前活动窗口所在屏幕恢复并激活同一窗口，任务栏按系统规则激活；前台快捷键或 Esc 显式隐藏并移除运行按钮；草稿及生成保留 |
 | UX12 | 标准与管理员节点分别测试；在专用测试会话重建宿主、退出节点及重启 Explorer | UI 保持非提权；草稿按确认边界恢复；无残留窗口图标、重复宿主或进程泄漏 |
 
 任务栏检查针对运行窗口按钮；用户手动固定的启动图标不由应用移除。最小化与显式隐藏是两种状态，最小化不应作为快捷键“隐藏”的替代。

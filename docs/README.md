@@ -22,6 +22,8 @@
 
 ## 其他入口
 
+- [快捷输入失焦后的快捷键呼回](development/features/quick-input-shortcut-focus/plan.md)：前台时按快捷键隐藏，失焦、被遮挡或最小化时跟随当前活动窗口所在屏幕恢复并激活；工程验证及本机用户验收通过。
+
 - [本地脚本图计划](development/features/local-script-graphs/plan.md)、[脚本图设计](executors/script-graphs.md)、[验证说明](development/features/local-script-graphs/validation.md)：快捷命令关联本机静态 DAG、串并行依赖、失败停止、节点日志与图编辑；工程验证、独立审计复审及本机用户验收通过。
 - [脚本图编辑与日志体验](development/features/script-graph-log-experience/plan.md)、[验证说明](development/features/script-graph-log-experience/validation.md)：Start/End 隐藏脚本设置；单入口日志多分屏、独立历史翻页与状态颜色；工程验证及本机用户验收通过。
 

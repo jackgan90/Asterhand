@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/jackgan90/Asterhand/internal/localcommands"
+	"github.com/jackgan90/Asterhand/internal/model"
 )
 
 func TestLocalCommandsAPIAuthenticationCRUDAndNoExecutionRoute(t *testing.T) {
@@ -38,7 +39,7 @@ func TestLocalCommandsAPIAuthenticationCRUDAndNoExecutionRoute(t *testing.T) {
 	if read.Code != 200 || json.Unmarshal(read.Body.Bytes(), &catalog) != nil {
 		t.Fatal(read.Body.String())
 	}
-	input := localcommands.Mutation{Revision: catalog.Revision, Command: localcommands.Command{Name: "sample", Aliases: []string{"示例"}, Script: filepath.Join(t.TempDir(), "missing.ps1")}}
+	input := localcommands.Mutation{Revision: catalog.Revision, Command: localcommands.Command{Name: "sample", Aliases: []string{"示例"}, Graph: apiTestGraph(filepath.Join(t.TempDir(), "missing.ps1"))}}
 	if out := call("POST", "/api/local-commands", input, cookie, ""); out.Code != 403 {
 		t.Fatal("missing CSRF", out.Code)
 	}
@@ -58,5 +59,13 @@ func TestLocalCommandsAPIAuthenticationCRUDAndNoExecutionRoute(t *testing.T) {
 	}
 	if n.app.Chat == nil || n.app.Engine == nil {
 		t.Fatal("feature altered runtime wiring")
+	}
+}
+
+func apiTestGraph(script string) *localcommands.ScriptGraph {
+	start, step, end := model.ID(), model.ID(), model.ID()
+	return &localcommands.ScriptGraph{Parallelism: 1,
+		Nodes: []localcommands.GraphNode{{ID: start, Kind: "start"}, {ID: step, Kind: "script", Name: "step", Script: script, FailurePolicy: localcommands.AbortGraph}, {ID: end, Kind: "end"}},
+		Edges: []localcommands.GraphEdge{{From: start, To: step}, {From: step, To: end}},
 	}
 }

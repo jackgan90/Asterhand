@@ -27,14 +27,18 @@ func (a *App) commandsAPI(w http.ResponseWriter, r *http.Request) {
 		result, err = a.Commands.Snapshot()
 	case r.URL.Path == "/api/local-commands/state" && r.Method == http.MethodGet:
 		result = map[string]any{"runs": a.Commands.RunStates(), "managed_available": a.Commands.ManagedAvailable()}
-	case (r.URL.Path == "/api/local-commands/stop" || r.URL.Path == "/api/local-commands/logs") && r.Method == http.MethodPost:
+	case (r.URL.Path == "/api/local-commands/stop" || r.URL.Path == "/api/local-commands/stop-all" || r.URL.Path == "/api/local-commands/logs") && r.Method == http.MethodPost:
 		var input struct {
-			ID    string `json:"id"`
-			RunID string `json:"run_id,omitempty"`
+			ID     string   `json:"id"`
+			RunID  string   `json:"run_id,omitempty"`
+			RunIDs []string `json:"run_ids,omitempty"`
 		}
 		if err = readCommand(w, r, &input); err == nil {
 			if r.URL.Path == "/api/local-commands/stop" {
 				result, err = a.Commands.StopRun(input.ID, input.RunID)
+			} else if r.URL.Path == "/api/local-commands/stop-all" {
+				err = a.Commands.StopRuns(input.ID, input.RunIDs)
+				result = map[string]bool{"accepted": err == nil}
 			} else {
 				err = a.openCommandLogs(r.Context(), input.ID)
 				result = map[string]bool{"opened": err == nil}
@@ -110,8 +114,20 @@ func (a *App) commandCall(ctx context.Context, request commandswire.Request) com
 	case "launch":
 		return a.Commands.Launch(ctx, request.ID, request.Revision)
 	case "status":
-		data, _ := json.Marshal(a.Commands.CurrentRun(request.ID))
+		run := a.Commands.Run(request.ID, request.RunID)
+		if run == nil && request.RunID != "" {
+			return localcommands.Failure(commandswire.FailKey("conflict", "err.localcmd.run_changed"))
+		}
+		data, _ := json.Marshal(run)
 		return commandswire.Response{Run: data}
+	case "runs":
+		data, _ := json.Marshal(a.Commands.Runs(request.ID))
+		return commandswire.Response{Runs: data}
+	case "stop_all":
+		if err := a.Commands.StopRuns(request.ID, request.RunIDs); err != nil {
+			return localcommands.Failure(err)
+		}
+		return commandswire.Response{}
 	case "stop":
 		run, err := a.Commands.StopRun(request.ID, request.RunID)
 		if err != nil {

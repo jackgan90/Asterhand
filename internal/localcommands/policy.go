@@ -9,7 +9,6 @@ import (
 type CommandPolicy interface {
 	ScriptPath(string) (string, error)
 	LocalPath(string) (string, error)
-	EqualPath(string, string) bool
 	ValidArgument(string, string) bool
 }
 
@@ -17,7 +16,6 @@ var commandPolicy CommandPolicy = windowsCommandPolicy{}
 
 type windowsCommandPolicy struct{}
 
-func (windowsCommandPolicy) EqualPath(a, b string) bool { return strings.EqualFold(a, b) }
 func (windowsCommandPolicy) ValidArgument(script, arg string) bool {
 	return strings.EqualFold(filepath.Ext(script), ".ps1") || !strings.ContainsRune(arg, 34)
 }
@@ -47,11 +45,3 @@ func (windowsCommandPolicy) LocalPath(value string) (string, error) {
 	}
 	return value, nil
 }
-
-func executionMode(c Command) string {
-	if c.ExecutionMode == "" {
-		return "unmanaged"
-	}
-	return c.ExecutionMode
-}
-func timeoutEqual(a, b *int64) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }

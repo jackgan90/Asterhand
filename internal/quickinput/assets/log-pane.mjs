@@ -1,10 +1,12 @@
 import {t, localizeError} from './i18n.mjs';
 import {nodeName, nodeLabel, nodeState} from './log-node.mjs';
 import {logReader} from './log-reader.mjs';
+import {runStoppable, reasonLabel} from './command-run.mjs';
+import {instanceLabel} from './log-graph.mjs';
 
 const actionKeys = {first: 'common.command.first', previous: 'common.command.previous', next: 'common.command.next', latest: 'common.command.latest'};
 
-export function logPane({read, commandID, record, nodeID = '', encoding}) {
+export function logPane({read, commandID, record, nodeID = '', encoding, stop}) {
   const create = (tag, className) => {
     const element = document.createElement(tag);
     if (className) element.className = className;
@@ -13,6 +15,22 @@ export function logPane({read, commandID, record, nodeID = '', encoding}) {
   const root = create('section', 'log-pane'), header = create('div', 'log-pane-heading');
   const title = create('strong'), status = create('span', 'log-node-state');
   header.append(title, status);
+  const stopButton = create('button', 'log-pane-stop'), charset = create('select');
+  let stopping = false, stopError = null;
+  for (const [value, key] of [['utf-8','utf8'], ['gbk','gbk'], ['big5','big5'], ['utf-16le','utf16']]) {
+    const option = create('option'); option.value = value; option.dataset.key = `common.command.${key}`; charset.append(option);
+  }
+  charset.value = encoding;
+  charset.onchange = () => { void reader.setEncoding(charset.value); };
+  stopButton.type = 'button';
+  stopButton.onclick = async () => {
+    if (stopping || !runStoppable(run)) return;
+    stopping = true; stopError = null; render();
+    try { await stop?.(run.run_id); } catch (error) { stopError = error; }
+    finally { stopping = false; render(); }
+  };
+  header.append(stopButton);
+  const details = create('p', 'log-pane-details');
   const output = create('div', 'log-pane-output'), notice = create('p', 'log-pane-notice');
   output.tabIndex = 0;
   output.setAttribute('role', 'log');
@@ -23,16 +41,14 @@ export function logPane({read, commandID, record, nodeID = '', encoding}) {
     const button = create('button');
     button.type = 'button';
     button.onclick = () => { void reader.navigate(action); };
-    if (!nodeID) button.id = `log-${action}`;
     buttons.set(action, button);
     toolbar.append(button);
   }
   const following = create('span'), range = create('span');
   following.className = 'log-pane-follow';
   range.className = 'log-pane-range';
-  toolbar.append(following, range);
-  if (!nodeID) { output.id = 'log-output'; following.id = 'log-follow'; range.id = 'log-range'; }
-  root.append(header, notice, output, toolbar);
+  toolbar.append(charset, following, range);
+  root.append(header, details, notice, output, toolbar);
   let run = record, displayed = 0;
   const reader = logReader({read, commandID, runID: record.run_id, nodeID, encoding, change: render});
   const currentNode = () => nodeID ? run.nodes?.find(node => node.node_id === nodeID) : null;
@@ -41,7 +57,7 @@ export function logPane({read, commandID, record, nodeID = '', encoding}) {
     const fragment = document.createDocumentFragment();
     for (const chunk of chunks) {
       if (!chunk.text) continue;
-      if (!nodeID && run.command?.kind === 'graph') {
+      if (!nodeID) {
         const source = create('span', 'log-source');
         source.dataset.node = chunk.node_id;
         source.textContent = t('common.graph.log_prefix', {name: nodeName(run.nodes?.find(node => node.node_id === chunk.node_id))});
@@ -64,14 +80,26 @@ export function logPane({read, commandID, record, nodeID = '', encoding}) {
       else if (update.reset) output.scrollTop = 0;
     }
     const node = currentNode();
-    title.textContent = nodeID ? nodeName(node) : t(run.command?.kind === 'graph' ? 'common.graph.all' : 'common.command.logs');
+    const state = node || run;
+    const facts = [reasonLabel(state), t('common.command.elapsed', {seconds: (state.elapsed_seconds ?? 0).toFixed(1)})];
+    if (state.exit?.code !== undefined) facts.push(t('common.command.exit_code', {code: state.exit.code}));
+    if (state.log_complete === false) facts.push(t('common.command.log_incomplete'));
+    if (run.storage_error) facts.push(t('common.command.storage_error'));
+    if (run.cleanup_pending) facts.push(t('common.command.cleanup_pending'));
+    details.textContent = facts.filter(Boolean).join(' · ');
+    title.textContent = instanceLabel(run) + ' · ' + (nodeID ? nodeName(node) : t('common.graph.all'));
     title.title = title.textContent;
     status.hidden = !nodeID;
     status.textContent = nodeID ? nodeLabel(node) : '';
     root.dataset.state = nodeID ? nodeState(node) : '';
     output.setAttribute('aria-label', title.textContent);
     const {page, loading, follow, error} = update;
-    notice.textContent = error ? localizeError(error) : loading && !displayed ? t('common.graph.loading_logs') :
+    const stopLabel = t('common.command.stop'), stopDisabled = !stop || stopping || !runStoppable(run);
+    if (stopButton.textContent !== stopLabel) stopButton.textContent = stopLabel;
+    if (stopButton.disabled !== stopDisabled) stopButton.disabled = stopDisabled;
+    charset.setAttribute('aria-label', t('common.command.encoding'));
+    for (const option of charset.children) option.textContent = t(option.dataset.key);
+    notice.textContent = stopError || error ? localizeError(stopError || error) : loading && !displayed ? t('common.graph.loading_logs') :
       !displayed ? t(node?.phase === 'waiting' || node?.phase === 'ready' ? 'common.graph.not_started' : 'common.command.empty_log') : '';
     notice.dataset.error = String(Boolean(error));
     notice.hidden = !notice.textContent;
@@ -101,7 +129,7 @@ export function logPane({read, commandID, record, nodeID = '', encoding}) {
     element: root,
     metadata(value) { run = value; reader.setRecord(currentNode() ?? run); render(); },
     refresh: reader.refresh,
-    setEncoding: reader.setEncoding,
+    setEncoding(value) { charset.value = value; return reader.setEncoding(value); },
     setVisible: reader.setVisible,
     dispose() { reader.dispose(); root.remove(); },
     relocalize() {

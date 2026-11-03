@@ -6,14 +6,20 @@ import (
 	"time"
 )
 
-// Execution owns the complete managed scope, including ordinary descendants.
+// ExecutionLifecycle owns the complete scope, including ordinary descendants.
 // Wait completes only after that scope is empty. Close follows Wait and drain.
-type Execution interface {
-	Stdout() io.ReadCloser
-	Stderr() io.ReadCloser
+type ExecutionLifecycle interface {
 	ForceStop() error
 	Wait(context.Context) (ExitEvidence, error)
 	Close() error
+}
+
+// Execution is the dual-stream output capability used by current scripts.
+// Terminal capabilities can reuse lifecycle control without fake stderr APIs.
+type Execution interface {
+	ExecutionLifecycle
+	Stdout() io.ReadCloser
+	Stderr() io.ReadCloser
 }
 
 type ExitEvidence struct {
@@ -23,7 +29,7 @@ type ExitEvidence struct {
 }
 
 type ExecutionBackend interface {
-	Start(Command, string) (Execution, error)
+	Start(ScriptSpec, string) (Execution, error)
 	// Reconcile returns true only when the old scope is confirmed empty.
 	// Evidence is opaque and must never be interpreted as a bare process ID.
 	Reconcile(string) (bool, error)

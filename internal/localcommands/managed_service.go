@@ -5,8 +5,8 @@ import (
 	"github.com/jackgan90/Asterhand/internal/localcommands/wire"
 )
 
-// ConfigureManaged is called once during application assembly, before serving.
-func (r *Registry) ConfigureManaged(manager *RunManager) error {
+// ConfigureRuns is called once during application assembly, before serving.
+func (r *Registry) ConfigureRuns(manager *RunManager) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.managed = manager
@@ -21,11 +21,9 @@ func (r *Registry) ConfigureManaged(manager *RunManager) error {
 	}
 	valid := map[string]bool{}
 	for _, c := range r.catalog.Commands {
-		if c.ExecutionMode == "managed" {
-			valid[c.ID] = true
-		}
+		valid[c.ID] = true
 	}
-	for id := range manager.runs {
+	for id := range manager.groups {
 		if !valid[id] {
 			if err := manager.Clear(id); err != nil {
 				return err
@@ -37,19 +35,23 @@ func (r *Registry) ConfigureManaged(manager *RunManager) error {
 
 func (r *Registry) RunStates() map[string]wire.Entry {
 	states := map[string]wire.Entry{}
-	if r.managed == nil {
+	catalog, err := r.Snapshot()
+	if err != nil {
 		return states
 	}
-	m := r.managed
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for id, run := range m.runs {
-		run.mu.Lock()
-		record := run.record
-		states[id] = wire.Entry{ID: id, RunID: record.ID, Phase: record.Phase, Result: record.Result, Reason: record.Reason}
-		run.mu.Unlock()
+	for _, command := range catalog.Commands {
+		states[command.ID] = r.managed.Summary(command.ID)
 	}
 	return states
+}
+
+func (r *Registry) Runs(id string) RunList          { return r.managed.Runs(id) }
+func (r *Registry) Run(id, runID string) *RunRecord { return r.managed.Run(id, runID) }
+func (r *Registry) StopRuns(id string, ids []string) error {
+	if r.managed == nil {
+		return problem("unsupported", "err.localcmd.managed_unavailable")
+	}
+	return r.managed.StopAll(id, ids)
 }
 
 func (r *Registry) ManagedAvailable() bool          { return r.managed.Available() }

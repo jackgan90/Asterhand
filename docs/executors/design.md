@@ -1,12 +1,10 @@
 # 执行器与工具设计
 
-[本地脚本图](script-graphs.md)在托管执行后端之上增加静态 DAG 调度。整图运行管理依赖和错误停止，各节点保留独立进程身份、结果及日志来源；不把节点注册成快捷命令，不进入持久任务引擎。注册 schema 3、运行摘要和兼容日志格式的规则由该设计统一规定。
+所有本地命令统一为[脚本图](script-graphs.md)，schema 4 只保存图、并发和超时属性，不迁移旧格式。运行管理器按命令归集多实例，各实例及其节点拥有独立身份、结果和日志；不进入任务引擎或模型会话。
 
-本机快捷输入的预注册脚本采用[独立本地命令启动器](local-commands.md)，与下述持久任务执行契约并列；不进入模型工具面、远端协议或任务恢复流程。
+[执行与恢复](managed-local-commands.md)定义按接纳顺序选择最近实例、当前轮全部记录延迟到下一轮清理、逐实例/全部停止、容量和恢复。
 
-[托管本地命令](managed-local-commands.md)在同一功能域增加节点持有的运行控制器、最近执行存储和独立日志 UI 宿主。非托管继续使用当前启动器；托管以命令 ID 互斥，统一处理中断、超时和节点退出，停止与读取绑定 run ID，退出方式/可选退出码与停止原因分开记录。stdout/stderr 完整写入最近日志，不复用下述任务执行器的输出截断预算和全局任务槽。实施与验证见[功能计划](../development/features/managed-local-commands/plan.md)，取舍见[托管边界 ADR](adr/003-managed-local-command-lifecycle.md)。
-
-托管公共核心通过 CommandPolicy、ExecutionBackend 和 ExecutionClock 等[窄平台接口](managed-local-commands.md#平台边界与最小接口)注入系统能力；Windows shell、Job、令牌、句柄和路径等价规则留在首个 adapter。平台能力/当前环境检查决定是否可用，其他平台未满足受管清理等要求时明确 unsupported。公共核心不依赖快捷输入包或具体 WebView，后续平台沿用相同状态、日志、停止与恢复协议。
+公共核心通过 CommandPolicy、ExecutionBackend 和 ExecutionClock 等[窄平台接口](managed-local-commands.md#平台边界与最小接口)注入系统能力；Windows shell、Job、令牌、句柄和路径等价规则留在首个 adapter。平台能力/当前环境检查决定是否可用，其他平台未满足受管清理等要求时明确 unsupported。公共核心不依赖快捷输入包或具体 WebView，后续平台沿用相同状态、日志、停止与恢复协议。
 
 范围：OpenClaw adapter、公共配置和目录保护；未接入具体 coding harness。验证方法见 [公共流程契约](../development/features/provider-neutral-flows/validation.md)。
 

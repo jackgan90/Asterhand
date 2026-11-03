@@ -2,22 +2,21 @@ package localcommands
 
 import (
 	"context"
-	"errors"
-	"io"
-	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackgan90/Asterhand/internal/localcommands/wire"
-	"github.com/jackgan90/Asterhand/internal/model"
 )
 
 type managedRun struct {
+	group       *runGroup
+	logBytes    int64
+	finalizing  bool
 	graph       *graphRun
 	mu          sync.Mutex
 	record      RunRecord
-	execution   Execution
 	file        *logFile
 	busy        bool
 	started     time.Duration
@@ -28,6 +27,8 @@ type managedRun struct {
 // RunManager owns accepted work independently of request and UI lifetimes.
 // Lock order is registry -> manager -> run; workers only acquire the run lock.
 type RunManager struct {
+	groups     map[string]*runGroup
+	recovering atomic.Int32
 	graphSlots chan struct{}
 	mu         sync.Mutex
 	store      runStore
@@ -39,7 +40,7 @@ type RunManager struct {
 }
 
 func NewRunManager(home string, backend ExecutionBackend, clock ExecutionClock) *RunManager {
-	m := &RunManager{store: runStore{filepath.Join(home, "command-runs")}, backend: backend, clock: clock, runs: map[string]*managedRun{}, graphSlots: make(chan struct{}, GraphExecutionSlots)}
+	m := &RunManager{store: runStore{filepath.Join(home, "command-runs")}, backend: backend, clock: clock, runs: map[string]*managedRun{}, groups: map[string]*runGroup{}, graphSlots: make(chan struct{}, GraphExecutionSlots)}
 	if clock == nil {
 		m.clock = platformClock{}
 	}
@@ -49,72 +50,6 @@ func NewRunManager(home string, backend ExecutionBackend, clock ExecutionClock) 
 
 func (m *RunManager) Available() bool {
 	return m != nil && m.backend != nil && m.backend.Available() && m.loadErr == nil
-}
-
-func (m *RunManager) recover() error {
-	entries, err := os.ReadDir(m.store.root)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		id := entry.Name()
-		if !entry.IsDir() || !wire.ValidID(id) {
-			continue
-		}
-		if _, err := os.Stat(filepath.Join(m.store.directory(id), "deleting")); err == nil {
-			if err = m.store.clear(id); err != nil {
-				return err
-			}
-			continue
-		}
-		record, err := m.store.load(id)
-		if err != nil {
-			return err
-		}
-		if record == nil {
-			continue
-		}
-		run := &managedRun{record: *record, done: make(chan struct{})}
-		m.runs[id] = run
-		if record.Phase != "finished" {
-			run.busy = true
-			run.record.CleanupPending = true
-			run.record.LogComplete = false
-			if run.record.Reason == "" {
-				run.record.Reason = "unexpected_shutdown"
-			}
-			go m.reconcile(run)
-		} else {
-			close(run.done)
-		}
-		if err = m.store.removeOtherLogs(id, record.ID); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (m *RunManager) reconcile(run *managedRun) {
-	if run.record.Command.Kind == "graph" {
-		m.reconcileGraph(run)
-		return
-	}
-	for {
-		if m.backend != nil {
-			empty, err := m.backend.Reconcile(run.record.ID)
-			if err == nil && empty {
-				run.mu.Lock()
-				run.record.CleanupPending = false
-				m.finishLocked(run, ExitEvidence{Kind: "unknown"})
-				run.mu.Unlock()
-				return
-			}
-		}
-		time.Sleep(time.Second)
-	}
 }
 
 func cloneRecord(record RunRecord) RunRecord {
@@ -134,20 +69,27 @@ func cloneRecord(record RunRecord) RunRecord {
 // snapshotLocked derives live duration from the same clock as the timeout.
 func (m *RunManager) snapshotLocked(run *managedRun) RunRecord {
 	record := cloneRecord(publicRun(run.record))
-	if (run.execution != nil || run.graph != nil) && (record.Phase == "running" || record.Phase == "stopping") {
+	if run.graph != nil && (record.Phase == "running" || record.Phase == "stopping") {
 		record.Elapsed = max(0, (m.clock.Now() - run.started).Seconds())
 	}
 	return publicRun(record)
 }
 
-func (m *RunManager) Current(id string) *RunRecord {
+func (m *RunManager) Current(id string) *RunRecord { return m.Run(id, "") }
+
+func (m *RunManager) Run(id, runID string) *RunRecord {
 	if m == nil {
 		return nil
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	run := m.runs[id]
-	if run == nil {
+	if runID == "" {
+		if group := m.groups[id]; group != nil {
+			runID = group.index.Latest
+		}
+	}
+	run := m.runs[runID]
+	if run == nil || run.record.Command.ID != id {
 		return nil
 	}
 	run.mu.Lock()
@@ -162,8 +104,8 @@ func (m *RunManager) Busy(id string) bool {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for key, run := range m.runs {
-		if id != "" && id != key {
+	for _, run := range m.runs {
+		if id != "" && id != run.record.Command.ID {
 			continue
 		}
 		run.mu.Lock()
@@ -174,170 +116,6 @@ func (m *RunManager) Busy(id string) bool {
 		}
 	}
 	return false
-}
-
-func (m *RunManager) Start(command Command) (*RunRecord, error) {
-	if command.Kind == "graph" {
-		graph, err := normalizeGraph(command.Graph, commandPolicy)
-		if err != nil {
-			return nil, err
-		}
-		if command.ExecutionMode != "managed" {
-			return nil, graphProblem("err.graph.managed", "")
-		}
-		command.Graph = graph
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return nil, problem("unavailable", "err.app.node_stopping")
-	}
-	if !m.Available() {
-		return nil, problem("unsupported", "err.localcmd.managed_unavailable")
-	}
-	if old := m.runs[command.ID]; old != nil {
-		old.mu.Lock()
-		busy := old.busy
-		old.mu.Unlock()
-		if busy {
-			return nil, problem("busy", "err.localcmd.running")
-		}
-	}
-	run := &managedRun{record: RunRecord{ID: model.ID(), Command: command, Phase: "starting", Started: time.Now().UTC(), LogComplete: true}, busy: true, done: make(chan struct{})}
-	if command.Kind == "graph" {
-		initializeGraph(run)
-	}
-	f, err := m.store.prepare(run.record)
-	if err != nil {
-		return nil, err
-	}
-	run.file = f
-	m.runs[command.ID] = run
-	run.mu.Lock()
-	defer run.mu.Unlock()
-	// Published before platform creation, including its recovery identity.
-	if err = m.store.removeOtherLogs(command.ID, run.record.ID); err != nil {
-		run.record.StorageError = true
-		run.record.LogComplete = false
-		run.record.Reason = "log_io_error"
-		m.finishLocked(run, ExitEvidence{Kind: "unknown"})
-	} else {
-		if run.graph != nil {
-			go m.executeGraph(run)
-		} else {
-			go m.execute(run)
-		}
-	}
-	record := m.snapshotLocked(run)
-	return &record, nil
-}
-
-func (m *RunManager) execute(run *managedRun) {
-	run.mu.Lock()
-	if run.record.Reason != "" {
-		m.finishLocked(run, ExitEvidence{Kind: "unknown"})
-		run.mu.Unlock()
-		return
-	}
-	execution, err := m.backend.Start(run.record.Command, run.record.ID)
-	if err != nil && execution == nil {
-		run.record.Reason = "start_failed"
-		m.finishLocked(run, ExitEvidence{Kind: "unknown"})
-		run.mu.Unlock()
-		return
-	}
-	run.execution = execution
-	run.started = m.clock.Now()
-	run.record.Started = time.Now().UTC()
-	run.record.Phase = "running"
-	if err != nil {
-		m.stopLocked(run, "start_failed")
-	}
-	if err = m.store.save(run.record); err != nil {
-		m.stopLocked(run, "log_io_error")
-	}
-	run.mu.Unlock()
-	var readers sync.WaitGroup
-	readers.Add(2)
-	go func() { defer readers.Done(); m.capture(run, execution.Stdout(), 0) }()
-	go func() { defer readers.Done(); m.capture(run, execution.Stderr(), 1) }()
-	ctx, cancel := context.WithCancel(context.Background())
-	go m.watch(run, ctx)
-	var evidence ExitEvidence
-	for {
-		evidence, err = execution.Wait(context.Background())
-		if err == nil {
-			break
-		}
-		run.mu.Lock()
-		run.record.CleanupPending = true
-		m.stopLocked(run, "execution_error")
-		run.mu.Unlock()
-		time.Sleep(100 * time.Millisecond)
-	}
-	run.mu.Lock()
-	// Natural completion is confirmed before the independent log-drain budget.
-	run.record.Phase = "draining"
-	run.record.Elapsed = (m.clock.Now() - run.started).Seconds()
-	run.mu.Unlock()
-	cancel()
-	drained := make(chan struct{})
-	go func() { readers.Wait(); close(drained) }()
-	select {
-	case <-drained:
-	case <-time.After(5 * time.Second):
-		execution.Stdout().Close()
-		execution.Stderr().Close()
-		<-drained
-		run.mu.Lock()
-		run.record.LogComplete = false
-		if run.record.Reason == "" {
-			run.record.Reason = "log_drain_timeout"
-		}
-		run.mu.Unlock()
-	}
-	_ = execution.Close()
-	run.mu.Lock()
-	run.execution = nil
-	run.record.CleanupPending = false
-	m.finishLocked(run, evidence)
-	run.mu.Unlock()
-}
-
-func (m *RunManager) capture(run *managedRun, reader io.Reader, stream byte) {
-	buffer := make([]byte, logBlockSize)
-	for {
-		n, err := reader.Read(buffer)
-		run.mu.Lock()
-		if n > 0 && run.record.LogComplete {
-			if writeErr := appendLog(run.file, stream, buffer[:n]); writeErr != nil {
-				run.record.LogComplete = false
-				run.record.StorageError = true
-				m.stopLocked(run, "log_io_error")
-			}
-		}
-		if err != nil && !errors.Is(err, io.EOF) {
-			run.record.LogComplete = false
-			m.stopLocked(run, "capture_error")
-		}
-		run.mu.Unlock()
-		if err != nil {
-			return
-		}
-	}
-}
-
-func (m *RunManager) watch(run *managedRun, ctx context.Context) {
-	for range m.clock.Wake(ctx) {
-		run.mu.Lock()
-		if run.record.Phase == "running" && run.record.Command.TimeoutSeconds != nil && m.clock.Now()-run.started >= time.Duration(*run.record.Command.TimeoutSeconds)*time.Second {
-			m.stopLocked(run, "timeout")
-		}
-		if run.record.Phase == "stopping" && m.clock.Now()-run.stopStarted >= 5*time.Second {
-			run.record.CleanupPending = true
-		}
-		run.mu.Unlock()
-	}
 }
 
 func (m *RunManager) stopLocked(run *managedRun, reason string) error {
@@ -358,12 +136,6 @@ func (m *RunManager) stopLocked(run *managedRun, reason string) error {
 	if run.graph != nil {
 		return m.stopGraphLocked(run)
 	}
-	if run.execution != nil {
-		if err := run.execution.ForceStop(); err != nil {
-			run.record.CleanupPending = true
-			return err
-		}
-	}
 	return nil
 }
 
@@ -373,9 +145,9 @@ func (m *RunManager) Stop(id, runID, reason string) (*RunRecord, error) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	run := m.runs[id]
-	if run == nil {
-		return nil, problem("not_found", "err.localcmd.no_run")
+	run := m.runs[runID]
+	if run == nil || run.record.Command.ID != id {
+		return nil, problem("conflict", "err.localcmd.run_changed")
 	}
 	run.mu.Lock()
 	defer run.mu.Unlock()
@@ -388,9 +160,10 @@ func (m *RunManager) Stop(id, runID, reason string) (*RunRecord, error) {
 }
 
 func (m *RunManager) finishLocked(run *managedRun, evidence ExitEvidence) {
-	if !run.busy {
+	if !run.busy || run.finalizing {
 		return
 	}
+	run.finalizing = true
 	if run.graph != nil {
 		for i := range run.record.Nodes {
 			if run.record.Nodes[i].Phase == "waiting" || run.record.Nodes[i].Phase == "ready" {
@@ -415,19 +188,40 @@ func (m *RunManager) finishLocked(run *managedRun, evidence ExitEvidence) {
 	ended := time.Now().UTC()
 	run.record.Ended = &ended
 	run.record.Result, run.record.Reason = executionResult(run.record.Reason, evidence, run.record.LogComplete)
-	if run.record.Command.Kind == "graph" && evidence.Kind == "graph_succeeded" && run.record.Reason == "exit_error" && run.record.LogComplete {
+	if evidence.Kind == "graph_succeeded" && run.record.Reason == "exit_error" && run.record.LogComplete {
 		run.record.Result, run.record.Reason = "succeeded", ""
 	}
+	if !m.persistFinalLocked(run) {
+		go m.retryFinal(run)
+	}
+}
+
+func (m *RunManager) persistFinalLocked(run *managedRun) bool {
+	run.record.Phase = "finished"
+	run.record.CleanupPending = false
 	if err := m.store.save(run.record); err != nil {
-		run.record.StorageError = true
-		run.record.LogComplete = false
+		run.record.StorageError, run.record.LogComplete = true, false
+		run.record.Phase, run.record.CleanupPending = "draining", true
 		if run.record.Reason == "" {
-			run.record.Reason = "log_io_error"
-			run.record.Result = "failed"
+			run.record.Reason, run.record.Result = "log_io_error", "failed"
 		}
+		return false
 	}
 	run.busy = false
 	close(run.done)
+	return true
+}
+
+func (m *RunManager) retryFinal(run *managedRun) {
+	for {
+		time.Sleep(250 * time.Millisecond)
+		run.mu.Lock()
+		done := m.persistFinalLocked(run)
+		run.mu.Unlock()
+		if done {
+			return
+		}
+	}
 }
 
 func (m *RunManager) Read(id, runID string, cursor int64) (LogPage, error) {
@@ -446,12 +240,13 @@ func (m *RunManager) readLog(id, runID, nodeID string, cursor int64, before bool
 		return LogPage{}, problem("invalid", "err.localcmd.invalid_log_cursor")
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	run := m.runs[id]
-	if run == nil {
-		return LogPage{}, problem("not_found", "err.localcmd.no_run")
+	run := m.runs[runID]
+	if run == nil || run.record.Command.ID != id {
+		m.mu.Unlock()
+		return LogPage{}, problem("conflict", "err.localcmd.run_changed")
 	}
 	run.mu.Lock()
+	m.mu.Unlock()
 	defer run.mu.Unlock()
 	if run.record.ID != runID {
 		return LogPage{}, problem("conflict", "err.localcmd.run_changed")
@@ -475,20 +270,19 @@ func (m *RunManager) Clear(id string) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if run := m.runs[id]; run != nil {
-		run.mu.Lock()
-		busy := run.busy
-		run.mu.Unlock()
-		if busy {
-			return problem("busy", "err.localcmd.running")
+	active, _ := m.groupBusyLocked(id)
+	if active > 0 {
+		return problem("busy", "err.localcmd.running")
+	}
+	group := m.groups[id]
+	// Hide records even on partial deletion; registry retains the cleanup intent.
+	if group != nil {
+		for _, runID := range group.index.IDs {
+			delete(m.runs, runID)
 		}
 	}
-	if err := m.store.clear(id); err != nil {
-		delete(m.runs, id)
-		return err
-	}
-	delete(m.runs, id)
-	return nil
+	delete(m.groups, id)
+	return m.store.clear(id)
 }
 
 func (m *RunManager) Close(ctx context.Context) error {

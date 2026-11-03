@@ -1,6 +1,6 @@
 # 本地快捷命令设计
 
-本页的启动/输出/并发描述限定为非托管单脚本。注册支持 execution_mode=managed 和可选 timeout_seconds：托管由节点跟踪执行、保存最近日志与结果，并提供独立日志窗口和停止能力；完整契约见[托管命令设计](managed-local-commands.md)。注册文件当前为 schema 3，schema 1/2 读取后迁移为单脚本并保留原执行方式；schema 1 缺省为非托管。新增 kind=graph 的[脚本图](script-graphs.md)必须托管，下一次保存写入新版本。
+所有命令统一为脚本图，注册 schema 4；不再保存执行类型、命令类型或终端模式。新增 allow_concurrent（默认 false）及可选整图 timeout_seconds。旧 schema 不迁移、不自动删除，返回格式不支持；早期测试数据按[验证说明](../development/features/unified-command-runs/validation.md)清理。运行和日志见[执行设计](managed-local-commands.md)。
 
 本功能是用户主动操作的本机启动入口，与任务执行器和模型会话分离。注册数据属于当前节点，保存在节点数据目录，升级保留；不跨节点同步。Web 只登记现有本机文件的绝对路径，不上传或复制脚本。文件内容修改后，下次启动读取当前文件。
 
@@ -8,7 +8,7 @@
 
 一个稳定命令 ID 对应主英文名、最多 16 个别名、描述和启动配置。英文名使用字母开头的 ASCII 字母、数字、连字符或下划线；别名允许 Unicode 和内部空格，禁止控制字符和开头 `/`。名称去掉首尾空白，跨命令按大小写不敏感比较，避免搜索完全匹配歧义。
 
-启动配置包含规范化绝对脚本路径、保留顺序/大小写/空参数的字符串参数列表、工作目录和后台/终端模式。工作目录空值解析为脚本目录。按这些字段去重，不比较文件内容，不识别硬链接。相同配置的新注册把英文名及别名合并到已有命令，保留原主名和描述；编辑导致与已有配置相同也合并，并明确返回合并目标。编辑启动配置影响所有名称；删除一个别名只修改名称集合，删除命令不删除磁盘文件。
+命令配置包含名称、别名、描述、并发开关、整图超时与脚本图；脚本路径、参数、工作目录和单步超时只属于脚本节点。默认图为开始→脚本→结束，打开即选中脚本节点。各命令身份独立，不按脚本或图配置自动合并，主名和别名仍全库唯一。删除命令不删除脚本文件。
 
 注册库原子保存，读取和写入均校验格式。修改和删除携带库修订；并发旧页面拒绝覆盖，保留表单供用户刷新核对。命令自身修订在变化时更新；执行请求携带 ID 和命令修订，旧列表拒绝执行新配置。配置损坏只停用命令功能，保留原文件，不影响聊天和节点服务。
 
@@ -20,10 +20,9 @@
 - Windows PowerShell 5.1 使用无 profile 的新进程，进程级 `ExecutionPolicy Bypass`，系统/用户设置不变，组策略优先。参数按数据传递，复杂管道与表达式写入脚本。
 - 参数编辑器每行对应一个参数，空项保留；含空格时不自行加引号。PowerShell 支持字面双引号。批处理按 `cmd.exe` 参数规则加引号，脚本使用 `%~1` 等读取原值；首版拒绝参数中的字面双引号，避免与元字符混用造成二次解析歧义。需要这类值时使用 `.ps1`。批处理自行展开 `%*`、开启延迟展开或调用其他程序时，应由脚本适配目标程序的参数语法；应用不改写脚本。Windows shell 和原生程序参数解析规则不同，依据见 [cmd 文档](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/cmd)与 [Go 进程参数说明](https://pkg.go.dev/os/exec#Command)。
 - 当前 Windows 用户的非提权令牌，继承该用户的正常系统环境，不继承节点的私有凭据/运行时环境。不自动提权。
-- 默认后台无控制台、无交互输入；终端模式打开独立控制台。脚本结果和输出归脚本/终端负责，不托管任务、不等待结束、不收集 stdout 管道。
-- 每次独立确认均可启动，不设置脚本执行并发限制。相同请求重复投递不会再次启动；未知回执不自动重试。独立新确认使用新请求身份。
-- 不加入任务或 UI 宿主的 kill-on-close Job；隐藏、关闭输入宿主或退出节点不终止已经启动的脚本。进程/线程句柄启动后释放。
-- 进程创建成功仅作为内部启动回执，界面保持安静并清除该命令旧错误，不代表脚本执行完成。进程创建失败直接返回；脚本内部错误（包括启动后发生的策略/依赖错误）由脚本输出或终端查看。
+- 全部由节点持有受管执行对象，非交互、关闭 stdin、无额外终端窗口；Windows 参数编排不再使用 /k 或 -NoExit。
+- 每次显式确认可尝试接纳，是否允许同命令重叠由 allow_concurrent 决定；相同请求重复投递不再启动，未知回执不自动重试。
+- 进程执行、节点退出、中断、超时、恢复及当前轮日志由[执行设计](managed-local-commands.md)定义。
 
 ## 入口与异常
 
@@ -50,9 +49,9 @@ Web CRUD 复用本机登录、Host、Origin、CSRF。没有远端/模型执行�
 ## 模块职责与维护
 
 - [注册与服务](../../internal/localcommands/registry.go)：原子保存、合并/冲突、修订，以及[后台状态检查和启动前复核](../../internal/localcommands/service.go)。状态检查最多四个工作线程，先入先出处理，避免前几项反复刷新使末尾状态饥饿。
-- [Windows 启动适配](../../internal/localcommands/launch_windows.go)：固定系统 shell、普通用户环境、独立进程和句柄释放；[快捷输入适配](../../internal/quickinput/local_commands_windows.go)复用现有非提权令牌规则。
+- [Windows 脚本启动参数](../../internal/localcommands/launch_windows.go)和[执行后端](../../internal/localcommands/execution_windows.go)负责固定系统 shell、普通用户环境、Job 进程控制和句柄释放；快捷输入只通过命令 IPC 请求节点主进程启动。
 - [管理 API](../../internal/app/commands_api.go)及 [Web 管理页](../../web/local-commands.mjs)：会话保护、库修订冲突和编辑表单。
-- [输入协议](../../internal/localcommands/wire/protocol.go)及[父进程处理](../../internal/quickinput/commands.go)：仅 list/launch/settings 三种能力，当前宿主会话内单调启动序号去重；宿主恢复不重放请求。
+- [输入协议](../../internal/localcommands/wire/protocol.go)及[父进程处理](../../internal/quickinput/commands.go)：列表、启动、配置、运行摘要、逐实例状态、日志、停止及窗口管理的封闭能力，当前宿主会话内单调启动序号去重；宿主恢复不重放请求。
 - [命令列表](../../internal/quickinput/assets/command-ui.mjs)、[搜索模型](../../internal/quickinput/assets/command-model.mjs)和[请求客户端](../../internal/quickinput/assets/command-client.mjs)：搜索、高亮、反馈、1.5 秒可见刷新与未知回执提示。文件状态缓存约两秒，启动前再次检查。
 
-独立启动的取舍见 [ADR](adr/002-local-command-launch-boundary.md)。复现步骤和实体桌面边界见[验证说明](../development/features/local-quick-commands/validation.md)。
+当前统一决定见 [ADR](adr/006-unified-command-runs.md)。复现步骤和实体桌面边界见[验证说明](../development/features/local-quick-commands/validation.md)。

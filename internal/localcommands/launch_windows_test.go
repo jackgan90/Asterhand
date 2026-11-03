@@ -4,9 +4,11 @@ package localcommands
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"github.com/jackgan90/Asterhand/internal/model"
+	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -42,8 +44,8 @@ func TestWindowsPowerShellActualArgumentsAndDirectory(t *testing.T) {
 	}
 	t.Setenv("ASTERHAND_COMMAND_PRIVATE_TEST", "must-not-inherit")
 	values := []string{"", "中文 space", `a" b`, "%PATH%", "a&b|c^!", `C:\tail\`, "'single'"}
-	c := Command{Script: script, Arguments: append([]string{"-Output", output}, values...), Window: "background"}
-	if err := StartWindows(c, 0); err != nil {
+	c := ScriptSpec{Script: script, Arguments: append([]string{"-Output", output}, values...)}
+	if err := startTestScript(t, c); err != nil {
 		t.Fatal(err)
 	}
 	var got struct {
@@ -75,8 +77,8 @@ func TestWindowsBatchActualArguments(t *testing.T) {
 				t.Fatal(err)
 			}
 			values := []string{"", "中文 space", "%PATH%", "a&b|c^!", `C:\path`, "'single'"}
-			c := Command{Script: script, Arguments: append([]string{output}, values...), Window: "background"}
-			if err := StartWindows(c, 0); err != nil {
+			c := ScriptSpec{Script: script, Arguments: append([]string{output}, values...)}
+			if err := startTestScript(t, c); err != nil {
 				t.Fatal(err)
 			}
 			var got []string
@@ -111,8 +113,8 @@ func TestWindowsBatchParameterVariables(t *testing.T) {
 	if err := os.WriteFile(script, []byte(body), 0600); err != nil {
 		t.Fatal(err)
 	}
-	c := Command{Script: script, Arguments: []string{output, `hello space & percent %PATH% ! C:\tail\`}, Window: "background"}
-	if err := StartWindows(c, 0); err != nil {
+	c := ScriptSpec{Script: script, Arguments: []string{output, `hello space & percent %PATH% ! C:\tail\`}}
+	if err := startTestScript(t, c); err != nil {
 		t.Fatal(err)
 	}
 	if got := string(readLaunchFile(t, output)); got != c.Arguments[1] {
@@ -120,57 +122,25 @@ func TestWindowsBatchParameterVariables(t *testing.T) {
 	}
 }
 
-func TestWindowsTerminalAndBatchQuoteBoundary(t *testing.T) {
-	if err := StartWindows(Command{Script: `C:\test.cmd`, Arguments: []string{`a"b`}}, 0); err == nil {
-		t.Fatal("ambiguous batch quote reached process creation")
-	}
-	if os.Getenv("ASTERHAND_COMMAND_TERMINAL_TEST") != "1" {
-		t.Skip("explicit terminal test required")
-	}
-	for _, ext := range []string{".cmd", ".ps1"} {
-		dir := t.TempDir()
-		script, output := filepath.Join(dir, "terminal"+ext), filepath.Join(dir, "result.txt")
-		body := `echo ready > "` + output + "\"\r\nexit\r\n"
-		if ext == ".ps1" {
-			body = `[IO.File]::WriteAllText('` + strings.ReplaceAll(output, "'", "''") + `','ready'); exit`
-		}
-		if err := os.WriteFile(script, []byte(body), 0600); err != nil {
-			t.Fatal(err)
-		}
-		c := Command{Script: script, Directory: os.TempDir(), Window: "terminal"}
-		if err := StartWindows(c, 0); err != nil {
-			t.Fatal(err)
-		}
-		if got := strings.TrimSpace(string(readLaunchFile(t, output))); got != "ready" {
-			t.Fatal(got)
-		}
+func TestWindowsBatchQuoteBoundary(t *testing.T) {
+	if _, _, _, err := windowsInvocation(`C:\Windows`, ScriptSpec{Script: `C:\test.cmd`, Arguments: []string{`a"b`}}, nil); err == nil {
+		t.Fatal("ambiguous batch quote accepted")
 	}
 }
 
-func TestDetachedScriptOutlivesLauncherProcess(t *testing.T) {
-	if os.Getenv("ASTERHAND_LAUNCH_PARENT") != "" {
-		c := Command{Script: os.Getenv("ASTERHAND_LAUNCH_PARENT"), Window: "background"}
-		if err := StartWindows(c, 0); err != nil {
-			t.Fatal(err)
-		}
-		return
+func startTestScript(t *testing.T, c ScriptSpec) error {
+	execution, err := NewPlatformBackend().Start(c, model.ID())
+	if err != nil {
+		return err
 	}
-	dir := t.TempDir()
-	script := filepath.Join(dir, "delayed.ps1")
-	output := filepath.Join(dir, "survived.txt")
-	body := `Start-Sleep -Milliseconds 800; [IO.File]::WriteAllText('` + strings.ReplaceAll(output, "'", "''") + `','survived')`
-	if err := os.WriteFile(script, []byte(body), 0600); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(os.Args[0], "-test.run=^TestDetachedScriptOutlivesLauncherProcess$")
-	cmd.Env = append(os.Environ(), "ASTERHAND_LAUNCH_PARENT="+script)
-	if data, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("%v: %s", err, data)
-	}
-	if _, err := os.Stat(output); err == nil {
-		t.Fatal("launcher waited for script completion")
-	}
-	if got := string(readLaunchFile(t, output)); got != "survived" {
-		t.Fatal(got)
-	}
+	go io.Copy(io.Discard, execution.Stdout())
+	go io.Copy(io.Discard, execution.Stderr())
+	t.Cleanup(func() {
+		execution.ForceStop()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		execution.Wait(ctx)
+		execution.Close()
+	})
+	return nil
 }

@@ -250,11 +250,11 @@ func (h *logHost) readLoop(c *logConnection) {
 			}
 		case hostipc.CommandCall:
 			// The log host cannot start commands, browse or open arbitrary UI.
-			if m.Command.Action != "status" && m.Command.Action != "read_log" && m.Command.Action != "tail_log" && m.Command.Action != "stop" {
+			if m.Command.Action != "runs" && m.Command.Action != "stop_all" && m.Command.Action != "status" && m.Command.Action != "read_log" && m.Command.Action != "tail_log" && m.Command.Action != "stop" {
 				return
 			}
 			pool := workers
-			if m.Command.Action == "stop" {
+			if m.Command.Action == "stop" || m.Command.Action == "stop_all" {
 				pool = stoppers
 			}
 			select {

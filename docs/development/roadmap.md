@@ -1,5 +1,7 @@
 # 开发路线图
 
+本地命令统一脚本图与多实例执行已实现并通过用户验收；范围和验证见[统一命令计划](features/unified-command-runs/plan.md)。
+
 路线图区分现有能力和后续工作。具体行为以各领域 requirements/design 为准，验证方式见 [测试指南](../../tests/README.md)，平台边界见 [支持矩阵](../testing/platforms.md)。
 
 ## 已实现的 Windows 助手基础

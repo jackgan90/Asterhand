@@ -16,7 +16,7 @@ import (
 )
 
 type graphStarted struct {
-	command   Command
+	command   ScriptSpec
 	id        string
 	execution *fakeExecution
 }
@@ -28,7 +28,7 @@ type graphBackend struct {
 }
 
 func (b *graphBackend) Available() bool { return true }
-func (b *graphBackend) Start(c Command, id string) (Execution, error) {
+func (b *graphBackend) Start(c ScriptSpec, id string) (Execution, error) {
 	e := newFakeExecution()
 	b.created <- graphStarted{c, id, e}
 	return e, nil
@@ -44,11 +44,10 @@ func graphCommand(t *testing.T) Command {
 	c := testCommand(t, "graph_command")
 	c.ID = model.ID()
 	c.Revision = model.ID()
-	c.Kind = "graph"
-	c.ExecutionMode = "managed"
+	script := c.Graph.Nodes[1].Script
 	c.Graph = &ScriptGraph{Parallelism: 4}
 	for _, name := range []string{"start", "prepare", "left", "right", "join", "end"} {
-		n := GraphNode{ID: model.ID(), Kind: "script", Name: name, Script: c.Script, Arguments: []string{name}, FailurePolicy: AbortGraph}
+		n := GraphNode{ID: model.ID(), Kind: "script", Name: name, Script: script, Arguments: []string{name}, FailurePolicy: AbortGraph}
 		if name == "start" || name == "end" {
 			n = GraphNode{ID: n.ID, Kind: name, Name: ""}
 		}
@@ -111,7 +110,7 @@ func TestGraphValidationAndIndependentSnapshots(t *testing.T) {
 			}
 		})
 	}
-	r := Open(t.TempDir(), nil)
+	r := Open(t.TempDir())
 	c.ID = ""
 	saved := saveCommand(t, r, c)
 	snapshot := mustSnapshot(t, r)
@@ -122,10 +121,10 @@ func TestGraphValidationAndIndependentSnapshots(t *testing.T) {
 	copy := c
 	copy.Name = "other_graph"
 	other := saveCommand(t, r, copy)
-	if other.Merged || other.ID == saved.ID {
+	if other.ID == saved.ID {
 		t.Fatal("graph nodes merged into another command")
 	}
-	reopened := Open(filepath.Dir(r.path), nil)
+	reopened := Open(filepath.Dir(r.path))
 	if len(mustSnapshot(t, reopened).Commands) != 2 {
 		t.Fatal("graph did not round trip")
 	}
@@ -265,10 +264,11 @@ func TestGraphStopAndTimeoutDoNotStartQueuedNodes(t *testing.T) {
 func TestGraphGlobalSlotsAreBoundedAcrossCommands(t *testing.T) {
 	m, b, c := graphFixture(t)
 	c.Graph.Parallelism = 16
+	script := c.Graph.Nodes[1].Script
 	c.Graph.Nodes = append(c.Graph.Nodes[:1], c.Graph.Nodes[5])
 	c.Graph.Edges = nil
 	for range 12 {
-		n := GraphNode{ID: model.ID(), Kind: "script", Name: "worker", Script: c.Script, FailurePolicy: AbortGraph}
+		n := GraphNode{ID: model.ID(), Kind: "script", Name: "worker", Script: script, FailurePolicy: AbortGraph}
 		c.Graph.Nodes = append(c.Graph.Nodes, n)
 		c.Graph.Edges = append(c.Graph.Edges, GraphEdge{c.Graph.Nodes[0].ID, n.ID}, GraphEdge{n.ID, c.Graph.Nodes[1].ID})
 	}
@@ -304,7 +304,8 @@ func TestGraphGlobalSlotsAreBoundedAcrossCommands(t *testing.T) {
 func TestGraphRecoveryChecksEveryExecutionAndNeverRestarts(t *testing.T) {
 	m, b, c := graphFixture(t)
 	b.empty.Store(false)
-	run := &managedRun{record: RunRecord{ID: model.ID(), Command: c, Phase: "running", LogComplete: true}}
+	id := model.ID()
+	run := &managedRun{record: RunRecord{Version: 1, ID: id, RoundID: id, Sequence: 1, Command: c, Phase: "running", LogComplete: true}}
 	initializeGraph(run)
 	finishStructuralNode(&run.record.Nodes[0], "succeeded")
 	finishStructuralNode(&run.record.Nodes[1], "succeeded")
@@ -317,6 +318,9 @@ func TestGraphRecoveryChecksEveryExecutionAndNeverRestarts(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
+	if err = m.store.publish(c.ID, runIndex{Version: 1, RoundID: id, Sequence: 1, Latest: id, IDs: []string{id}}); err != nil {
+		t.Fatal(err)
+	}
 	reopened := NewRunManager(filepath.Dir(m.store.root), b, nil)
 	if reopened.loadErr != nil {
 		t.Fatal(reopened.loadErr)
@@ -353,7 +357,7 @@ func TestGraphLogPagesSeedEachNodeAndBoundSummary(t *testing.T) {
 			c.Graph.Nodes[i].Arguments = []string{strings.Repeat("x", 4000), strings.Repeat("y", 4000)}
 		}
 	}
-	run := &managedRun{record: RunRecord{ID: model.ID(), Command: c, Phase: "finished", Result: "succeeded", LogComplete: true}}
+	run := &managedRun{record: RunRecord{Version: 1, ID: model.ID(), Command: c, Phase: "finished", Result: "succeeded", LogComplete: true}}
 	initializeGraph(run)
 	for i := range run.record.Nodes {
 		finishStructuralNode(&run.record.Nodes[i], "succeeded")
@@ -383,7 +387,7 @@ func TestGraphLogPagesSeedEachNodeAndBoundSummary(t *testing.T) {
 	if len(data) > 96*1024 || strings.Contains(string(data), strings.Repeat("x", 100)) {
 		t.Fatal("configuration leaked into IPC", len(data))
 	}
-	if _, err = m.store.load(c.ID); err != nil {
+	if _, err = m.store.loadRun(c.ID, run.record.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = os.Stat(m.store.logPath(c.ID, run.record.ID)); err != nil {

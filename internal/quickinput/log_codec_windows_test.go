@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -29,7 +31,7 @@ type logCodecBackend struct{ data []byte }
 
 func (b *logCodecBackend) Available() bool                { return true }
 func (b *logCodecBackend) Reconcile(string) (bool, error) { return true, nil }
-func (b *logCodecBackend) Start(localcommands.Command, string) (localcommands.Execution, error) {
+func (b *logCodecBackend) Start(localcommands.ScriptSpec, string) (localcommands.Execution, error) {
 	return &logCodecExecution{io.NopCloser(bytes.NewReader(b.data)), io.NopCloser(bytes.NewReader(nil))}, nil
 }
 
@@ -55,13 +57,18 @@ func checkNativeLogCodecs(t *testing.T, s *nativeSurface) {
 		{Encoding: "utf-16le", Prefix: []byte{0x3d, 0xd8, 0x00}, Suffix: []byte{0xde, 0x2d, 0x4e}},
 	}
 	backend := &logCodecBackend{}
-	manager := localcommands.NewRunManager(t.TempDir(), backend, nil)
+	home := t.TempDir()
+	scriptPath := filepath.Join(home, "codec.cmd")
+	if err := os.WriteFile(scriptPath, []byte("@exit /b 0\r\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	manager := localcommands.NewRunManager(home, backend, nil)
 	defer manager.Close(context.Background())
 	for i := range cases {
 		sample := &cases[i]
 		prefix := append(bytes.Repeat([]byte{'A'}, 32*1024-len(sample.Prefix)), sample.Prefix...)
 		backend.data = append(prefix, sample.Suffix...)
-		command := localcommands.Command{ID: model.ID(), Name: "codec", ExecutionMode: "managed"}
+		command := localcommands.Command{ID: model.ID(), Name: "codec", Graph: commandTestGraph(scriptPath)}
 		run, err := manager.Start(command)
 		if err != nil {
 			t.Fatal(err)
@@ -82,6 +89,11 @@ func checkNativeLogCodecs(t *testing.T, s *nativeSurface) {
 			t.Fatal(err)
 		}
 		sample.Context = page.Context
+		for _, chunks := range sample.Context {
+			for i := range chunks {
+				chunks[i].NodeID = ""
+			}
+		}
 	}
 	payload, err := json.Marshal(cases)
 	if err != nil {

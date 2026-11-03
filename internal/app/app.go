@@ -101,8 +101,8 @@ func New(c *config.Manager, x executor.Executor) (*App, error) {
 	}
 	a.loginToken = string(b)
 	a.Input = quickinput.New(c.Home)
-	a.Commands = localcommands.Open(c.Home, quickinput.StartLocalCommand)
-	if err = a.Commands.ConfigureManaged(localcommands.NewRunManager(c.Home, localcommands.NewPlatformBackend(), nil)); err != nil {
+	a.Commands = localcommands.Open(c.Home)
+	if err = a.Commands.ConfigureRuns(localcommands.NewRunManager(c.Home, localcommands.NewPlatformBackend(), nil)); err != nil {
 		log.Printf("%s", i18n.T(i18n.Effective(), "err.localcmd.managed_unavailable"))
 	}
 	a.Input.SetCommandHandler(a.commandCall)

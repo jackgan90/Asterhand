@@ -9,8 +9,8 @@ import (
 )
 
 func (m *RunManager) executeGraphNode(run *managedRun, index int) {
-	command := nodeCommand(run.record.Command, run.record.Command.Graph.Nodes[index])
-	status := inspect(command)
+	command := nodeScript(run.record.Command.Graph.Nodes[index])
+	status := inspectScript(command)
 	run.mu.Lock()
 	n := &run.record.Nodes[index]
 	if run.record.Reason != "" || status.state != "ready" {
@@ -125,10 +125,18 @@ func (m *RunManager) captureGraph(run *managedRun, index int, reader io.Reader, 
 	for {
 		n, err := reader.Read(buffer)
 		run.mu.Lock()
-		if n > 0 && !run.record.StorageError {
-			if writeErr := appendGraphLog(run.file, index, stream, buffer[:n]); writeErr != nil {
-				run.record.Nodes[index].LogComplete, run.record.LogComplete, run.record.StorageError = false, false, true
-				m.failGraphNodeLocked(run, index, "log_io_error")
+		if n > 0 && (run.record.StorageError || run.record.Reason == "log_limit") {
+			// Draining after a capture failure still consumes bytes. Each node
+			// whose output is discarded must expose that loss in its own pane.
+			run.record.Nodes[index].LogComplete, run.record.LogComplete = false, false
+		}
+		if n > 0 && !run.record.StorageError && run.record.Reason != "log_limit" {
+			if writeErr := m.appendRunLog(run, index, stream, buffer[:n]); writeErr != nil {
+				run.record.Nodes[index].LogComplete, run.record.LogComplete = false, false
+				if run.record.Reason != "log_limit" {
+					run.record.StorageError = true
+					m.failGraphNodeLocked(run, index, "log_io_error")
+				}
 			}
 		}
 		if err != nil && !errors.Is(err, io.EOF) {

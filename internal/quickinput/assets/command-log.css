@@ -34,6 +34,11 @@ button:focus-visible,select:focus-visible,summary:focus-visible,input:focus-visi
 .log-pane {display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;border:1px solid var(--line);border-radius:8px;background:color-mix(in srgb,var(--bg) 80%,transparent)}
 .log-pane-heading {display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 12px;border-bottom:1px solid var(--line);border-left:3px solid var(--node-color,transparent);flex:none}
 .log-pane-heading strong {font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.log-pane-heading strong {flex:1;min-width:0}
+.log-pane-stop {flex:none;font-size:11px;white-space:nowrap}
+.log-pane-details {margin:0;padding:6px 12px;color:var(--muted);font-size:11px;flex:none}
+#log-run-picker {max-width:100%;margin:0 0 8px 8px;font-size:12px}
+#log-limit {margin:0;padding:6px 22px;font-size:12px;color:var(--muted)}
 .log-pane-output {flex:1;min-height:0;padding:12px;overflow:auto;overscroll-behavior:contain;position:relative;font:13px/1.6 Consolas,"Microsoft YaHei",monospace;white-space:pre-wrap;overflow-wrap:anywhere;tab-size:4}
 .log-pane-output span[data-stream=stderr] {color:var(--log-failed)}
 .log-pane-notice {margin:0;padding:10px 12px;color:var(--muted);font-size:12px;flex:none}

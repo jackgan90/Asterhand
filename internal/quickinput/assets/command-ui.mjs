@@ -1,6 +1,6 @@
 import {commandClient} from './command-client.mjs';
 import {commandQuery, filterCommands} from './command-model.mjs';
-import {runBusy, runStoppable, runLabel, modeLabel} from './command-run.mjs';
+import {runBusy, runStoppable, runLabel, summaryLabel, canLaunch} from './command-run.mjs';
 import {commandResults} from './command-results.mjs';
 import {getLocale, localizeError, localizeMessage, t} from './i18n.mjs';
 
@@ -43,7 +43,7 @@ export function commandPanel(bridge, {input, post, changed, sendText}) {
   }
   function highlight(scroll = false) {
     const entry = filtered.find(entry => entry.id === selected);
-    run.disabled = !entry || runBusy(entry) || entry.execution_mode === 'managed' && !managedAvailable;
+    run.disabled = !canLaunch(entry) || !managedAvailable;
     for (const row of list.children) row.setAttribute('aria-selected', String(row.dataset.id === selected));
     const row = [...list.children].find(node => node.dataset.id === selected);
     if (row) {
@@ -74,11 +74,11 @@ export function commandPanel(bridge, {input, post, changed, sendText}) {
       const info = document.createElement('span'), title = document.createElement('span'), description = document.createElement('small');
       info.className = 'command-info';
       const aliases = [...(entry.aliases ?? [])].sort((a, b) => Number(b === entry.matchedName) - Number(a === entry.matchedName));
-      title.textContent = modeLabel(entry) + ' ' + entry.name + (aliases.length ? ' · ' + aliases.join(' / ') : '');
+      title.textContent = entry.name + (aliases.length ? ' · ' + aliases.join(' / ') : '');
       title.title = title.textContent;
       const detailText = localizeMessage(entry.detail_key, entry.detail_args, entry.detail || '');
       const failed = !['ready', 'checking'].includes(entry.state);
-      description.textContent = [runLabel(entry), failed ? detailText : entry.description || t(entry.state === 'checking' ? 'quickinput.commands_checking' : 'quickinput.commands_local_script')].filter(Boolean).join(' · ');
+      description.textContent = [summaryLabel(entry), failed ? detailText : entry.description || t(entry.state === 'checking' ? 'quickinput.commands_checking' : 'quickinput.commands_local_script')].filter(Boolean).join(' · ');
       row.title = [title.textContent, entry.description, failed ? detailText : ''].filter(Boolean).join('\n');
       info.append(title, description);
       const error = document.createElement('span');
@@ -87,12 +87,12 @@ export function commandPanel(bridge, {input, post, changed, sendText}) {
       error.title = errText ? t('quickinput.commands_open_config_hint', {error: errText}) : '';
       error.setAttribute('role', 'status');
       row.append(info, error);
-      if(entry.execution_mode === "managed" && entry.run_id){
+      if(entry.run_id){
         const controls=document.createElement("span");controls.className="command-controls";
-        for(const [action,key] of [["logs","common.command.logs"],["stop","common.command.stop"]]){
-          if(action==="stop"&&!runBusy(entry))continue;
+        for(const [action,key] of [["logs","common.command.logs"],["stop_all","common.command.stop_all"]]){
+          if(action==="stop_all"&&!runBusy(entry))continue;
           const button=document.createElement("button");button.type="button";button.textContent=t(key);
-          button.disabled=action==="stop"&&!runStoppable(entry);
+          button.disabled=action==="stop_all"&&!runStoppable(entry);
           button.addEventListener("click",event=>{event.stopPropagation();void control(action,entry,button);});controls.append(button);
         }
         row.append(controls);
@@ -133,9 +133,9 @@ export function commandPanel(bridge, {input, post, changed, sendText}) {
     }
   }
   async function execute(entry) {
-    if (composing || !entry || runBusy(entry)) return;
+    if (composing || !canLaunch(entry)) return;
     clearMessage();
-    if(entry.execution_mode==='managed'&&!managedAvailable){showError({messageKey:'err.localcmd.managed_unavailable'});return;}
+    if(!managedAvailable){showError({messageKey:'err.localcmd.managed_unavailable'});return;}
     const version = results.begin(entry.id);
     if (entry.state === 'missing') {
       const msg = t('quickinput.commands_missing_script');
@@ -145,7 +145,7 @@ export function commandPanel(bridge, {input, post, changed, sendText}) {
     }
     try {
       const response = await client.call('launch', {command_id:entry.id, revision:entry.revision});
-      if (!disposed && response.started && results.finish(entry.id, version)) { errorMeta.delete(entry.id); if(entry.execution_mode==='managed'){entry.phase='starting';void refresh();} paint(); }
+      if (!disposed && response.started && results.finish(entry.id, version)) { errorMeta.delete(entry.id); entry.phase='starting';entry.active_count=(entry.active_count??0)+1;void refresh(); paint(); }
     } catch (error) {
       if (disposed || !results.finish(entry.id, version, localizeError(error))) return;
       errorMeta.set(entry.id, error);
@@ -157,7 +157,7 @@ export function commandPanel(bridge, {input, post, changed, sendText}) {
   async function control(action,entry,button){
     clearMessage();
     button.disabled=true;
-    try{await client.call(action,{command_id:entry.id,...(action==='stop'?{run_id:entry.run_id}:{})});}
+    try{await client.call(action,{command_id:entry.id,...(action==='stop_all'?{run_ids:[...(entry.active_run_ids??[])]}:{})});}
     catch(err){showError(err, true);}
     finally{button.disabled=false;void refresh();}
   }

@@ -20,10 +20,11 @@ func maximumGraphRecord(t *testing.T) RunRecord {
 	t.Helper()
 	c := graphCommand(t)
 	c.ID, c.Revision, c.Name = strings.Repeat("c", 64), strings.Repeat("r", 64), strings.Repeat("n", 64)
+	script := c.Graph.Nodes[1].Script
 	c.Graph.Nodes = []GraphNode{{ID: strings.Repeat("s", 64), Kind: "start"}, {ID: strings.Repeat("e", 64), Kind: "end"}}
 	c.Graph.Edges = nil
 	for i := 2; i < MaxGraphNodes; i++ {
-		n := GraphNode{ID: fmt.Sprintf("n%063d", i), Kind: "script", Script: c.Script, FailurePolicy: AbortGraph}
+		n := GraphNode{ID: fmt.Sprintf("n%063d", i), Kind: "script", Script: script, FailurePolicy: AbortGraph}
 		c.Graph.Nodes = append(c.Graph.Nodes, n)
 		c.Graph.Edges = append(c.Graph.Edges, GraphEdge{c.Graph.Nodes[0].ID, n.ID}, GraphEdge{n.ID, c.Graph.Nodes[1].ID})
 	}
@@ -39,7 +40,7 @@ func maximumGraphRecord(t *testing.T) RunRecord {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	run := &managedRun{record: RunRecord{ID: model.ID(), Command: c, Phase: "finished", Result: "interrupted",
+	run := &managedRun{record: RunRecord{Version: 1, ID: model.ID(), Command: c, Phase: "finished", Result: "interrupted",
 		Reason: "unexpected_shutdown", Started: now, Ended: &now, FailedNodeID: c.Graph.Nodes[2].ID}}
 	initializeGraph(run)
 	for i := range run.record.Nodes {
@@ -132,7 +133,9 @@ func TestGraphStopBeforePlatformStartSkipsReservedNode(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			run.file, m.runs[c.ID] = f, run
+			run.file, m.runs[run.record.ID] = f, run
+			run.group = &runGroup{index: runIndex{Latest: run.record.ID, IDs: []string{run.record.ID}}}
+			m.groups[c.ID] = run.group
 			run.mu.Lock()
 			reserved := m.scheduleGraphLocked(run)
 			err = m.stopLocked(run, reason)
@@ -206,7 +209,7 @@ func TestGraphMaximumConfigurationRoundTripsRunMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	loaded, err := store.load(r.Command.ID)
+	loaded, err := store.loadRun(r.Command.ID, r.ID)
 	if err != nil {
 		t.Fatal("accepted graph cannot be read after reopening", err)
 	}
@@ -224,7 +227,7 @@ func TestRunMetadataLimitRejectsBeforeReplacingPreviousRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	before, err := os.ReadFile(store.metadata(r.Command.ID))
+	before, err := os.ReadFile(store.recordPath(r.Command.ID, r.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,14 +235,14 @@ func TestRunMetadataLimitRejectsBeforeReplacingPreviousRecord(t *testing.T) {
 	if err = store.save(r); err == nil {
 		t.Fatal("published a record too large to reopen")
 	}
-	after, err := os.ReadFile(store.metadata(r.Command.ID))
+	after, err := os.ReadFile(store.recordPath(r.Command.ID, r.ID))
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatal("replaced previous metadata despite rejecting the new record", err)
 	}
-	if err = os.WriteFile(store.metadata(r.Command.ID), bytes.Repeat([]byte(" "), maxRunRecordBytes+1), 0600); err != nil {
+	if err = os.WriteFile(store.recordPath(r.Command.ID, r.ID), bytes.Repeat([]byte(" "), maxRunRecordBytes+1), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.load(r.Command.ID); err == nil {
+	if _, err = store.loadRun(r.Command.ID, r.ID); err == nil {
 		t.Fatal("accepted oversized input metadata")
 	}
 }

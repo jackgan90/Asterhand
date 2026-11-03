@@ -19,7 +19,7 @@ func TestWindowsGraphDependencyAndFailureCleanup(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			c := graphCommand(t)
-			workspace := filepath.Dir(c.Script)
+			workspace := filepath.Dir(c.Graph.Nodes[1].Script)
 			bodies := []string{"", "@echo off\r\necho prepare\r\nexit /b 0\r\n",
 				"@echo off\r\nping.exe -n 2 127.0.0.1 >nul\r\necho left>left.marker\r\nexit /b 0\r\n",
 				"@echo off\r\necho right\r\necho right>right.marker\r\nexit /b 0\r\n",

@@ -18,8 +18,6 @@ import (
 
 const maxCatalogBytes = 16 * 1024 * 1024
 
-type Launcher func(Command) error
-
 type Registry struct {
 	mu           sync.RWMutex
 	path         string
@@ -28,7 +26,6 @@ type Registry struct {
 	policy       CommandPolicy
 	managed      *RunManager
 	closing      bool
-	launch       Launcher
 	probes       chan struct{}
 	probeMu      sync.Mutex
 	statuses     map[string]*fileStatus
@@ -37,11 +34,11 @@ type Registry struct {
 }
 
 // Open isolates invalid configuration to this feature and never overwrites it.
-func Open(home string, launch Launcher) *Registry { return OpenWithPolicy(home, launch, commandPolicy) }
+func Open(home string) *Registry { return OpenWithPolicy(home, commandPolicy) }
 
-func OpenWithPolicy(home string, launch Launcher, policy CommandPolicy) *Registry {
-	r := &Registry{policy: policy, path: filepath.Join(home, "local-commands.json"), launch: launch,
-		catalog: Catalog{Schema: 3, Revision: model.ID(), Commands: []Command{}},
+func OpenWithPolicy(home string, policy CommandPolicy) *Registry {
+	r := &Registry{policy: policy, path: filepath.Join(home, "local-commands.json"),
+		catalog: Catalog{Schema: 4, Revision: model.ID(), Commands: []Command{}},
 		probes:  make(chan struct{}, 4), statuses: map[string]*fileStatus{}}
 	r.loadErr = r.load()
 	return r
@@ -66,8 +63,8 @@ func (r *Registry) load() error {
 	if decoder.Decode(&catalog) != nil || decoder.Decode(new(any)) != io.EOF {
 		return i18n.Err("err.localcmd.invalid_json")
 	}
-	if catalog.Schema == 1 || catalog.Schema == 2 {
-		catalog.Schema = 3
+	if catalog.Schema != 4 {
+		return i18n.Err("err.localcmd.catalog_version_size")
 	}
 	// Normalize loaded definitions before uniqueness checks, just like API edits.
 	for i := range catalog.Commands {
@@ -101,7 +98,6 @@ func cloneCatalog(c Catalog) Catalog {
 			c.Commands[i].TimeoutSeconds = &value
 		}
 		c.Commands[i].Aliases = slices.Clone(c.Commands[i].Aliases)
-		c.Commands[i].Arguments = slices.Clone(c.Commands[i].Arguments)
 	}
 	return c
 }
@@ -171,54 +167,25 @@ func (r *Registry) Save(change Mutation) (SaveResult, error) {
 	if index >= 0 {
 		next.Commands = slices.Delete(next.Commands, index, index+1)
 	}
-	match := slices.IndexFunc(next.Commands, func(c Command) bool { return sameLaunchWithPolicy(c, command, r.policy) })
-	if match >= 0 {
-		if r.managed.Busy(next.Commands[match].ID) {
-			return SaveResult{}, problem("busy", "err.localcmd.running")
-		}
-		if index >= 0 && executionMode(r.catalog.Commands[index]) == "managed" {
-			return SaveResult{}, problem("conflict", "err.localcmd.managed_merge")
-		}
-	}
-	for i, other := range next.Commands {
-		if i == match {
-			continue
-		}
+	for _, other := range next.Commands {
 		for _, name := range commandNames(command) {
 			if containsName(commandNames(other), name) {
 				return SaveResult{}, problem("name_conflict", "err.localcmd.name_taken", map[string]string{"name": name})
 			}
 		}
 	}
-	if match >= 0 {
-		existing := &next.Commands[match]
-		for _, name := range commandNames(command) {
-			if !containsName(commandNames(*existing), name) {
-				existing.Aliases = append(existing.Aliases, name)
-			}
-		}
-		if len(existing.Aliases) > 16 {
-			return SaveResult{}, problem("invalid", "err.localcmd.merged_aliases_limit")
-		}
-		existing.Revision = model.ID()
-		command.ID = existing.ID
-	} else {
-		if command.ID == "" {
-			command.ID = model.ID()
-		}
-		command.Revision = model.ID()
-		next.Commands = append(next.Commands, command)
+	if command.ID == "" {
+		command.ID = model.ID()
 	}
-	if index >= 0 && executionMode(r.catalog.Commands[index]) == "managed" && command.ExecutionMode != "managed" {
-		next.PendingCleanup = append(next.PendingCleanup, change.Command.ID)
-	}
+	command.Revision = model.ID()
+	next.Commands = append(next.Commands, command)
 	if err := r.save(next); err != nil {
 		return SaveResult{}, err
 	}
 	if err := r.cleanupPending(); err != nil {
 		return SaveResult{}, err
 	}
-	return SaveResult{Catalog: cloneCatalog(r.catalog), ID: command.ID, Merged: match >= 0}, nil
+	return SaveResult{Catalog: cloneCatalog(r.catalog), ID: command.ID}, nil
 }
 
 func (r *Registry) Delete(id, revision string) (Catalog, error) {
@@ -241,9 +208,7 @@ func (r *Registry) Delete(id, revision string) (Catalog, error) {
 	if i < 0 {
 		return Catalog{}, problem("not_found", "err.localcmd.deleted_refresh")
 	}
-	if executionMode(next.Commands[i]) == "managed" {
-		next.PendingCleanup = append(next.PendingCleanup, id)
-	}
+	next.PendingCleanup = append(next.PendingCleanup, id)
 	next.Commands = slices.Delete(next.Commands, i, i+1)
 	if err := r.save(next); err != nil {
 		return Catalog{}, err

@@ -8,7 +8,7 @@ type unsupportedBackend struct{}
 
 func NewPlatformBackend() ExecutionBackend { return unsupportedBackend{} }
 func (unsupportedBackend) Available() bool { return false }
-func (unsupportedBackend) Start(Command, string) (Execution, error) {
+func (unsupportedBackend) Start(ScriptSpec, string) (Execution, error) {
 	return nil, problem("unsupported", "err.localcmd.managed_unavailable")
 }
 func (unsupportedBackend) Reconcile(string) (bool, error) {

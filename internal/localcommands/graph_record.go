@@ -46,17 +46,15 @@ func cloneNodeRecords(nodes []NodeRecord) []NodeRecord {
 
 // Configuration is durable privately; IPC carries only the bounded UI summary.
 func publicRun(record RunRecord) RunRecord {
-	if record.Command.Kind == "graph" {
-		record.Command = Command{ID: record.Command.ID, Name: record.Command.Name, Kind: "graph", ExecutionMode: "managed",
-			Revision: record.Command.Revision, TimeoutSeconds: record.Command.TimeoutSeconds}
-	}
+	record.Command = Command{ID: record.Command.ID, Name: record.Command.Name,
+		Revision: record.Command.Revision, TimeoutSeconds: record.Command.TimeoutSeconds, AllowConcurrent: record.Command.AllowConcurrent}
 	return record
 }
 
 // Log pages retain graph identity and state, without private execution IDs.
 func logRecord(record RunRecord) RunRecord {
 	record = publicRun(record)
-	if record.Command.Kind == "graph" {
+	if len(record.Nodes) > 0 {
 		record.Nodes = cloneNodeRecords(record.Nodes)
 		for i := range record.Nodes {
 			record.Nodes[i].RunID = ""
@@ -67,12 +65,6 @@ func logRecord(record RunRecord) RunRecord {
 
 func validateGraphRecord(r RunRecord) error {
 	invalid := func() error { return problem("configuration", "err.localcmd.invalid_run") }
-	if r.Command.Kind != "graph" {
-		if r.LogFormat != 0 || len(r.Nodes) != 0 {
-			return invalid()
-		}
-		return nil
-	}
 	graph, err := normalizeGraph(r.Command.Graph, commandPolicy)
 	if err != nil || r.LogFormat != 2 || len(r.Nodes) != len(graph.Nodes) {
 		return invalid()
@@ -98,8 +90,7 @@ func logFrameSource(r RunRecord, value byte) (string, byte, error) {
 		if index < len(r.Nodes) && r.Nodes[index].Kind == "script" {
 			return r.Nodes[index].NodeID, value % 2, nil
 		}
-	} else if value < 2 {
-		return "", value, nil
+
 	}
 	return "", 0, problem("invalid", "err.localcmd.invalid_log_cursor")
 }

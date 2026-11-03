@@ -2,7 +2,7 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title data-i18n="brand.log_window_title"></title><link rel="stylesheet" href="input.css"><link rel="stylesheet" href="command-log.css"></head>
 <body><main>
-  <header><div><strong id="log-name"></strong><span id="log-state" role="status"></span></div><button id="log-stop" data-i18n="common.command.stop"></button></header>
+  <header><div><strong id="log-name"></strong><span id="log-state" role="status"></span></div><button id="log-stop" data-i18n="common.command.stop_all"></button></header>
   <section id="log-details"></section><p id="log-warning" role="status" hidden></p>
   <nav class="log-tools">
     <label><span data-i18n="common.command.encoding"></span><select id="log-encoding">
@@ -11,11 +11,12 @@
     </select></label>
   </nav>
   <section id="log-graph" hidden>
+    <label><span data-i18n="common.command.instance"></span><select id="log-run-picker"></select></label>
     <div id="log-nodes" data-i18n-aria-label="common.graph.nodes"></div>
     <details id="log-view-picker">
       <summary id="log-view-summary"></summary>
       <div class="log-view-options">
-        <label><input id="log-view-all" type="radio" name="log-view-mode" checked><span data-i18n="common.graph.all"></span></label>
+        <label><input id="log-view-all" type="checkbox"><span data-i18n="common.graph.all"></span></label>
         <label><input id="log-view-active" type="radio" name="log-view-mode"><span data-i18n="common.graph.active_logs"></span></label>
         <p data-i18n="common.graph.fixed_nodes"></p>
         <div id="log-node-options"></div>
@@ -23,5 +24,6 @@
     </details>
   </section>
   <p id="log-empty" role="status" hidden></p>
+  <p id="log-limit" role="status" hidden data-i18n="common.command.pane_limit"></p>
   <div id="log-columns" data-mode="merged"></div>
 </main><script type="module" src="command-log.mjs"></script></body></html>

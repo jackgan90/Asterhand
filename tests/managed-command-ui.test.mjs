@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
 import {logDecoder} from '../internal/quickinput/assets/log-model.mjs';
+import {canLaunch} from '../web/command-run.mjs';
 
 class Element {
   constructor() {
@@ -22,16 +23,16 @@ function dom() {
   return {get, document:{getElementById:get, createElement:()=>new Element(), createDocumentFragment:()=>new Element(), documentElement:new Element()}};
 }
 const source = async name => (await fs.readFile(new URL('../internal/quickinput/assets/' + name, import.meta.url), 'utf8')).replace(/^import .*;$/gm, '');
-const labels = {applyI18n(){}, setLocale(){}, t:key=>key, getLocale:()=>'', localizeError:()=>'', localizeMessage:()=>'', formatDateTime:()=>'', runLabel:()=>'', reasonLabel:()=>'', modeLabel:()=>''};
+const labels = {canLaunch, summaryLabel:()=>'', applyI18n(){}, setLocale(){}, t:key=>key, getLocale:()=>'', localizeError:()=>'', localizeMessage:()=>'', formatDateTime:()=>'', runLabel:()=>'', reasonLabel:()=>''};
 
 test('log status polling continues independently of a pending pane read', async () => {
   const view = dom(), timers = new Map(); let sequence = 0, statusCalls = 0, paneCalls = 0;
   const record = {run_id:'run1234567890abcd', phase:'running', elapsed_seconds:0, command:{name:'test'}};
   const context = vm.createContext({...view, ...labels, logDecoder,
     logReadQueue:()=>()=>new Promise(()=>{}),logPane:()=>{},nodeName:()=>'',nodeLabel:()=>'',
-    logGraphView:()=>({metadata(){},refresh(){paneCalls++;return new Promise(()=>{});},setVisible(){},setEncoding(){},relocalize(){}}),
+    logGraphView:()=>({required:()=>[record.run_id],metadata(){},refresh(){paneCalls++;return new Promise(()=>{});},setVisible(){},setEncoding(){},relocalize(){}}),
     webview2Bridge:()=>({send(){}, subscribe(){}}),
-    commandClient:()=>({call:async action => {assert.equal(action,'status');statusCalls++;return {run:record};}}),
+    commandClient:()=>({call:async action => {if(action==='runs')return {runs:{round_id:'round',latest_run_id:record.run_id,runs:[record]}};assert.equal(action,'status');statusCalls++;return {run:record};}}),
     runBusy:r=>r?.phase !== 'finished', runStoppable:()=>true,
     setTimeout:fn=>{timers.set(++sequence,fn);return sequence;}, clearTimeout:id=>timers.delete(id),
   });

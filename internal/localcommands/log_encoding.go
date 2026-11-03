@@ -21,8 +21,7 @@ type logContext [2][4][4]byte // stream, encoding, length + up to 3 pending byte
 
 type logFile struct {
 	*os.File
-	context logContext
-	nodes   map[byte]*logContext
+	nodes map[byte]*logContext
 }
 
 func (c *logContext) advance(stream byte, data []byte) {

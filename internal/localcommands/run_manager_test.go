@@ -50,20 +50,19 @@ func (f *fakeExecution) Wait(ctx context.Context) (ExitEvidence, error) {
 
 type alternativePolicy struct{ windowsCommandPolicy }
 
-func (alternativePolicy) EqualPath(a, b string) bool              { return a == b }
 func (alternativePolicy) ScriptPath(value string) (string, error) { return filepath.Clean(value), nil }
 func (alternativePolicy) ValidArgument(string, string) bool       { return true }
 
 func TestManagedPolicyAndAbnormalExitEvidence(t *testing.T) {
-	r := OpenWithPolicy(t.TempDir(), nil, alternativePolicy{})
+	r := OpenWithPolicy(t.TempDir(), alternativePolicy{})
 	c := testCommand(t, "case_one")
-	c.Script = filepath.Join(filepath.Dir(c.Script), "script.sh")
-	c.Arguments = []string{`a"b`}
+	c.Graph.Nodes[1].Script = filepath.Join(filepath.Dir(c.Graph.Nodes[1].Script), "script.sh")
+	c.Graph.Nodes[1].Arguments = []string{`a"b`}
 	first := saveCommand(t, r, c)
 	c.Name = "case_two"
-	c.Script = strings.ToUpper(c.Script)
+	c.Graph.Nodes[1].Script = strings.ToUpper(c.Graph.Nodes[1].Script)
 	second := saveCommand(t, r, c)
-	if second.ID == first.ID || second.Merged {
+	if second.ID == first.ID {
 		t.Fatal("case-sensitive policy was ignored")
 	}
 	_, m, b, _, command := managedFixture(t)
@@ -86,7 +85,7 @@ type fakeBackend struct {
 }
 
 func (f *fakeBackend) Available() bool { return true }
-func (f *fakeBackend) Start(Command, string) (Execution, error) {
+func (f *fakeBackend) Start(ScriptSpec, string) (Execution, error) {
 	e := newFakeExecution()
 	f.count.Add(1)
 	f.created <- e
@@ -127,12 +126,11 @@ func managedFixture(t *testing.T) (*Registry, *RunManager, *fakeBackend, *fakeCl
 	b.empty.Store(true)
 	clock := &fakeClock{wake: make(chan time.Time, 4)}
 	m := NewRunManager(home, b, clock)
-	r := Open(home, nil)
-	if err := r.ConfigureManaged(m); err != nil {
+	r := Open(home)
+	if err := r.ConfigureRuns(m); err != nil {
 		t.Fatal(err)
 	}
 	c := testCommand(t, "managed")
-	c.ExecutionMode = "managed"
 	saved := saveCommand(t, r, c)
 	c = saved.Catalog.Commands[0]
 	t.Cleanup(func() {
@@ -272,12 +270,11 @@ func TestManagedStopTimeoutGenerationAndConfigurationCleanup(t *testing.T) {
 	clock.now.Store(int64(3 * time.Second))
 	clock.wake <- time.Now()
 	result = awaitFinished(t, m, c.ID)
-	if result.ID != second.ID || result.Result != "failed" || result.Reason != "timeout" || next.stops.Load() != 1 {
+	if result.ID != second.ID || result.Result != "failed" || result.Reason != "timeout" || next.stops.Load() < 1 {
 		t.Fatal(result)
 	}
-	c.ExecutionMode = "unmanaged"
-	saved := saveCommand(t, r, c)
-	if saved.Catalog.Commands[0].TimeoutSeconds != nil || m.Current(c.ID) != nil {
+	_, err = r.Delete(c.ID, mustSnapshot(t, r).Revision)
+	if err != nil || m.Current(c.ID) != nil {
 		t.Fatal("mode change kept run")
 	}
 	if _, err = os.Stat(m.store.directory(c.ID)); !os.IsNotExist(err) {
@@ -291,14 +288,21 @@ func TestManagedRecoveryBlocksUntilScopeConfirmed(t *testing.T) {
 	m := NewRunManager(home, b, nil)
 	c := testCommand(t, "recover")
 	c.ID = "command1234567890"
-	c.ExecutionMode = "managed"
-	record := RunRecord{ID: "execution123456789", Command: c, Phase: "stopping", Reason: "timeout", LogComplete: true}
+	record := RunRecord{Version: 1, ID: "execution123456789", RoundID: "execution123456789", Sequence: 1, Command: c, Phase: "stopping", Reason: "timeout", LogComplete: true}
+	run := &managedRun{record: record}
+	initializeGraph(run)
+	record = run.record
+	record.Nodes[1].RunID = "nodeexecution12345"
+	record.Nodes[1].Phase = "running"
 	f, err := m.store.prepare(record)
 	if err != nil {
 		t.Fatal(err)
 	}
-	appendLog(f, 0, []byte("durable"))
+	appendGraphLog(f, 1, 0, []byte("durable"))
 	f.Close()
+	if err := m.store.publish(c.ID, runIndex{Version: 1, RoundID: record.RoundID, Sequence: 1, Latest: record.ID, IDs: []string{record.ID}}); err != nil {
+		t.Fatal(err)
+	}
 	recovered := NewRunManager(home, b, nil)
 	if !recovered.Busy(c.ID) {
 		t.Fatal("unconfirmed scope released")
@@ -336,22 +340,28 @@ func TestManagedFailedPreparePreservesPrevious(t *testing.T) {
 	}
 }
 
-func TestManagedLegacySchemaMigrationAndValidation(t *testing.T) {
+func TestOldSchemaAndUnknownFieldsRejectedUntouched(t *testing.T) {
 	home := t.TempDir()
-	r := Open(home, nil)
+	r := Open(home)
 	c := testCommand(t, "legacy")
-	saved := saveCommand(t, r, c)
-	path := r.path
-	b, _ := os.ReadFile(path)
-	b = []byte(strings.Replace(string(b), `"schema_version": 3`, `"schema_version": 1`, 1))
-	os.WriteFile(path, b, 0600)
-	reopened := Open(home, nil)
-	catalog := mustSnapshot(t, reopened)
-	if catalog.Schema != 3 || catalog.Commands[0].ExecutionMode != "unmanaged" || catalog.Commands[0].Kind != "script" {
-		t.Fatal(catalog)
+	saveCommand(t, r, c)
+	original, _ := os.ReadFile(r.path)
+	for _, value := range []string{strings.Replace(string(original), `"schema_version": 4`, `"schema_version": 1`, 1), strings.Replace(string(original), `"schema_version": 4`, `"schema_version": 3`, 1), strings.Replace(string(original), `"name": "legacy"`, `"name": "legacy", "execution_mode":"managed"`, 1)} {
+		if err := os.WriteFile(r.path, []byte(value), 0600); err != nil {
+			t.Fatal(err)
+		}
+		reopened := Open(home)
+		if _, err := reopened.Snapshot(); err == nil {
+			t.Fatal("old or unknown fields accepted")
+		}
+		if _, err := reopened.Save(Mutation{Command: c}); err == nil {
+			t.Fatal("invalid file overwritten")
+		}
+		after, _ := os.ReadFile(r.path)
+		if string(after) != value {
+			t.Fatal("invalid file changed")
+		}
 	}
-	c = saved.Catalog.Commands[0]
-	c.ExecutionMode = "managed"
 	zero := int64(0)
 	c.TimeoutSeconds = &zero
 	if _, err := normalize(c); err == nil {

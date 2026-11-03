@@ -65,9 +65,8 @@ func cloneGraph(graph *ScriptGraph) *ScriptGraph {
 	return &copy
 }
 
-func nodeCommand(root Command, node GraphNode) Command {
-	return Command{ID: root.ID, Revision: root.Revision, Name: root.Name, Kind: "script", ExecutionMode: "managed",
-		Window: "background", Script: node.Script, Arguments: node.Arguments, Directory: node.Directory, TimeoutSeconds: node.TimeoutSeconds}
+func nodeScript(node GraphNode) ScriptSpec {
+	return ScriptSpec{Script: node.Script, Arguments: node.Arguments, Directory: node.Directory}
 }
 
 func normalizeGraph(graph *ScriptGraph, policy CommandPolicy) (*ScriptGraph, error) {
@@ -118,7 +117,10 @@ func normalizeGraphNode(n *GraphNode, policy CommandPolicy) error {
 	if n.FailurePolicy != AbortGraph {
 		return graphProblem("err.graph.policy", n.Name)
 	}
-	command, err := normalizeWithPolicy(nodeCommand(Command{Name: "node"}, *n), policy)
+	if err := validateTimeout(n.TimeoutSeconds); err != nil {
+		return err
+	}
+	command, err := normalizeScript(nodeScript(*n), policy)
 	if err != nil {
 		if key, args, ok := i18n.ErrorDetails(err); ok {
 			if args == nil {

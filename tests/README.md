@@ -1,5 +1,7 @@
 # 测试入口
 
+统一脚本图命令的接纳竞争、同轮多实例日志、原子换轮、容量、恢复与跨实例分屏，见[统一命令验证](../docs/development/features/unified-command-runs/validation.md)。旧非托管启动和自动合并用例已由统一图执行与独立注册规则替代。
+
 本地脚本图的依赖、失败/停止竞争、节点恢复、并行日志和编辑验证见[脚本图验证](../docs/development/features/local-script-graphs/validation.md)。
 
 日志自动刷新期间的工具栏文字、可用状态与焦点稳定，以及主动操作替代在途自动读取，见[日志工具栏稳定性](../docs/development/features/log-toolbar-refresh-stability/plan.md)。包含前端并发回归及真实 WebView2 双主题双语言的 DOM/透明度检查。
@@ -8,7 +10,7 @@
 
 运行期中英双语切换、系统/浏览器语言分级匹配、独立语言更新与并发防覆盖、结构化错误延迟本地化、DOM/KaTeX 无损局部刷新及 G1—G4 静态硬编码守卫检查见[国际化验证说明](../docs/development/features/internationalization-framework/validation.md)（包含 `tests/i18n-guard.test.mjs`、`tests/i18n-runtime.test.mjs` 与 `internal/i18n/guard_test.go`）。
 
-本地快捷命令的注册合并、启动参数、独立进程、IPC 去重、真实 WebView2 列表及 Web CRUD 检查见[本地命令验证](../docs/development/features/local-quick-commands/validation.md)。交互终端和原生界面专项显式启用，不调用模型。
+本地快捷命令的启动参数、IPC 去重、真实 WebView2 列表及 Web CRUD 检查见[本地命令验证](../docs/development/features/local-quick-commands/validation.md)。当前统一执行规则以[统一命令验证](../docs/development/features/unified-command-runs/validation.md)为准，原生界面专项显式启用，不调用模型。
 
 命令列表和无匹配状态下 Esc 一次隐藏快捷窗口、重新呼出保留查询与输入法保护，见[命令模式 Esc 验证](../docs/development/features/command-mode-escape-hide/plan.md)。真实 WebView2 回归还记录连续隐藏/呼出的所有高度请求及中间帧，覆盖单项、多项滚动、空态和展开态，防止临时缩小再恢复造成裁切闪动。
 

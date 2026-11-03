@@ -25,16 +25,17 @@ type probeTask struct {
 }
 
 func inspect(c Command) fileStatus {
-	if c.Kind == "graph" && c.Graph != nil {
-		for _, n := range c.Graph.Nodes {
-			if n.Kind == "script" {
-				if status := inspect(nodeCommand(c, n)); status.state != "ready" {
-					return status
-				}
+	for _, node := range c.Graph.Nodes {
+		if node.Kind == "script" {
+			if status := inspectScript(nodeScript(node)); status.state != "ready" {
+				return status
 			}
 		}
-		return fileStatus{state: "ready"}
 	}
+	return fileStatus{state: "ready"}
+}
+
+func inspectScript(c ScriptSpec) fileStatus {
 	f, err := os.Stat(c.Script)
 	if errors.Is(err, os.ErrNotExist) {
 		return fileStatus{state: "missing", detailKey: "status.localcmd.missing"}
@@ -115,14 +116,11 @@ func (r *Registry) List(request wire.Request) wire.Response {
 			detail = i18n.T(i18n.Effective(), status.detailKey)
 		}
 		reply.Entries = append(reply.Entries, wire.Entry{ID: c.ID, Revision: c.Revision, Name: c.Name,
-			Aliases: c.Aliases, Description: c.Description, State: status.state, Detail: detail, DetailKey: status.detailKey, ExecutionMode: c.ExecutionMode})
-		if run := r.CurrentRun(c.ID); run != nil {
-			entry := &reply.Entries[len(reply.Entries)-1]
-			entry.RunID = run.ID
-			entry.Phase = run.Phase
-			entry.Result = run.Result
-			entry.Reason = run.Reason
-		}
+			Aliases: c.Aliases, Description: c.Description, State: status.state, Detail: detail, DetailKey: status.detailKey, AllowConcurrent: c.AllowConcurrent})
+		state := r.managed.Summary(c.ID)
+		entry := &reply.Entries[len(reply.Entries)-1]
+		entry.RunID, entry.Phase, entry.Result, entry.Reason = state.RunID, state.Phase, state.Result, state.Reason
+		entry.Active, entry.Failed, entry.Interrupted, entry.ActiveRunIDs = state.Active, state.Failed, state.Interrupted, state.ActiveRunIDs
 		encoded, _ := json.Marshal(reply)
 		if len(encoded) > 96*1024 {
 			reply.Entries = reply.Entries[:len(reply.Entries)-1]
@@ -164,20 +162,10 @@ func (r *Registry) Launch(ctx context.Context, id, revision string) wire.Respons
 	if r.closing {
 		return Failure(problem("unavailable", "err.app.node_stopping"))
 	}
-	if command.ExecutionMode == "managed" {
-		if r.managed == nil {
-			return Failure(problem("unsupported", "err.localcmd.managed_unavailable"))
-		}
-		_, err := r.managed.Start(command)
-		if err != nil {
-			return Failure(err)
-		}
-		return wire.Response{Started: true}
+	if r.managed == nil {
+		return Failure(problem("unsupported", "err.localcmd.managed_unavailable"))
 	}
-	if r.launch == nil {
-		return Failure(problem("unsupported", "err.localcmd.platform_unsupported"))
-	}
-	if err := r.launch(command); err != nil {
+	if _, err := r.managed.Start(command); err != nil {
 		return Failure(err)
 	}
 	return wire.Response{Started: true}

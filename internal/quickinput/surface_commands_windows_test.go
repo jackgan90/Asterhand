@@ -84,26 +84,26 @@ func TestNativeLocalCommandsWorkflow(t *testing.T) {
 	}
 	var starts atomic.Int32
 	var launchFails atomic.Bool
-	r := localcommands.Open(t.TempDir(), func(localcommands.Command) error {
-		starts.Add(1)
-		if launchFails.Load() {
-			return fmt.Errorf("测试启动失败：请检查脚本")
-		}
-		return nil
-	})
+	home := t.TempDir()
+	r := localcommands.Open(home)
+	manager := localcommands.NewRunManager(home, localcommands.NewPlatformBackend(), nil)
+	if err := r.ConfigureRuns(manager); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close(context.Background())
 	script := filepath.Join(t.TempDir(), "safe.ps1")
 	if err := os.WriteFile(script, []byte("exit 0"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	for i := range 12 {
 		catalog, _ := r.Snapshot()
-		c := localcommands.Command{Name: fmt.Sprintf("command%02d", i), Script: script, Arguments: []string{fmt.Sprint(i)}, Description: "测试脚本功能", Aliases: []string{fmt.Sprintf("别名%d", i)}}
+		c := localcommands.Command{Name: fmt.Sprintf("command%02d", i), Graph: commandTestGraph(script), AllowConcurrent: true, Description: "测试脚本功能", Aliases: []string{fmt.Sprintf("别名%d", i)}}
 		if i == 0 {
 			c.Aliases = []string{"备份"}
 		}
 		if i == 11 {
 			c.Name = "missing"
-			c.Script = filepath.Join(filepath.Dir(script), "missing.ps1")
+			c.Graph.Nodes[1].Script = filepath.Join(filepath.Dir(script), "missing.ps1")
 		}
 		if _, err := r.Save(localcommands.Mutation{Revision: catalog.Revision, Command: c}); err != nil {
 			t.Fatal(err)
@@ -115,7 +115,14 @@ func TestNativeLocalCommandsWorkflow(t *testing.T) {
 		case "list":
 			return r.List(request)
 		case "launch":
-			return r.Launch(ctx, request.ID, request.Revision)
+			if launchFails.Load() {
+				return commandswire.Response{Error: &commandswire.Error{Code: "unavailable", Message: "测试启动失败：请检查脚本"}}
+			}
+			reply := r.Launch(ctx, request.ID, request.Revision)
+			if reply.Started {
+				starts.Add(1)
+			}
+			return reply
 		case "settings":
 			opened <- request.ID
 		}
@@ -167,7 +174,8 @@ func TestNativeLocalCommandsWorkflow(t *testing.T) {
 	composerText(t, s, "/missing")
 	waitChatScript(t, s, `document.querySelectorAll('.command-option').length===1 && document.querySelector('.command-option').dataset.state==='missing'`)
 	evaluate(t, s, `document.querySelector('.command-option').click();true`)
-	waitChatScript(t, s, `document.querySelector('.command-error').textContent==='命令脚本缺失，请更新配置' && !document.querySelector('.command-error').hidden`)
+	evaluate(t, s, `window.expectedMissing='';import('./i18n.mjs').then(({t})=>window.expectedMissing=t('quickinput.commands_missing_script'));true`)
+	waitChatScript(t, s, `window.expectedMissing && document.querySelector('.command-error').textContent===window.expectedMissing && !document.querySelector('.command-error').hidden`)
 	captureComposer(t, s, "commands-missing-frost")
 	evaluate(t, s, `document.querySelector('.command-error').click();true`)
 	select {
@@ -184,7 +192,7 @@ func TestNativeLocalCommandsWorkflow(t *testing.T) {
 func checkCommandEscapeAndExpanded(t *testing.T, s *nativeSurface) {
 	t.Helper()
 	composerText(t, s, "/")
-	waitChatScript(t, s, `document.querySelector('#command-message').textContent==='' && document.querySelector('.command-option[data-state=missing] .command-error').textContent==='命令脚本缺失，请更新配置'`)
+	waitChatScript(t, s, `document.querySelector('#command-message').textContent==='' && document.querySelector('.command-option[data-state=missing] .command-error').textContent===window.expectedMissing`)
 	evaluate(t, s, `document.querySelector('#chat-expand').click();true`)
 	waitChatScript(t, s, `!document.querySelector('#chat-panel').hidden && !document.querySelector('#command-panel').hidden && document.querySelector('#command-list').clientHeight>=40`)
 	if got := evaluate(t, s, `document.querySelector('#command-panel').getBoundingClientRect().bottom<=document.querySelector('footer').getBoundingClientRect().top`); got != "true" {
@@ -192,7 +200,8 @@ func checkCommandEscapeAndExpanded(t *testing.T, s *nativeSurface) {
 	}
 	captureComposer(t, s, "commands-expanded-frost")
 	composerText(t, s, "/not-found")
-	waitChatScript(t, s, `document.querySelectorAll('.command-option').length===0 && document.querySelector('#command-empty').textContent==='未找到命令'`)
+	evaluate(t, s, `window.expectedNoMatch='';import('./i18n.mjs').then(({t})=>window.expectedNoMatch=t('quickinput.commands_no_match'));true`)
+	waitChatScript(t, s, `window.expectedNoMatch && document.querySelectorAll('.command-option').length===0 && document.querySelector('#command-empty').textContent===window.expectedNoMatch`)
 	pressCommandEscapeAndWaitHidden(t, s)
 	if got := evaluate(t, s, `document.querySelector('#input').value==='/not-found'`); got != "true" {
 		t.Fatal(got)
@@ -219,7 +228,7 @@ func TestNativeCommandEscapeHidesSurface(t *testing.T) {
 		if request.Action == "launch" {
 			launches.Add(1)
 		}
-		return commandswire.Response{Entries: []commandswire.Entry{{ID: model.ID(), Name: "safe", State: "ready", ExecutionMode: "unmanaged"}}}
+		return commandswire.Response{ManagedAvailable: true, Entries: []commandswire.Entry{{ID: model.ID(), Name: "safe", State: "ready"}}}
 	})
 	for _, query := range []string{"/", "/safe", "/not-found"} {
 		composerText(t, s, query)

@@ -121,6 +121,9 @@ func graphComplete(run *managedRun) bool {
 }
 
 func (m *RunManager) scheduleGraphLocked(run *managedRun) bool {
+	if m.recovering.Load() > 0 {
+		return false
+	}
 	for i := range run.record.Nodes {
 		n := &run.record.Nodes[i]
 		if n.Phase != "waiting" && n.Phase != "ready" {
@@ -191,7 +194,11 @@ func (m *RunManager) failGraphNodeLocked(run *managedRun, index int, reason stri
 	}
 	if run.record.Reason == "" && abortsGraph(run.record.Command.Graph.Nodes[index].FailurePolicy, n.Result) {
 		run.record.FailedNodeID = n.NodeID
-		_ = m.stopLocked(run, "node_failed")
+		cause := "node_failed"
+		if reason == "log_limit" {
+			cause = reason
+		}
+		_ = m.stopLocked(run, cause)
 		return
 	}
 	if run.record.Reason != "" {
@@ -255,6 +262,7 @@ func (m *RunManager) reconcileGraph(run *managedRun) {
 			}
 		}
 		if empty {
+			m.recovering.Add(-1)
 			run.mu.Lock()
 			for i := range run.record.Nodes {
 				n := &run.record.Nodes[i]

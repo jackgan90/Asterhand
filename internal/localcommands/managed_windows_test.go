@@ -23,7 +23,7 @@ func TestWindowsManagedOutputAndDescendantStop(t *testing.T) {
 	}
 	id := model.ID()
 	backend := NewPlatformBackend()
-	execution, err := backend.Start(Command{Script: script, ExecutionMode: "managed", Window: "background"}, id)
+	execution, err := backend.Start(ScriptSpec{Script: script}, id)
 	if err != nil {
 		t.Fatal(err)
 	}

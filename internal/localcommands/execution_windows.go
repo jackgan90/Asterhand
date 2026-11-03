@@ -35,6 +35,10 @@ type windowsExecution struct {
 	closed         bool
 }
 
+func (e *windowsExecution) Interaction() InteractionCapabilities {
+	return InteractionCapabilities{Input: InputNone, Output: OutputStreams}
+}
+
 func (e *windowsExecution) Stdout() io.ReadCloser { return e.stdout }
 func (e *windowsExecution) Stderr() io.ReadCloser { return e.stderr }
 func (e *windowsExecution) ForceStop() error {
@@ -114,7 +118,7 @@ func (windowsBackend) Reconcile(run string) (bool, error) {
 	return count == 0, err
 }
 
-func (windowsBackend) Start(c Command, run string) (Execution, error) {
+func (windowsBackend) Start(c ScriptSpec, run string) (Execution, error) {
 	token, err := userprocess.OrdinaryToken()
 	if err != nil {
 		return nil, err
@@ -173,7 +177,7 @@ func (windowsBackend) Start(c Command, run string) (Execution, error) {
 	return e, nil
 }
 
-func (e *windowsExecution) create(c Command, token windows.Token, in, out, stderr *os.File) error {
+func (e *windowsExecution) create(c ScriptSpec, token windows.Token, in, out, stderr *os.File) error {
 	handles := []windows.Handle{windows.Handle(in.Fd()), windows.Handle(out.Fd()), windows.Handle(stderr.Fd())}
 	for _, h := range handles {
 		if err := windows.SetHandleInformation(h, windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT); err != nil {
@@ -211,7 +215,6 @@ func (e *windowsExecution) create(c Command, token windows.Token, in, out, stder
 	if err != nil {
 		return err
 	}
-	c.Window = "background"
 	path, line, env, err := windowsInvocation(system, c, env)
 	if err != nil {
 		return err

@@ -23,7 +23,7 @@ func TestManagedRegressionSmallFramesWireBudget(t *testing.T) {
 	}
 	writer := &logFile{File: f}
 	for range 3000 {
-		if err = appendLog(writer, 0, []byte("x")); err != nil {
+		if err = appendGraphLog(writer, 1, 0, []byte("x")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -69,41 +69,30 @@ func TestManagedRegressionFailedClearCannotResurrect(t *testing.T) {
 	e := <-b.created
 	e.complete()
 	awaitFinished(t, m, c.ID)
-	original := m.store.root
 	blocked := filepath.Join(m.store.directory(c.ID), "deleting")
 	if err = os.Mkdir(blocked, 0700); err != nil {
 		t.Fatal(err)
 	}
-	c.ExecutionMode = "unmanaged"
-	_, err = r.Save(Mutation{Revision: mustSnapshot(t, r).Revision, Command: c})
-	if err == nil {
-		t.Fatal("expected marker write error")
+	if _, err = r.Delete(c.ID, mustSnapshot(t, r).Revision); err == nil {
+		t.Fatal("expected marker error")
 	}
-	t.Logf("clear error=%v", err)
-	disk := Open(filepath.Dir(original), nil)
+	disk := Open(filepath.Dir(m.store.root))
 	if len(mustSnapshot(t, disk).PendingCleanup) != 1 {
 		t.Fatal("cleanup intent not durable")
 	}
-	c.ExecutionMode = "managed"
-	if _, err = r.Save(Mutation{Revision: mustSnapshot(t, r).Revision, Command: c}); err == nil {
-		t.Fatal("enabled managed while cleanup still failed")
+	if _, err = r.Save(Mutation{Revision: mustSnapshot(t, r).Revision, Command: testCommand(t, "new")}); err == nil {
+		t.Fatal("saved while cleanup failed")
 	}
 	if err = os.Remove(blocked); err != nil {
 		t.Fatal(err)
 	}
-	c = mustSnapshot(t, r).Commands[0]
-	if c.ExecutionMode != "unmanaged" || m.Current(c.ID) != nil {
-		t.Fatal("unexpected state")
-	}
-	c.ExecutionMode = "managed"
-	saveCommand(t, r, c)
-	reopened := NewRunManager(filepath.Dir(original), b, nil)
-	rr := Open(filepath.Dir(original), nil)
-	if err = rr.ConfigureManaged(reopened); err != nil {
+	reopened := NewRunManager(filepath.Dir(m.store.root), b, nil)
+	rr := Open(filepath.Dir(m.store.root))
+	if err = rr.ConfigureRuns(reopened); err != nil {
 		t.Fatal(err)
 	}
 	if got := reopened.Current(c.ID); got != nil {
-		t.Errorf("deleted result resurrected: run=%s old=%s result=%s", got.ID, run.ID, got.Result)
+		t.Fatalf("deleted result resurrected: old=%s got=%+v", run.ID, got)
 	}
 }
 
@@ -123,18 +112,18 @@ func TestManagedRegressionRunningElapsedIsLive(t *testing.T) {
 
 func TestManagedLogWireBudgetIncludesLargeCommandSnapshot(t *testing.T) {
 	store := runStore{root: t.TempDir()}
-	c := Command{ID: "command1234567890", Script: strings.Repeat("&", 2048), Directory: strings.Repeat("&", 2048), Description: strings.Repeat("&", 512)}
+	c := Command{ID: "command1234567890", Graph: singleScriptGraph(strings.Repeat("&", 2048)), Description: strings.Repeat("&", 512)}
 	for range 16 {
 		c.Aliases = append(c.Aliases, strings.Repeat("&", 128))
 	}
-	c.Arguments = []string{strings.Repeat("x", 4000), strings.Repeat("x", 4000)}
-	record := RunRecord{ID: "execution123456789", Command: c}
+	c.Graph.Nodes[1].Arguments = []string{strings.Repeat("x", 4000), strings.Repeat("x", 4000)}
+	record := RunRecord{ID: "execution123456789", Command: c, LogFormat: 2, Nodes: []NodeRecord{{Kind: "script", NodeID: "script1234567890"}}}
 	f, err := store.prepare(record)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for range 4 {
-		if err = appendLog(f, 0, []byte(strings.Repeat("x", logBlockSize))); err != nil {
+		if err = appendGraphLog(f, 0, 0, []byte(strings.Repeat("x", logBlockSize))); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -160,13 +149,13 @@ func TestManagedLogWireBudgetIncludesLargeCommandSnapshot(t *testing.T) {
 
 func TestManagedLogFinalPageMarksEndAtBudget(t *testing.T) {
 	store := runStore{root: t.TempDir()}
-	record := RunRecord{ID: "execution123456789", Command: Command{ID: "command1234567890"}}
+	record := RunRecord{ID: "execution123456789", Command: Command{ID: "command1234567890"}, LogFormat: 2, Nodes: []NodeRecord{{Kind: "script", NodeID: "script1234567890"}}}
 	f, err := store.prepare(record)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {
-		if err = appendLog(f, 0, []byte(strings.Repeat("x", logBlockSize-1)+"\xe4")); err != nil {
+		if err = appendGraphLog(f, 0, 0, []byte(strings.Repeat("x", logBlockSize-1)+"\xe4")); err != nil {
 			t.Fatal(err)
 		}
 	}

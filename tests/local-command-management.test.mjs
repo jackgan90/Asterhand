@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {localCommands} from '../web/local-commands.mjs';
-import {domFixture, deferred, tick} from './web-fixture.mjs';
+import {domFixture, deferred, tick, descendants} from './web-fixture.mjs';
 import {setLocale, t as translate} from '../web/i18n.mjs';
 
 async function harness(t) {
   const dom = domFixture(), panel = dom.select('#local-commands'), form = dom.select('#command-form');
   const requests = [], selections = [], scope = {active:true};
-  for (const name of ['kind','name','aliases','description','script','directory','window','execution_mode','timeout','timeout_unit']) form.elements[name] = dom.document.createElement('input');
+  for (const name of ['name','aliases','description','allow_concurrent','timeout','timeout_unit']) form.elements[name] = dom.document.createElement('input');
   form.elements.namedItem = name => form.elements[name];
   panel.querySelectorAll = () => [...dom.elements.values()];
   form.querySelectorAll = () => Object.values(form.elements).filter(value => typeof value !== "function");
@@ -24,11 +24,14 @@ async function harness(t) {
   });
   t.after(() => {controller.stop(); delete globalThis.document;});
   await controller.open();
-  return {...dom, controller, requests, selections, scope, script:form.elements.script};
+  const graphFields=descendants(dom.select('#command-graph-editor'));
+  const browse=graphFields.find(el=>el.tagName==='BUTTON'&&el.textContent===translate('web.commands.browse'));
+  const script=graphFields.find(el=>el.className==='command-script-path').children[0];
+  return {...dom, controller, requests, selections, scope, script, browse};
 }
 
 test('Browse fills an absolute path without saving; cancellation preserves the typed path and releases controls', async t => {
-  const h = await harness(t), button = h.select('#command-browse');
+  const h = await harness(t), button = h.browse;
   h.script.value = 'C:\\original.ps1';
   button.fire('click'); button.fire('click');
   assert.equal(h.requests.length,1);
@@ -47,7 +50,7 @@ test('Browse fills an absolute path without saving; cancellation preserves the t
 test('ending the session cancels Browse and a late selection cannot change the form', async t => {
   const h = await harness(t);
   h.script.value = 'C:\\original.bat';
-  h.select('#command-browse').fire('click');
+  h.browse.fire('click');
   h.controller.stop();
   assert.equal(h.requests[0].signal.aborted,true);
   h.selections[0].resolve({path:'C:\\late.bat'}); await tick();
@@ -57,7 +60,7 @@ test('ending the session cancels Browse and a late selection cannot change the f
 test('graph validation reason and node context both relocalize in the command form', async t => {
   const h = await harness(t);
   setLocale('zh-CN');
-  h.select('#command-browse').fire('click');
+  h.browse.fire('click');
   h.selections[0].reject({code:'invalid_graph',messageKey:'err.localcmd.unsupported_ext',messageArgs:{graph_node:'build'}});
   await tick();
   for(const locale of ['zh-CN','en-US']){

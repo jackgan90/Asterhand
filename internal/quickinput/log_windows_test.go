@@ -30,7 +30,7 @@ func TestManagedLogWindowIndependentHost(t *testing.T) {
 	}
 	m := localcommands.NewRunManager(home, localcommands.NewPlatformBackend(), nil)
 	defer m.Close(context.Background())
-	c := localcommands.Command{ID: model.ID(), Name: "log_window", Script: script, Window: "background", ExecutionMode: "managed"}
+	c := localcommands.Command{ID: model.ID(), Name: "log_window", Graph: commandTestGraph(script)}
 	run, err := m.Start(c)
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +40,12 @@ func TestManagedLogWindowIndependentHost(t *testing.T) {
 		var err error
 		switch r.Action {
 		case "status":
-			value = m.Current(r.ID)
+			value = m.Run(r.ID, r.RunID)
+		case "runs":
+			data, _ := json.Marshal(m.Runs(r.ID))
+			return commandswire.Response{Runs: data}
+		case "stop_all":
+			err = m.StopAll(r.ID, r.RunIDs)
 		case "read_log", "tail_log":
 			cursor := r.Cursor
 			if r.Action == "tail_log" {
@@ -100,11 +105,17 @@ func TestManagedLogNativeSurfaceThemesAndText(t *testing.T) {
 	}
 	requests := make(chan hostipc.Message, 8)
 	log := &logSurface{id: model.ID(), send: func(m hostipc.Message) error { requests <- m; return nil }, routes: &sync.Map{}}
+	fixture := newNativeLogFixture(log.id)
 	s, err := startWindowSurface(t.TempDir(), nil, func(err error) { t.Errorf("surface: %v", err) }, nil, log)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
+	surfaceSync(t, s, func() {
+		if err := s.showLogWindow(nil); err != nil {
+			t.Error(err)
+		}
+	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
@@ -118,7 +129,7 @@ func TestManagedLogNativeSurfaceThemesAndText(t *testing.T) {
 				}
 				log.routes.Delete(m.CommandID)
 				log.inFlight.Add(-1)
-				reply := commandswire.Response{Run: json.RawMessage(`null`)}
+				reply := fixture.reply(*m.Command)
 				_ = s.dispatch(ctx, func() { _ = s.postJSON(map[string]any{"kind": "command_result", "id": m.CommandID, "response": reply}) })
 			}
 		}
@@ -143,12 +154,14 @@ func TestManagedLogNativeSurfaceThemesAndText(t *testing.T) {
 				}
 				time.Sleep(10 * time.Millisecond)
 			}
-			result := evaluate(t, s, `(()=>{const el=document.querySelector('#log-output');const span=document.createElement('span');span.textContent='<script>window.pwned=1</script> 中文';el.append(span);return {lang:document.documentElement.lang,theme:document.documentElement.dataset.theme,text:el.textContent,safe:!window.pwned,toolbar:document.querySelectorAll('.log-tools button').length}})()`)
+			waitChatScript(t, s, `document.querySelectorAll('.log-pane').length===1 && document.querySelector('.log-pane-output').textContent.includes('native-log')`)
+			result := evaluate(t, s, `(()=>{const el=document.querySelector('.log-pane-output');const span=document.createElement('span');span.textContent='<script>window.pwned=1</script> 中文';el.append(span);return {lang:document.documentElement.lang,theme:document.documentElement.dataset.theme,text:el.textContent,safe:!window.pwned,toolbar:document.querySelectorAll('.log-pane-tools button').length}})()`)
 			if !strings.Contains(result, `"safe":true`) || !strings.Contains(result, `"toolbar":4`) {
 				t.Fatal(result)
 			}
 			t.Log(result)
 		}
 	}
+	checkNativeMultiRunPanes(t, s, fixture)
 	checkNativeLogCodecs(t, s)
 }

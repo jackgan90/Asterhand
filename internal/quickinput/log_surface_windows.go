@@ -88,7 +88,7 @@ func (s *nativeSurface) logBridgeMessage(raw string) {
 		if !commandswire.ValidID(m.ID) || m.Command == nil || m.Command.Validate() != nil || m.Command.ID != s.log.id {
 			return
 		}
-		if m.Command.Action != "status" && m.Command.Action != "read_log" && m.Command.Action != "tail_log" && m.Command.Action != "stop" {
+		if m.Command.Action != "runs" && m.Command.Action != "stop_all" && m.Command.Action != "status" && m.Command.Action != "read_log" && m.Command.Action != "tail_log" && m.Command.Action != "stop" {
 			return
 		}
 		if s.log.inFlight.Add(1) > 4 {

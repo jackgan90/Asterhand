@@ -118,7 +118,7 @@ test('real pane controls preserve output and scroll position while translating s
   await pane.refresh();
   const output=descendants(pane.element).find(element=>element.className==='log-pane-output');
   const original=output.children[0];output.scrollTop=40;
-  const buttons=descendants(pane.element).filter(element=>element.tagName==='BUTTON');buttons[0].focus();
+  const buttons=descendants(pane.element).filter(element=>element.tagName==='BUTTON' && element.className!=='log-pane-stop');buttons[0].focus();
   setLocale('zh-CN');pane.relocalize();
   assert.equal(output.children[0],original);assert.equal(output.scrollTop,40);assert.equal(dom.document.activeElement,buttons[0]);
   assert.equal(buttons[0].textContent,t('common.command.first'));assert.equal(pane.element.dataset.state,'succeeded');
@@ -142,7 +142,7 @@ test('merged and node toolbar controls stay unchanged throughout automatic reads
     const pane=logPane({read:async()=>++calls===1?page([chunk('a','initial')],{start:100,next:200}):pending.promise,
       commandID:'command',record,nodeID,encoding:'utf-8'});
     subcase.after(()=>pane.dispose());await pane.refresh();
-    const buttons=descendants(pane.element).filter(element=>element.tagName==='BUTTON'),latest=buttons[3];
+    const buttons=descendants(pane.element).filter(element=>element.tagName==='BUTTON' && element.className!=='log-pane-stop'),latest=buttons[3];
     const writes=watchButtons(buttons);latest.focus();
     for(let cycle=0;cycle<3;cycle++){
       pending=deferred();const refresh=pane.refresh(),before=calls;
@@ -173,7 +173,7 @@ test('history navigation supersedes background reads and still blocks duplicate 
     return page([chunk('a','latest output')],{start:300,next:400});
   },commandID:'command',record:run,encoding:'utf-8'});
   tcase.after(()=>pane.dispose());
-  const buttons=descendants(pane.element).filter(element=>element.tagName==='BUTTON'),latest=buttons[3];
+  const buttons=descendants(pane.element).filter(element=>element.tagName==='BUTTON' && element.className!=='log-pane-stop'),latest=buttons[3];
   const initial=pane.refresh();assert.equal(latest.disabled,true,'initial loading must prevent duplicate actions');await initial;
   const refresh=pane.refresh();assert.equal(latest.disabled,false);
   buttons[0].onclick();await tick();

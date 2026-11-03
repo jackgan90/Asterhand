@@ -1,5 +1,7 @@
 # Asterhand · 星伴
 
+本地命令统一使用脚本图，可按命令开启多实例执行，日志按实例独立查看；实现与验证见[统一命令计划](docs/development/features/unified-command-runs/plan.md)。
+
 A personal agent system across your devices.
 
 Asterhand 让自己的设备通过自然语言协作。A 提交任务，B 用自己的 OpenClaw、DeepSeek 凭据和授权目录执行；任务与结果保存在 B，A 下线后 B 已接收的任务继续运行。
@@ -11,10 +13,10 @@ Asterhand 让自己的设备通过自然语言协作。A 提交任务，B 用自
 - 节点配对、远端任务、普通问答、取消、断线补读和重启后的人工对账。
 - Windows 原生启动入口与系统托盘；桌面图标可选创建，运行时可从托盘打开 Web 或退出节点。
 - Windows 全局快捷输入：默认 Ctrl+Alt+J 呼出多行文本面板，支持两种内置主题；在 Web「节点设置 → 快捷输入」自定义组合、检查占用并持久保存本机设置。
-- [本地快捷命令](docs/executors/local-commands.md)：在 Web 注册 bat/cmd/ps1，在快捷输入中用 `/` 按英文名或别名搜索并启动；支持托管/非托管、独立日志窗口、强制停止与可选超时，无需模型配置。
+- [本地快捷命令](docs/executors/local-commands.md)：在 Web 注册 bat/cmd/ps1，在快捷输入中用 `/` 按英文名或别名搜索并启动；统一脚本图与可选多实例、独立日志窗口、强制停止与可选超时，无需模型配置。
 - [本地脚本图](docs/executors/script-graphs.md)：命令可关联可编辑 DAG，按依赖串行/并行运行本机脚本；任一步骤失败停止整图，日志窗口支持合并输出、运行节点自动分屏和固定多选，每屏可独立翻页。
 - 每个节点使用自己的凭据和授权目录；Windows 使用当前用户 DPAPI 保护秘密，节点间使用 TLS 与固定证书。
-- 首版文件任务每节点一个执行槽、一个授权目录，文件最大 64 KiB；文件任务删除、模型或远程节点调用任意 shell、具体 coding harness 尚未提供。本地快捷命令由用户手动触发；非托管独立启动，托管执行随节点退出停止。
+- 首版文件任务每节点一个执行槽、一个授权目录，文件最大 64 KiB；文件任务删除、模型或远程节点调用任意 shell、具体 coding harness 尚未提供。本地快捷命令由用户手动触发；所有执行随节点退出停止。
 
 版本与支持边界见 [平台矩阵](docs/testing/platforms.md)。当前只发布 Windows 完整包；Linux/macOS 保留扩展接口，手机远程访问尚未验证。Web 默认只绑定本机 loopback，在各自设备打开。
 

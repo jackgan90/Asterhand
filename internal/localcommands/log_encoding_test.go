@@ -26,14 +26,14 @@ func TestLogPagesSeedRealDecoders(t *testing.T) {
 	for encoding, sample := range samples {
 		t.Run(encoding, func(t *testing.T) {
 			store := runStore{root: t.TempDir()}
-			record := RunRecord{ID: "execution123456789", Command: Command{ID: "command1234567890"}}
+			record := RunRecord{ID: "execution123456789", Command: Command{ID: "command1234567890"}, LogFormat: 2, Nodes: []NodeRecord{{Kind: "script", NodeID: "script1234567890"}}}
 			f, err := store.prepare(record)
 			if err != nil {
 				t.Fatal(err)
 			}
 			for _, b := range sample {
 				for stream := byte(0); stream < 2; stream++ {
-					if err = appendLog(f, stream, []byte{b}); err != nil {
+					if err = appendGraphLog(f, 0, stream, []byte{b}); err != nil {
 						t.Fatal(err)
 					}
 				}

@@ -23,7 +23,7 @@ type nodeLogFrame struct {
 
 func (s runStore) readNode(record RunRecord, nodeID string, cursor int64, before bool) (LogPage, error) {
 	index := slices.IndexFunc(record.Nodes, func(n NodeRecord) bool { return n.NodeID == nodeID && n.Kind == "script" })
-	if record.Command.Kind != "graph" || index < 0 {
+	if index < 0 {
 		return LogPage{}, problem("invalid", "err.localcmd.invalid_log_node")
 	}
 	record = logRecord(record)

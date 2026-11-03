@@ -3,7 +3,7 @@ import {node} from './ui.mjs';
 import {timeoutSeconds} from './command-run.mjs';
 import {copyGraph,newGraph,edgeIssue,graphIssue,removeGraphNode,graphLimits} from './graph-model.mjs';
 
-export function graphEditor({container,onChange,browse,getCommands}) {
+export function graphEditor({container,onChange,browse}) {
   let graph=null,selected='',locked=false,error=null;
   const labels=[],buttons=new Map(),argumentRows=[];
   const text=(tag,key,className)=>{const el=node(tag,t(key),className);labels.push([el,key]);return el;};
@@ -25,10 +25,8 @@ export function graphEditor({container,onChange,browse,getCommands}) {
   name.maxLength=128;script.placeholder='C:\\Scripts\\step.ps1';timeout.type='number';timeout.min='1';
   const path=node('div',null,'command-script-path'),pick=button('web.commands.browse');path.append(script,pick);
   const args=node('div'),addArg=button('web.commands.arg_add');
-  const templates=node('select'),copy=button('web.graph.copy');
-  const templateRow=node('div',null,'graph-copy');templateRow.append(label('web.graph.template',templates),copy);
   properties.append(title,label('web.graph.node_name',name),label('web.commands.script_label',path),label('web.commands.dir_label',directory),
-    label('web.graph.node_timeout',timeout),label('web.commands.args_label',args),addArg,templateRow);
+    label('web.graph.node_timeout',timeout),label('web.commands.args_label',args),addArg);
   const hint=text('p','web.graph.hint','graph-hint'),message=node('p',null,'graph-error');message.setAttribute('role','status');
   container.append(controls,hint,viewport,links,properties,message);
 
@@ -99,11 +97,9 @@ export function graphEditor({container,onChange,browse,getCommands}) {
     selected=id;const n=graph.nodes.find(n=>n.id===id);
     name.value=n.name;script.value=n.script??'';directory.value=n.directory??'';timeout.value=n.timeout_seconds??'';
     args.replaceChildren();argumentRows.length=0;for(const value of n.arguments??[])argument(value);
-    refreshTemplates();paint();
+    paint();
   }
-  function refreshTemplates(){
-    replaceOptions(templates,getCommands().filter(c=>c.kind!=='graph').map(c=>[c.id,c.name]));
-  }
+
   function applyLock(){
     const n=graph?.nodes.find(n=>n.id===selected);
     for(const el of container.querySelectorAll('button,input,select,textarea'))el.disabled=locked;
@@ -111,7 +107,6 @@ export function graphEditor({container,onChange,browse,getCommands}) {
     properties.disabled=locked||n?.kind!=='script';
     remove.disabled=locked||n?.kind!=='script';add.disabled=locked||(graph?.nodes.length??0)>=graphLimits.nodes;
     connect.disabled=locked||!target.value||n?.kind==='end';disconnect.disabled=locked||!graph?.edges.length;
-    copy.disabled=locked||!templates.value;
   }
   for(const [input,field] of [[name,'name'],[script,'script'],[directory,'directory']])input.oninput=()=>{
     if(locked)return;graph.nodes.find(n=>n.id===selected)[field]=input.value;changed();
@@ -131,12 +126,7 @@ export function graphEditor({container,onChange,browse,getCommands}) {
     if(!error){graph.edges.push({from:selected,to:target.value});onChange();}paint();
   };
   disconnect.onclick=()=>{if(!locked&&edgeList.value!==''){graph.edges.splice(Number(edgeList.value),1);changed();}};
-  copy.onclick=()=>{
-    const source=getCommands().find(c=>c.id===templates.value);if(locked||!source)return;
-    const n=graph.nodes.find(n=>n.id===selected);if(n.kind!=='script')return;
-    Object.assign(n,{name:source.name,script:source.script,arguments:[...(source.arguments??[])],directory:source.directory,timeout_seconds:source.timeout_seconds??null});
-    select(n.id);changed();
-  };
+
   const newID=()=>globalThis.crypto.randomUUID();
   return {
     load(value){graph=value?copyGraph(value):newGraph();if(!value)graph.nodes[1].name=t('web.graph.default_name',{index:1});error=null;for(const el of buttons.values())el.remove();buttons.clear();parallel.value=graph.parallelism;select(graph.nodes.find(n=>n.kind==='script').id);},
@@ -145,6 +135,6 @@ export function graphEditor({container,onChange,browse,getCommands}) {
       error=graphIssue(graph);paint();if(error)throw error;return copyGraph(graph);
     },
     setLocked(value){locked=value;applyLock();},
-    relocalize(){for(const [el,key] of labels)el.textContent=t(key);for(const row of argumentRows)row.remove.textContent=t('web.commands.arg_remove');refreshTemplates();paint();},
+    relocalize(){for(const [el,key] of labels)el.textContent=t(key);for(const row of argumentRows)row.remove.textContent=t('web.commands.arg_remove');paint();},
   };
 }

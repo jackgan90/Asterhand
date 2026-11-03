@@ -20,6 +20,9 @@ const logBlockSize = 16 * 1024
 const maxRunRecordBytes = 4 * 1024 * 1024
 
 type RunRecord struct {
+	Version        int          `json:"schema_version"`
+	RoundID        string       `json:"round_id"`
+	Sequence       uint64       `json:"sequence"`
 	Nodes          []NodeRecord `json:"nodes,omitempty"`
 	FailedNodeID   string       `json:"failed_node_id,omitempty"`
 	LogFormat      int          `json:"log_format,omitempty"`
@@ -58,7 +61,6 @@ type LogPage struct {
 type runStore struct{ root string }
 
 func (s runStore) directory(id string) string    { return filepath.Join(s.root, id) }
-func (s runStore) metadata(id string) string     { return filepath.Join(s.directory(id), "current.json") }
 func (s runStore) logPath(id, run string) string { return filepath.Join(s.directory(id), run+".log") }
 
 func (s runStore) save(r RunRecord) error {
@@ -69,7 +71,7 @@ func (s runStore) save(r RunRecord) error {
 	if len(b) > maxRunRecordBytes {
 		return problem("configuration", "err.localcmd.invalid_run")
 	}
-	return config.AtomicFile(s.metadata(r.Command.ID), b, 0600)
+	return config.AtomicFile(s.recordPath(r.Command.ID, r.ID), b, 0600)
 }
 
 // Prepare does not touch the old generation until its replacement is durable.
@@ -99,10 +101,6 @@ func (s runStore) prepare(r RunRecord) (*logFile, error) {
 
 // Each binary frame contains stream, UTC nanoseconds, byte length, then raw
 // bytes. A partial crash tail is visible as incomplete, never silently skipped.
-func appendLog(f *logFile, stream byte, data []byte) error {
-	return appendLogWithContext(f, &f.context, stream, data)
-}
-
 func appendLogWithContext(f *logFile, context *logContext, stream byte, data []byte) error {
 	var header [logHeaderSize]byte
 	header[0] = stream
@@ -272,8 +270,8 @@ func (s runStore) tailCursor(r RunRecord) (int64, error) {
 	return previousLogPage(f, info.Size())
 }
 
-func (s runStore) load(id string) (*RunRecord, error) {
-	f, err := os.Open(s.metadata(id))
+func (s runStore) loadRun(id, runID string) (*RunRecord, error) {
+	f, err := os.Open(s.recordPath(id, runID))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -286,28 +284,13 @@ func (s runStore) load(id string) (*RunRecord, error) {
 		return nil, err
 	}
 	var r RunRecord
-	if len(b) > maxRunRecordBytes || json.Unmarshal(b, &r) != nil || r.Command.ID != id || !wire.ValidID(r.ID) {
+	if len(b) > maxRunRecordBytes || json.Unmarshal(b, &r) != nil || r.Version != 1 || r.ID != runID || r.Command.ID != id || !wire.ValidID(r.ID) {
 		return nil, problem("configuration", "err.localcmd.invalid_run")
 	}
 	if err := validateGraphRecord(r); err != nil {
 		return nil, err
 	}
 	return &r, nil
-}
-
-func (s runStore) removeOtherLogs(id, current string) error {
-	files, err := os.ReadDir(s.directory(id))
-	if err != nil {
-		return err
-	}
-	for _, f := range files {
-		if filepath.Ext(f.Name()) == ".log" && f.Name() != current+".log" {
-			if err := os.Remove(filepath.Join(s.directory(id), f.Name())); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 func (s runStore) clear(id string) error {

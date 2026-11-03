@@ -2,6 +2,8 @@
 
 本地脚本图的依赖、失败/停止竞争、节点恢复、并行日志和编辑验证见[脚本图验证](../docs/development/features/local-script-graphs/validation.md)。
 
+脚本图日志模式、独立节点历史分页、稀疏输出和分屏交互验证见[日志体验验证](../docs/development/features/script-graph-log-experience/validation.md)。
+
 运行期中英双语切换、系统/浏览器语言分级匹配、独立语言更新与并发防覆盖、结构化错误延迟本地化、DOM/KaTeX 无损局部刷新及 G1—G4 静态硬编码守卫检查见[国际化验证说明](../docs/development/features/internationalization-framework/validation.md)（包含 `tests/i18n-guard.test.mjs`、`tests/i18n-runtime.test.mjs` 与 `internal/i18n/guard_test.go`）。
 
 本地快捷命令的注册合并、启动参数、独立进程、IPC 去重、真实 WebView2 列表及 Web CRUD 检查见[本地命令验证](../docs/development/features/local-quick-commands/validation.md)。交互终端和原生界面专项显式启用，不调用模型。

@@ -24,28 +24,22 @@ function dom() {
 const source = async name => (await fs.readFile(new URL('../internal/quickinput/assets/' + name, import.meta.url), 'utf8')).replace(/^import .*;$/gm, '');
 const labels = {applyI18n(){}, setLocale(){}, t:key=>key, getLocale:()=>'', localizeError:()=>'', localizeMessage:()=>'', formatDateTime:()=>'', runLabel:()=>'', reasonLabel:()=>'', modeLabel:()=>''};
 
-test('log navigation keeps polling when the refresh timer fires while awaiting a page', async () => {
-  const view = dom(), timers = new Map(); let sequence = 0, pending = null;
+test('log status polling continues independently of a pending pane read', async () => {
+  const view = dom(), timers = new Map(); let sequence = 0, statusCalls = 0, paneCalls = 0;
   const record = {run_id:'run1234567890abcd', phase:'running', elapsed_seconds:0, command:{name:'test'}};
-  const page = {start:0, previous:0, next:20, end:true, run:record, chunks:[]};
   const context = vm.createContext({...view, ...labels, logDecoder,
-    logGraphView:()=>({metadata(){},reset(){},append(){},follow(){},relocalize(){},chunkCount:0}),
+    logReadQueue:()=>()=>new Promise(()=>{}),logPane:()=>{},nodeName:()=>'',nodeLabel:()=>'',
+    logGraphView:()=>({metadata(){},refresh(){paneCalls++;return new Promise(()=>{});},setVisible(){},setEncoding(){},relocalize(){}}),
     webview2Bridge:()=>({send(){}, subscribe(){}}),
-    commandClient:()=>({call:async action => action === 'status' ? {run:record} : pending ? await pending : {log:page}}),
+    commandClient:()=>({call:async action => {assert.equal(action,'status');statusCalls++;return {run:record};}}),
     runBusy:r=>r?.phase !== 'finished', runStoppable:()=>true,
     setTimeout:fn=>{timers.set(++sequence,fn);return sequence;}, clearTimeout:id=>timers.delete(id),
   });
-  vm.runInContext(await source('command-log.mjs') + '\nglobalThis.test={refresh,navigate,setup(){epoch="1";commandID="command1234567890";}};', context);
+  vm.runInContext(await source('command-log.mjs') + '\nglobalThis.test={refresh,setup(){epoch="1";commandID="command1234567890";}};', context);
   context.test.setup(); await context.test.refresh(); assert.equal(timers.size,1);
-  let resolve;
-  pending = new Promise(done=>{resolve=done;});
-  const navigation = context.test.navigate(0);
   await [...timers.values()][0]();
-  resolve({log:page}); await navigation;
-  assert.equal(timers.size,1);
-  pending = null;
   await [...timers.values()][0]();
-  assert.equal(timers.size,1);
+  assert.equal(timers.size,1);assert.equal(statusCalls,3);assert.equal(paneCalls,3);
 });
 
 test('keyboard selection refreshes launch availability even when list rendering is cached', async () => {

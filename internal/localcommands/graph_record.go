@@ -53,6 +53,18 @@ func publicRun(record RunRecord) RunRecord {
 	return record
 }
 
+// Log pages retain graph identity and state, without private execution IDs.
+func logRecord(record RunRecord) RunRecord {
+	record = publicRun(record)
+	if record.Command.Kind == "graph" {
+		record.Nodes = cloneNodeRecords(record.Nodes)
+		for i := range record.Nodes {
+			record.Nodes[i].RunID = ""
+		}
+	}
+	return record
+}
+
 func validateGraphRecord(r RunRecord) error {
 	invalid := func() error { return problem("configuration", "err.localcmd.invalid_run") }
 	if r.Command.Kind != "graph" {

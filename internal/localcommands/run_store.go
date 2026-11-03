@@ -125,14 +125,7 @@ func appendLogWithContext(f *logFile, context *logContext, stream byte, data []b
 }
 
 func (s runStore) read(r RunRecord, cursor int64) (LogPage, error) {
-	if r.Command.Kind == "graph" {
-		// Log rendering needs graph-node IDs, not platform execution IDs. Keep
-		// those in status/durable records and reserve page space for a full frame.
-		r.Nodes = cloneNodeRecords(r.Nodes)
-		for i := range r.Nodes {
-			r.Nodes[i].RunID = ""
-		}
-	}
+	r = logRecord(r)
 	page := LogPage{Run: &r, Chunks: []LogChunk{}, Next: cursor, Start: cursor}
 	f, err := os.Open(s.logPath(r.Command.ID, r.ID))
 	if err != nil {

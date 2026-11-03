@@ -21,6 +21,8 @@ type Request struct {
 	Sequence uint64 `json:"sequence,omitempty"`
 	RunID    string `json:"run_id,omitempty"`
 	Cursor   int64  `json:"cursor,omitempty"`
+	NodeID   string `json:"node_id,omitempty"`
+	Before   bool   `json:"before,omitempty"`
 }
 
 func (r Request) Validate() error {
@@ -38,6 +40,12 @@ func (r Request) Validate() error {
 		valid = ValidID(r.ID) && ValidID(r.RunID) && r.Cursor >= 0 && r.Revision == "" && r.Sequence == 0 && r.Offset == 0 && r.Catalog == ""
 	}
 	if r.Action != "read_log" && r.Cursor != 0 || r.Action != "read_log" && r.Action != "stop" && r.Action != "tail_log" && r.RunID != "" {
+		valid = false
+	}
+	if r.NodeID != "" && (!ValidID(r.NodeID) || r.Action != "read_log" && r.Action != "tail_log") {
+		valid = false
+	}
+	if r.Before && (r.Action != "read_log" || r.NodeID == "") {
 		valid = false
 	}
 	if !valid {

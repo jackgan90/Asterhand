@@ -23,6 +23,7 @@
 ## 其他入口
 
 - [本地脚本图计划](development/features/local-script-graphs/plan.md)、[脚本图设计](executors/script-graphs.md)、[验证说明](development/features/local-script-graphs/validation.md)：快捷命令关联本机静态 DAG、串并行依赖、失败停止、节点日志与图编辑；工程验证、独立审计复审及本机用户验收通过。
+- [脚本图编辑与日志体验](development/features/script-graph-log-experience/plan.md)、[验证说明](development/features/script-graph-log-experience/validation.md)：Start/End 隐藏脚本设置；单入口日志多分屏、独立历史翻页与状态颜色；工程验证及本机用户验收通过。
 
 - [日志窗口快速显示与同屏定位](development/features/log-window-responsiveness-and-placement/plan.md)、[验证说明](development/features/log-window-responsiveness-and-placement/validation.md)：关闭复用、加载/失败反馈、宿主恢复和输入框所在屏幕定位（工程验证、独立审计复审及本机用户验收通过）。
 

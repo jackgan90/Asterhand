@@ -107,6 +107,7 @@ export function graphEditor({container,onChange,browse,getCommands}) {
   function applyLock(){
     const n=graph?.nodes.find(n=>n.id===selected);
     for(const el of container.querySelectorAll('button,input,select,textarea'))el.disabled=locked;
+    properties.hidden=n?.kind!=='script';
     properties.disabled=locked||n?.kind!=='script';
     remove.disabled=locked||n?.kind!=='script';add.disabled=locked||(graph?.nodes.length??0)>=graphLimits.nodes;
     connect.disabled=locked||!target.value||n?.kind==='end';disconnect.disabled=locked||!graph?.edges.length;

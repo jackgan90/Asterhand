@@ -431,6 +431,17 @@ func (m *RunManager) finishLocked(run *managedRun, evidence ExitEvidence) {
 }
 
 func (m *RunManager) Read(id, runID string, cursor int64) (LogPage, error) {
+	return m.readLog(id, runID, "", cursor, false)
+}
+
+func (m *RunManager) ReadNode(id, runID, nodeID string, cursor int64, before bool) (LogPage, error) {
+	if !wire.ValidID(nodeID) {
+		return LogPage{}, problem("invalid", "err.localcmd.invalid_log_node")
+	}
+	return m.readLog(id, runID, nodeID, cursor, before)
+}
+
+func (m *RunManager) readLog(id, runID, nodeID string, cursor int64, before bool) (LogPage, error) {
 	if !wire.ValidID(id) || !wire.ValidID(runID) || cursor < -1 {
 		return LogPage{}, problem("invalid", "err.localcmd.invalid_log_cursor")
 	}
@@ -444,6 +455,9 @@ func (m *RunManager) Read(id, runID string, cursor int64) (LogPage, error) {
 	defer run.mu.Unlock()
 	if run.record.ID != runID {
 		return LogPage{}, problem("conflict", "err.localcmd.run_changed")
+	}
+	if nodeID != "" {
+		return m.store.readNode(m.snapshotLocked(run), nodeID, cursor, before)
 	}
 	if cursor == -1 {
 		var err error

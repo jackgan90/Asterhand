@@ -124,7 +124,7 @@ func (a *App) commandCall(ctx context.Context, request commandswire.Request) com
 		if request.Action == "tail_log" {
 			cursor = -1
 		}
-		page, err := a.Commands.ReadLog(request.ID, request.RunID, cursor)
+		page, err := a.Commands.ReadLog(request.ID, request.RunID, cursor, request.NodeID, request.Before)
 		if err != nil {
 			return localcommands.Failure(err)
 		}

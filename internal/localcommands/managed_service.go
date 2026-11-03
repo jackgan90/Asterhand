@@ -54,9 +54,12 @@ func (r *Registry) RunStates() map[string]wire.Entry {
 
 func (r *Registry) ManagedAvailable() bool          { return r.managed.Available() }
 func (r *Registry) CurrentRun(id string) *RunRecord { return r.managed.Current(id) }
-func (r *Registry) ReadLog(id, run string, cursor int64) (LogPage, error) {
+func (r *Registry) ReadLog(id, run string, cursor int64, node string, before bool) (LogPage, error) {
 	if r.managed == nil {
 		return LogPage{}, problem("unsupported", "err.localcmd.managed_unavailable")
+	}
+	if node != "" {
+		return r.managed.ReadNode(id, run, node, cursor, before)
 	}
 	return r.managed.Read(id, run, cursor)
 }

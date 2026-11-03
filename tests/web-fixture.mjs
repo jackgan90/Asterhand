@@ -21,7 +21,9 @@ export class Element extends EventTarget {
   }
   replaceChildren(...elements) { this.children = []; if (this.tagName === "SELECT") this.value = ""; this.append(...elements); }
   remove(){if(this.parentElement)this.parentElement.children=this.parentElement.children.filter(child=>child!==this);this.parentElement=null;}
-  querySelectorAll(selector){const tags=selector.split(',').map(tag=>tag.trim().toUpperCase());return descendants(this).filter(el=>tags.includes(el.tagName));}
+  querySelectorAll(selector){return descendants(this).filter(el=>selector.split(',').some(part=>part.trim().startsWith('.')?(el.className||'').split(' ').includes(part.trim().slice(1)):el.tagName===part.trim().toUpperCase()));}
+  insertBefore(element,before){element.remove();const index=before?this.children.indexOf(before):this.children.length;this.children.splice(index,0,element);element.parentElement=this;}
+  contains(element){return element===this||descendants(this).includes(element);}
   setPointerCapture() {}
   setAttribute(key, value) { this.attributes[key] = value; }
   getAttribute(key) { return this.attributes[key] ?? null; }

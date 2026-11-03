@@ -4,6 +4,7 @@ import {newGraph,graphIssue,edgeIssue,removeGraphNode} from '../web/graph-model.
 import {graphEditor} from '../web/graph-editor.mjs';
 import {logDecoder} from '../internal/quickinput/assets/log-model.mjs';
 import {logGraphView} from '../internal/quickinput/assets/log-graph.mjs';
+import {nodeState,nodeActive} from '../internal/quickinput/assets/log-node.mjs';
 import {setLocale,t} from '../web/i18n.mjs';
 import {setLocale as setLogLocale} from '../internal/quickinput/assets/i18n.mjs';
 import {domFixture,descendants} from './web-fixture.mjs';
@@ -28,10 +29,17 @@ test('graph editor preserves live inputs across language changes and blocks muta
   const editor=graphEditor({container,onChange:()=>changes++,browse:apply=>apply('F:\\next.ps1'),getCommands:()=>[]});
   editor.load(validGraph());
   const inputs=descendants(container).filter(el=>el.tagName==='INPUT');
+  const properties=descendants(container).find(el=>el.tagName==='FIELDSET');
+  assert.equal(properties.hidden,false);
   const name=inputs.find(el=>el.value==='compile');name.value='未保存的新名称';name.setSelectionRange(2,4);name.focus();name.fire('input');
   setLocale('en-US');editor.relocalize();
   assert.equal(name.value,'未保存的新名称');assert.equal(name.selectionStart,2);assert.equal(dom.document.activeElement,name);
   assert.equal(editor.read().nodes[1].name,name.value);
+  const start=descendants(container).find(el=>el.dataset.kind==='start');start.fire('click');
+  assert.equal(properties.hidden,true);
+  const end=descendants(container).find(el=>el.dataset.kind==='end');end.fire('click');assert.equal(properties.hidden,true);
+  const script=descendants(container).find(el=>el.dataset.kind==='script');script.fire('click');
+  assert.equal(properties.hidden,false);assert.equal(name.value,'未保存的新名称');
   editor.setLocked(true);
   const before=changes,add=descendants(container).find(el=>el.textContent===t('web.graph.add'));add.fire('click');
   assert.equal(changes,before);assert.equal(editor.read().nodes.length,3);
@@ -51,18 +59,42 @@ test('graph decoders isolate nodes as well as stdout and seed new nodes on incre
   assert.equal(decoder.decode(c('a','stdout',first)).text,'中');
 });
 
-test('parallel log panes filter by node and changing run clears old selections and buffers',tcase=>{
+test('log modes keep fixed selections, follow active nodes and preserve mounted panes across state and locale changes',tcase=>{
   const dom=domFixture();globalThis.document=dom.document;tcase.after(()=>delete globalThis.document);setLogLocale('en-US');
-  const byID=id=>dom.select('#'+id),output=byID('log-output');
-  byID('log-node-left').tagName='SELECT';byID('log-node-right').tagName='SELECT';
-  const view=logGraphView({byID,output,onPause(){}});
-  const nodes=['a','b'].map(node_id=>({node_id,name:node_id,kind:'script',phase:'running',elapsed_seconds:0}));
-  view.metadata({run_id:'first',command:{kind:'graph'},nodes});
-  view.append([{node_id:'a',stream:'stdout',text:'alpha'},{node_id:'b',stream:'stderr',text:'beta'}]);
-  const left=byID('log-node-left'),right=byID('log-node-right');left.value='a';right.value='b';left.fire('change');right.fire('change');
-  const texts=el=>descendants(el).map(child=>child.textContent).filter(Boolean).join('');
-  assert.ok(texts(output).includes('alpha'));assert.ok(!texts(output).includes('beta'));
-  assert.ok(texts(byID('log-output-right')).includes('beta'));assert.ok(!texts(byID('log-output-right')).includes('alpha'));
-  setLogLocale('zh-CN');view.relocalize();assert.equal(left.value,'a');assert.equal(right.value,'b');
-  view.reset();view.metadata({run_id:'second',command:{kind:'graph'},nodes});assert.equal(left.value,'');assert.equal(right.value,'');assert.equal(view.chunkCount,0);
+  const byID=id=>dom.select('#'+id),created=[];
+  const view=logGraphView({byID,createPane:id=>{
+    const element=dom.document.createElement('section');element.dataset.node=id;
+    const pane={element,metadata(){},refresh(){},setVisible(){},setEncoding(){},relocalize(){},dispose(){element.remove();pane.disposed=true;}};
+    created.push(pane);return pane;
+  }});
+  const nodes=['a','b','c'].map(node_id=>({node_id,name:node_id,kind:'script',phase:'running',elapsed_seconds:0}));
+  nodes[2].phase='ready';nodes.unshift({node_id:'start',kind:'start',phase:'finished',result:'succeeded'});
+  const record={run_id:'first',command:{kind:'graph'},nodes};
+  const ids=()=>byID('log-columns').children.map(el=>el.dataset.node);
+  view.metadata(record);assert.deepEqual(ids(),['']);
+  const active=byID('log-view-active');active.checked=true;active.fire('change');assert.deepEqual(ids(),['a','b']);
+  const b=byID('log-columns').children[1];b.scrollTop=75;
+  nodes[1].phase='draining';nodes[2].phase='stopping';view.metadata(record);assert.deepEqual(ids(),['a','b']);
+  nodes[1].phase='finished';nodes[1].result='succeeded';nodes[3].phase='starting';view.metadata(record);
+  assert.deepEqual(ids(),['b','c']);assert.equal(byID('log-columns').children[0],b);assert.equal(b.scrollTop,75);
+  const inputs=descendants(byID('log-node-options')).filter(el=>el.tagName==='INPUT');
+  assert.equal(inputs.length,3);inputs[0].checked=true;inputs[0].fire('change');
+  assert.equal(active.checked,false);assert.deepEqual(ids(),['a']);
+  inputs[1].checked=true;inputs[1].fire('change');assert.deepEqual(ids(),['a','b']);
+  nodes[2].phase='finished';nodes[2].result='interrupted';view.metadata(record);assert.deepEqual(ids(),['a','b']);
+  const fixed=byID('log-columns').children[0];inputs[0].focus();setLogLocale('zh-CN');view.relocalize();
+  assert.equal(byID('log-columns').children[0],fixed);assert.equal(dom.document.activeElement,inputs[0]);assert.equal(inputs[0].checked,true);
+  inputs[0].checked=false;inputs[0].fire('change');inputs[1].checked=false;inputs[1].fire('change');
+  assert.deepEqual(ids(),[]);assert.equal(byID('log-empty').hidden,false);assert.equal(byID('log-view-all').checked,false);
+  nodes[3].phase='finished';nodes[3].result='failed';active.checked=true;active.fire('change');assert.deepEqual(ids(),[]);
+  view.metadata({...record,run_id:'second'});assert.deepEqual(ids(),['']);assert.equal(byID('log-view-all').checked,true);
+  assert.ok(created.filter(pane=>pane.disposed).length>=4);
+});
+
+test('node states distinguish terminal results and retain stopping and draining as active',()=>{
+  for(const state of ['waiting','ready','starting','running','stopping','draining'])assert.equal(nodeState({phase:state}),state);
+  for(const result of ['succeeded','failed','interrupted','skipped'])assert.equal(nodeState({phase:'finished',result}),result);
+  assert.equal(nodeState({phase:'finished',result:'future_state'}),'unknown');
+  assert.equal(nodeActive({kind:'script',phase:'draining'}),true);assert.equal(nodeActive({kind:'script',phase:'stopping'}),true);
+  assert.equal(nodeActive({kind:'script',phase:'ready'}),false);assert.equal(nodeActive({kind:'end',phase:'running'}),false);
 });

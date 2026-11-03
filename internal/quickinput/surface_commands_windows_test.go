@@ -193,14 +193,67 @@ func checkCommandEscapeAndExpanded(t *testing.T, s *nativeSurface) {
 	captureComposer(t, s, "commands-expanded-frost")
 	composerText(t, s, "/not-found")
 	waitChatScript(t, s, `document.querySelectorAll('.command-option').length===0 && document.querySelector('#command-empty').textContent==='未找到命令'`)
-	evaluate(t, s, `document.querySelector('#input').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));true`)
-	waitChatScript(t, s, `document.querySelector('#command-panel').hidden`)
+	pressCommandEscapeAndWaitHidden(t, s)
 	if got := evaluate(t, s, `document.querySelector('#input').value==='/not-found'`); got != "true" {
 		t.Fatal(got)
 	}
+	surfaceSync(t, s, func() { s.showContent(true); uiDLL.NewProc("ShowWindow").Call(s.hwnd.Load(), 4) })
+	waitChatScript(t, s, `!document.querySelector('#command-panel').hidden`)
 	composerText(t, s, "/plain")
 	evaluate(t, s, `document.querySelector('#command-as-text').click();true`)
 	// The fake surface has no model client: quoting must still be a normal
 	// draft operation; any failed chat send retains its original quoted body.
 	waitChatScript(t, s, `document.querySelector('#command-panel').hidden`)
+}
+
+func TestNativeCommandEscapeHidesSurface(t *testing.T) {
+	if os.Getenv("ASTERHAND_CHAT_GATE") != "1" {
+		t.Skip("explicit native command test required")
+	}
+	if os.Getenv("ASTERHAND_CHAT_GATE_CHILD") != "1" {
+		runChatGateAtMedium(t)
+		return
+	}
+	var launches atomic.Int32
+	s := commandSurface(t, func(_ context.Context, request commandswire.Request) commandswire.Response {
+		if request.Action == "launch" {
+			launches.Add(1)
+		}
+		return commandswire.Response{Entries: []commandswire.Entry{{ID: model.ID(), Name: "safe", State: "ready", ExecutionMode: "unmanaged"}}}
+	})
+	for _, query := range []string{"/", "/safe", "/not-found"} {
+		composerText(t, s, query)
+		count := 1
+		if query == "/not-found" {
+			count = 0
+		}
+		waitChatScript(t, s, fmt.Sprintf(`!document.querySelector('#command-panel').hidden && document.querySelectorAll('.command-option').length===%d`, count))
+		if query == "/" {
+			evaluate(t, s, `(()=>{const input=document.querySelector('#input');for(const fields of [{isComposing:true},{keyCode:229}]) input.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true,...fields}));input.dispatchEvent(new CompositionEvent('compositionstart'));input.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));return true})()`)
+			if !experienceState(t, s).visible {
+				t.Fatal("IME Escape hid the command window")
+			}
+			evaluate(t, s, `document.querySelector('#input').dispatchEvent(new CompositionEvent('compositionend'));true`)
+		}
+		pressCommandEscapeAndWaitHidden(t, s)
+		if got := evaluate(t, s, fmt.Sprintf(`document.querySelector('#input').value==='%s'`, query)); got != "true" {
+			t.Fatal("Escape changed the command query", got)
+		}
+		surfaceSync(t, s, func() { s.showContent(true); uiDLL.NewProc("ShowWindow").Call(s.hwnd.Load(), 4) })
+		waitChatScript(t, s, `!document.querySelector('#command-panel').hidden`)
+	}
+	if launches.Load() != 0 {
+		t.Fatal("Escape launched a command")
+	}
+}
+
+func pressCommandEscapeAndWaitHidden(t *testing.T, s *nativeSurface) {
+	t.Helper()
+	evaluate(t, s, `document.querySelector('#input').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));true`)
+	for deadline := time.Now().Add(time.Second); experienceState(t, s).visible; {
+		if time.Now().After(deadline) {
+			t.Fatal("one Escape must hide the entire native window in command mode")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

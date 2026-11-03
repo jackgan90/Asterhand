@@ -87,6 +87,12 @@ export function inputEditor(bridge) {
   });
   listen(document, "dragover", event => event.preventDefault());
   listen(document, "drop", event => event.preventDefault());
+  function setVisible(value) {
+    // Restore command content before measuring; stop layout before hiding it.
+    if (!value) layout.setVisible(false);
+    commands.setVisible(value);
+    if (value) layout.setVisible(true);
+  }
   const unsubscribeLocale = onLocaleChange(() => {
     applyI18n(document);
     relocalizeStatus();
@@ -109,8 +115,8 @@ export function inputEditor(bridge) {
       case "layout_applied":
         if (message.generation === generation) layout.applied(message.id, message.height);
         break;
-      case "visibility": layout.setVisible(message.visible); break;
-      case "focus": layout.setVisible(true); input.focus(); break;
+      case "visibility": setVisible(message.visible); break;
+      case "focus": setVisible(true); input.focus(); break;
       case "snapshot": pendingSnapshot = message.id; if (!composing) commit(); break;
       case "error": setStatusHostError(message); break;
     }

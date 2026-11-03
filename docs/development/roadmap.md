@@ -6,6 +6,7 @@
 
 | 能力 | 设计与维护入口 |
 |---|---|
+| 命令模式下 Esc 一次隐藏整个快捷窗口，保留查询和输入法保护，连续呼出不先缩小再撑大（含中间帧的工程验证及本机用户验收通过） | [命令模式 Esc](features/command-mode-escape-hide/plan.md) |
 | 日志后台补读保留分页按钮文字、可用状态和焦点，主动翻页优先于在途自动读取（工程验证及本机用户验收通过） | [日志工具栏稳定性](features/log-toolbar-refresh-stability/plan.md) |
 | 快捷输入按前台状态处理快捷键：前台隐藏，失焦/遮挡或最小化后跟随当前工作屏幕恢复激活（工程验证及本机用户验收通过） | [快捷键焦点修复](features/quick-input-shortcut-focus/plan.md) |
 | 普通消息发送、异常气泡与独立停止回复（工程验证及本机用户验收通过） | [聊天发送与停止回复](features/chat-send-intent/plan.md) |

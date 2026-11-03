@@ -50,9 +50,11 @@ go test ./internal/quickinput -run '^TestNativeLocalCommands(Workflow|Scrollbar)
 Remove-Item Env:ASTERHAND_CHAT_GATE, Env:ASTERHAND_COMPOSER_CAPTURE
 ```
 
-[原生流程测试](../../../../internal/quickinput/surface_commands_windows_test.go)检查十二项列表的溢出滚动、高亮与键盘滚入、一项过滤后无滚动条、中文别名、双主题、合成 IME 保护、鼠标及多次 Enter、按键长按抑制、缺失标记/提示/配置定位、无匹配、Esc 和展开态几何。截图用于布局复核，合成事件不替代实体输入法和鼠标体验。
+[原生流程测试](../../../../internal/quickinput/surface_commands_windows_test.go)检查十二项列表的溢出滚动、高亮与键盘滚入、一项过滤后无滚动条、中文别名、双主题、合成 IME 保护、鼠标及多次 Enter、按键长按抑制、缺失标记/提示/配置定位、无匹配、Esc 一次隐藏整个窗口、重新呼出保留查询及展开态几何；`TestNativeCommandEscapeHidesSurface` 单独覆盖 `/`、匹配和无匹配时的原生隐藏与输入法保护，运行命令见[命令模式 Esc 计划](../command-mode-escape-hide/plan.md)。截图用于布局复核，合成事件不替代实体输入法和鼠标体验。
 
 其中[行内错误检查](../../../../internal/quickinput/surface_commands_feedback_windows_test.go)验证成功无提示、错误在行内右侧且不增高、深浅主题可辨认、跨刷新/过滤/收起保留，以及其他命令成功不清除、本命令成功清除。
+
+[连续呼回逐帧检查](../../../../internal/quickinput/surface_command_reopen_windows_test.go)在单项、多项滚动、无匹配和展开态反复隐藏/呼出，记录每条高度请求及显示后的连续帧。要求未变化的缓存内容不产生临时小高度，任一中间帧均不裁切命令列表或底栏；最终恢复正确高度仍不足以通过该回归。
 
 [布局逐帧测试](../../../../internal/quickinput/surface_commands_scrollbar_windows_test.go)通过[页面夹具](../../../../tests/fixtures/command-scrollbar-regression.js)暂停原生尺寸请求，检查空注册库、一项、三项、十五项、重开和无匹配时的等待帧与尺寸就绪帧。输入区取得焦点，逐帧比较展开前后的高度与下边界，确保焦点下划线不短暂上跳；同时检查临时滚动条。测试还复现旧缩小请求晚于新展开请求的交错，并确认限高后仍能滚动且底栏可见。该测试检查真实 WebView2 的几何和样式，不用固定延时作为产品中的尺寸确认依据。
 
@@ -68,7 +70,7 @@ Remove-Item Env:ASTERHAND_CHAT_GATE, Env:ASTERHAND_COMPOSER_CAPTURE
 4. 在安装候选中关闭模型配置，呼出快捷输入，输入 `/`，用键盘/鼠标启动本地脚本。确认无模型请求；普通聊天仍按自身配置状态工作。
 5. 用带延时并写入标记的受控脚本连续启动多次；隐藏/重开输入框、退出节点后标记仍按脚本预期产生。后台无交互窗口；终端可显示输出并输入。脚本自行收尾。
 6. 删除原脚本等待状态更新，应保留红色条目，执行显示指定缺失提示；打开配置定位该命令，更换路径后恢复。工作目录错误单独提示；启动回执未知时不自动重试。
-7. 实体中文输入法选词、第二次 Esc 隐藏、列表滚动条拖动、长别名、深浅主题、屏幕边缘及不同 DPI 下操作。安装后的体验与自动化工程验证分别记录。
+7. 实体中文输入法选词时 Esc 优先取消候选；非组合时在 `/`、命中列表及无匹配空态各按一次 Esc，整个快捷窗口隐藏，重新呼出保留查询并恢复列表。检查列表滚动条拖动、长别名、深浅主题、屏幕边缘及不同 DPI 下操作。安装后的体验与自动化工程验证分别记录。
 
 ## 记录与支持边界
 

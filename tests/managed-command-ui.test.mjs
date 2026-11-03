@@ -51,13 +51,15 @@ test('keyboard selection refreshes launch availability even when list rendering 
     setTimeout(){}, clearTimeout(){},
   });
   const code = (await source('command-ui.mjs')).replace('export function commandPanel','function commandPanel')
-    .replace('return {changed: textChanged, key, submit, relocalize, dispose};',
+    .replace('return {changed: textChanged, key, submit, setVisible, relocalize, dispose};',
       'return {key,paint,setup(values){entries=values;ready=true;visible=true;managedAvailable=true;paint();}};');
   vm.runInContext(code + '\nglobalThis.factory=commandPanel;',context);
   const panel = context.factory({subscribe(){return ()=>{};}}, {input:view.get('input'), post(){}, changed(){}, sendText(){}});
   panel.setup([{id:'one',name:'running',phase:'running',run_id:'123',execution_mode:'managed',state:'ready'},
     {id:'two',name:'idle',execution_mode:'unmanaged',state:'ready'}]);
   assert.equal(view.get('command-run').disabled,true);
+  assert.equal(panel.key({key:'Escape'}),false,'command mode must leave Escape to the editor hide action');
+  assert.equal(view.get('command-panel').hidden,false,'Escape must not independently dismiss the command list');
   panel.key({key:'ArrowDown'}); panel.paint();
   assert.equal(view.get('command-run').disabled,false);
   panel.key({key:'ArrowUp'}); panel.paint();
@@ -78,7 +80,7 @@ test('log open errors survive automatic refresh and clear on the next explicit o
     setTimeout(){},clearTimeout(){},
   });
   const code=(await source('command-ui.mjs')).replace('export function commandPanel','function commandPanel')
-    .replace('return {changed: textChanged, key, submit, relocalize, dispose};',
+    .replace('return {changed: textChanged, key, submit, setVisible, relocalize, dispose};',
       'return {control,refresh,setup(){ready=true;visible=true;}};');
   vm.runInContext(code+'\nglobalThis.factory=commandPanel;',context);
   const panel=context.factory({subscribe(){return ()=>{};}},{input:view.get('input'),post(){},changed(){},sendText(){}});

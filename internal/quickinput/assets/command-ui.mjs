@@ -6,17 +6,17 @@ import {getLocale, localizeError, localizeMessage, t} from './i18n.mjs';
 
 export function commandPanel(bridge, {input, post, changed, sendText}) {
   const root = document.getElementById('command-panel');
-  if (!root) return {changed() {}, key() {return false;}, submit() {return false;}, relocalize() {}, dispose() {}};
+  if (!root) return {changed() {}, key() {return false;}, submit() {return false;}, setVisible() {}, relocalize() {}, dispose() {}};
   const list = document.getElementById('command-list'), message = document.getElementById('command-message');
   const run = document.getElementById('command-run');
   const empty = document.getElementById('command-empty'), chatSend = document.getElementById('chat-send');
   const client = commandClient(bridge, post), results = commandResults(), errorMeta = new Map(), cleanup = [];
   let managedAvailable=false;
-  let entries = [], filtered = [], selected = '', ready = false, visible = false, dismissed = false, composing = false;
+  let entries = [], filtered = [], selected = '', ready = false, visible = false, composing = false;
   let loading = false, disposed = false, timer = null, lastText = '', painted = '', messageState = null;
   const listen = (target, name, callback) => { target.addEventListener(name, callback); cleanup.push(() => target.removeEventListener(name, callback)); };
   const query = () => commandQuery(input.value);
-  const active = () => ready && visible && query() !== null && !dismissed;
+  const active = () => ready && visible && query() !== null;
   function clearMessage() {
     messageState = null;
     message.textContent = ''; message.hidden = true;
@@ -168,19 +168,21 @@ export function commandPanel(bridge, {input, post, changed, sendText}) {
   }
   function textChanged() {
     if (composing || disposed) return;
-    if (input.value !== lastText) { dismissed = false; selected = ''; lastText = input.value; }
+    if (input.value !== lastText) { selected = ''; lastText = input.value; }
     paint();
     if (active() && !timer && !loading) void refresh();
   }
+  function setVisible(value) {
+    visible = value;
+    textChanged();
+  }
   function submit() {
     if (query() === null) return false;
-    if (dismissed) { dismissed = false; textChanged(); return true; }
     if (!composing) void execute(filtered.find(entry => entry.id === selected));
     return true;
   }
   function key(event) {
     if (composing || event.isComposing || event.keyCode === 229) return false;
-    if (event.key === 'Escape' && active()) { dismissed = true; paint(); return true; }
     if (!active() || !['ArrowUp','ArrowDown'].includes(event.key) || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
     const index = filtered.findIndex(entry => entry.id === selected);
     selected = filtered[Math.max(0, Math.min(filtered.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))]?.id ?? '';
@@ -204,12 +206,10 @@ export function commandPanel(bridge, {input, post, changed, sendText}) {
   listen(document.getElementById('command-as-text'), 'click', sendText);
   const unsubscribe = bridge.subscribe(value => {
     if (value.kind === 'init') { ready = true; textChanged(); }
-    if (value.kind === 'visibility') { visible = value.visible; textChanged(); }
-    if (value.kind === 'focus') { visible = true; dismissed = false; textChanged(); }
   });
   function dispose() {
     disposed = true; clearTimeout(timer); unsubscribe(); client.dispose();
     for (const remove of cleanup) remove();
   }
-  return {changed: textChanged, key, submit, relocalize, dispose};
+  return {changed: textChanged, key, submit, setVisible, relocalize, dispose};
 }

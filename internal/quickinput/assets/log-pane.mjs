@@ -75,11 +75,17 @@ export function logPane({read, commandID, record, nodeID = '', encoding}) {
       !displayed ? t(node?.phase === 'waiting' || node?.phase === 'ready' ? 'common.graph.not_started' : 'common.command.empty_log') : '';
     notice.dataset.error = String(Boolean(error));
     notice.hidden = !notice.textContent;
-    for (const [action, button] of buttons) button.textContent = t(actionKeys[action]);
-    buttons.get('first').disabled = loading || !page || page.start === 0;
-    buttons.get('previous').disabled = loading || !page || page.start === 0;
-    buttons.get('next').disabled = loading || !page || page.end;
-    buttons.get('latest').disabled = loading;
+    const disabled = {
+      first: loading || !page || page.start === 0,
+      previous: loading || !page || page.start === 0,
+      next: loading || !page || page.end,
+      latest: loading,
+    };
+    for (const [action, button] of buttons) {
+      const label = t(actionKeys[action]);
+      if (button.textContent !== label) button.textContent = label;
+      if (button.disabled !== disabled[action]) button.disabled = disabled[action];
+    }
     following.textContent = t(follow ? 'common.command.following' : 'common.command.paused');
     range.textContent = page ? t('common.command.range', {start: page.start, end: page.next}) : '';
     root.setAttribute('aria-busy', String(loading));

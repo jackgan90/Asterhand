@@ -28,7 +28,7 @@ export function logReadQueue(call, limit = 2) {
 
 export function logReader({read, commandID, runID, nodeID = '', encoding = 'utf-8', change}) {
   let page = null, follow = true, loading = false, error = null, record = null;
-  let disposed = false, visible = true, revision = 0, characters = 0, count = 0, flushed = false;
+  let reading = false, disposed = false, visible = true, revision = 0, characters = 0, count = 0, flushed = false;
   let decoder = logDecoder(encoding);
   const notify = update => change({page, follow, loading, error, ...update});
   const terminal = () => record?.phase === 'finished';
@@ -88,10 +88,12 @@ export function logReader({read, commandID, runID, nodeID = '', encoding = 'utf-
     notify({chunks, reset: !extend});
   }
 
-  async function load(request) {
+  async function load(request, background = false) {
     const ticket = ++revision;
     const current = () => !disposed && visible && ticket === revision;
-    loading = true;
+    reading = true;
+    // Polling existing output must not dim controls or block user navigation.
+    loading = !background;
     error = null;
     notify();
     try {
@@ -100,7 +102,7 @@ export function logReader({read, commandID, runID, nodeID = '', encoding = 'utf-
     } catch (err) {
       if (current() && !err.cancelled) error = err;
     } finally {
-      if (current()) { loading = false; notify(); }
+      if (current()) { reading = false; loading = false; notify(); }
     }
   }
 
@@ -108,10 +110,10 @@ export function logReader({read, commandID, runID, nodeID = '', encoding = 'utf-
     get state() { return {page, follow, loading, error}; },
     setRecord(value) { record = value; },
     async refresh() {
-      if (disposed || !visible || loading || !follow && page) return;
+      if (disposed || !visible || reading || !follow && page) return;
       if (page?.end && (terminal() && flushed || ['waiting', 'ready'].includes(record?.phase))) return;
-      if (!page || characters > 128 * 1024 || count > 512) return load({tail: true});
-      return load({cursor: page.next, extend: true});
+      if (!page || characters > 128 * 1024 || count > 512) return load({tail: true}, Boolean(page));
+      return load({cursor: page.next, extend: true}, true);
     },
     async navigate(kind) {
       if (disposed || loading) return;
@@ -124,7 +126,7 @@ export function logReader({read, commandID, runID, nodeID = '', encoding = 'utf-
     pause() { if (follow) { follow = false; notify(); } },
     setVisible(value) {
       visible = value;
-      if (!value) { revision++; loading = false; }
+      if (!value) { revision++; reading = false; loading = false; }
     },
     async setEncoding(value) {
       if (disposed || encoding === value) return;

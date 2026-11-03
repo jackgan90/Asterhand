@@ -124,3 +124,68 @@ test('real pane controls preserve output and scroll position while translating s
   assert.equal(buttons[0].textContent,t('common.command.first'));assert.equal(pane.element.dataset.state,'succeeded');
   pane.metadata({...record,nodes:[{...node,result:'failed'}]});assert.equal(pane.element.dataset.state,'failed');
 });
+
+function watchButtons(buttons) {
+  const writes=[];
+  for(const button of buttons)for(const property of ['textContent','disabled']){
+    let value=button[property];
+    Object.defineProperty(button,property,{get:()=>value,set:next=>{writes.push({button,property,value:next});value=next;}});
+  }
+  return writes;
+}
+
+test('merged and node toolbar controls stay unchanged throughout automatic reads',async tcase=>{
+  for(const nodeID of ['', 'a'])await tcase.test(nodeID?'node pane':'merged pane',async subcase=>{
+    const dom=domFixture();globalThis.document=dom.document;subcase.after(()=>delete globalThis.document);setLocale('en-US');
+    const record={...run,nodes:[{node_id:'a',kind:'script',name:'build',phase:'running'}]};
+    let pending,calls=0;
+    const pane=logPane({read:async()=>++calls===1?page([chunk('a','initial')],{start:100,next:200}):pending.promise,
+      commandID:'command',record,nodeID,encoding:'utf-8'});
+    subcase.after(()=>pane.dispose());await pane.refresh();
+    const buttons=descendants(pane.element).filter(element=>element.tagName==='BUTTON'),latest=buttons[3];
+    const writes=watchButtons(buttons);latest.focus();
+    for(let cycle=0;cycle<3;cycle++){
+      pending=deferred();const refresh=pane.refresh(),before=calls;
+      assert.equal(latest.disabled,false,'automatic reads must not dim the latest button');
+      assert.equal(buttons[0].disabled,false,'history controls must remain usable');
+      pane.metadata({...record,elapsed_seconds:cycle});await pane.refresh();
+      assert.equal(calls,before,'automatic reads must remain serial');
+      pending.resolve(page(cycle?[chunk('a',' more output')]:[],{start:200,next:300}));await refresh;
+    }
+    assert.deepEqual(writes,[],'unchanged toolbar labels and disabled state must not be rewritten');
+    assert.equal(dom.document.activeElement,latest);
+    setLocale('zh-CN');pane.relocalize();
+    assert.equal(latest.textContent,t('common.command.latest'));
+    assert.equal(writes.filter(write=>write.property==='textContent').length,4);
+    assert.equal(writes.filter(write=>write.property==='disabled').length,0);
+    assert.equal(dom.document.activeElement,latest);setLocale('en-US');
+  });
+});
+
+test('history navigation supersedes background reads and still blocks duplicate user actions',async tcase=>{
+  const dom=domFixture();globalThis.document=dom.document;tcase.after(()=>delete globalThis.document);setLocale('en-US');
+  const background=deferred(),history=deferred(),calls=[];
+  const pane=logPane({read:async(action,fields)=>{
+    calls.push({action,fields});
+    if(calls.length===1)return page([chunk('a','initial')],{start:100,next:200});
+    if(calls.length===2)return background.promise;
+    if(calls.length===3)return history.promise;
+    return page([chunk('a','latest output')],{start:300,next:400});
+  },commandID:'command',record:run,encoding:'utf-8'});
+  tcase.after(()=>pane.dispose());
+  const buttons=descendants(pane.element).filter(element=>element.tagName==='BUTTON'),latest=buttons[3];
+  const initial=pane.refresh();assert.equal(latest.disabled,true,'initial loading must prevent duplicate actions');await initial;
+  const refresh=pane.refresh();assert.equal(latest.disabled,false);
+  buttons[0].onclick();await tick();
+  assert.equal(calls.length,3);assert.equal(calls[2].fields.cursor,0);
+  assert.equal(latest.disabled,true,'explicit navigation must prevent duplicate actions');
+  latest.onclick();await tick();assert.equal(calls.length,3);
+  history.resolve(page([chunk('a','history')],{start:0,next:100,end:false}));await tick();
+  const output=descendants(pane.element).find(element=>element.className==='log-pane-output');
+  const text=()=>descendants(output).filter(element=>element.dataset.stream).map(element=>element.textContent).join('');
+  assert.equal(text(),'history');assert.equal(latest.disabled,false);
+  background.resolve(page([chunk('a','stale automatic output')],{start:200,next:300}));await refresh;
+  assert.equal(text(),'history');
+  latest.onclick();await tick();assert.equal(calls.length,4);assert.equal(calls[3].action,'tail_log');
+  assert.equal(text(),'latest output');assert.equal(latest.disabled,false);
+});

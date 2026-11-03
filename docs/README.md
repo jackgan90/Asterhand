@@ -22,6 +22,8 @@
 
 ## 其他入口
 
+- [日志工具栏自动刷新稳定性](development/features/log-toolbar-refresh-stability/plan.md)：后台补读保留按钮状态与文字，主动操作优先于在途自动读取；工程验证及本机用户验收通过。
+
 - [快捷输入失焦后的快捷键呼回](development/features/quick-input-shortcut-focus/plan.md)：前台时按快捷键隐藏，失焦、被遮挡或最小化时跟随当前活动窗口所在屏幕恢复并激活；工程验证及本机用户验收通过。
 
 - [本地脚本图计划](development/features/local-script-graphs/plan.md)、[脚本图设计](executors/script-graphs.md)、[验证说明](development/features/local-script-graphs/validation.md)：快捷命令关联本机静态 DAG、串并行依赖、失败停止、节点日志与图编辑；工程验证、独立审计复审及本机用户验收通过。

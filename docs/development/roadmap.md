@@ -6,6 +6,7 @@
 
 | 能力 | 设计与维护入口 |
 |---|---|
+| 日志后台补读保留分页按钮文字、可用状态和焦点，主动翻页优先于在途自动读取（工程验证及本机用户验收通过） | [日志工具栏稳定性](features/log-toolbar-refresh-stability/plan.md) |
 | 快捷输入按前台状态处理快捷键：前台隐藏，失焦/遮挡或最小化后跟随当前工作屏幕恢复激活（工程验证及本机用户验收通过） | [快捷键焦点修复](features/quick-input-shortcut-focus/plan.md) |
 | 普通消息发送、异常气泡与独立停止回复（工程验证及本机用户验收通过） | [聊天发送与停止回复](features/chat-send-intent/plan.md) |
 | Web 管理本机脚本、快捷输入 `/` 列表与模糊搜索、普通用户独立启动（工程验证及本机用户验收通过） | [本地快捷命令](features/local-quick-commands/plan.md)、[验证说明](features/local-quick-commands/validation.md) |

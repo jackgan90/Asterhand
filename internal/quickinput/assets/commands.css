@@ -3,14 +3,20 @@
 main:has(#command-panel:not([hidden]):not([data-layout-settled="true"])) { overflow-y: hidden; }
 .command-toolbar { display: flex; gap: 6px; align-items: center; justify-content: flex-end; padding: 5px 8px; min-height: 34px; font-size: 12px; border-bottom: 1px solid var(--line); }
 .command-toolbar > span:first-child { margin-right: auto; color: var(--muted); }
+#command-run { color: var(--bg); background: var(--accent); border-color: var(--accent); }
 #command-list { overflow-y: auto; max-height: 448px; overscroll-behavior: contain; }
-.command-option { display: flex; align-items: center; gap: 12px; width: 100%; height: 56px; text-align: left; border-radius: 0; border: 1px solid transparent; padding: 5px 12px; }
+.command-option { display: flex; align-items: center; gap: 10px; width: 100%; height: 56px; text-align: left; border-radius: 0; border: 1px solid transparent; padding: 5px 12px; cursor: pointer; }
 .command-info { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 2px; }
 .command-info > span, .command-info > small { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.command-info > small:empty { display: none; }
+.command-title > span:first-child { font-weight: 600; }
+.command-aliases { margin-left: 8px; color: var(--muted); font-size: 12px; }
 .command-option small { color: var(--muted); font-size: 11px; }
+.command-option small[data-problem=true] { color: #ff9f9f; }
 .command-option[aria-selected=true] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .command-option[data-state=missing], .command-option[data-state=missing] small { color: #ff9f9f; }
-:root[data-theme=frost] .command-option[data-state=missing], :root[data-theme=frost] .command-option[data-state=missing] small { color: #b42332; }
+:root[data-theme=frost] .command-option[data-state=missing], :root[data-theme=frost] .command-option[data-state=missing] small,
+:root[data-theme=frost] .command-option small[data-problem=true] { color: #b42332; }
 #command-empty { padding: 16px 12px; height: 56px; font-size: 12px; color: var(--muted); }
 .command-error { flex: 0 1 46%; min-width: 0; text-align: right; font-size: 11px; color: #ff9f9f; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .command-error:hover { text-decoration: underline; }
@@ -18,6 +24,26 @@ main:has(#command-panel:not([hidden]):not([data-layout-settled="true"])) { overf
 :root[data-theme=frost] .command-error, :root[data-theme=frost] #command-message { color: #b42332; }
 @media (forced-colors: active) { .command-option[aria-selected=true] { background: Highlight; color: HighlightText; } }
 
-.command-controls {display:flex;gap:5px;flex:none;font-size:11px}
-.command-controls button {padding:4px 6px}
-.command-option {cursor:pointer}
+/* Run state icon: color and shape carry the state, text is in title/aria-label. */
+:root { --state-running: var(--accent); --state-succeeded: #4ade80; --state-failed: #f87171; --state-interrupted: #fbbf24; --state-unknown: var(--muted); }
+:root[data-theme=frost] { --state-succeeded: #15803d; --state-failed: #dc2626; --state-interrupted: #b45309; }
+.command-state { flex: none; width: 16px; height: 16px; display: grid; place-items: center; }
+.command-state::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+.command-state[data-state=running]::before { width: 10px; height: 10px; background: none; border: 2px solid var(--state-running); border-right-color: transparent; animation: command-spin .9s linear infinite; }
+.command-state[data-state=succeeded]::before { width: 12px; height: 12px; border-radius: 0; background: var(--state-succeeded); -webkit-mask: var(--icon-check) center / contain no-repeat; }
+.command-state[data-state=failed]::before { width: 12px; height: 12px; border-radius: 0; background: var(--state-failed); -webkit-mask: var(--icon-cross) center / contain no-repeat; }
+.command-state[data-state=interrupted]::before { width: 12px; height: 12px; border-radius: 0; background: var(--state-interrupted); -webkit-mask: var(--icon-alert) center / contain no-repeat; }
+.command-state[data-state=unknown]::before { background: var(--state-unknown); }
+@keyframes command-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .command-state[data-state=running]::before { animation: none; } }
+
+/* Icon buttons draw a same-origin SVG mask in the current text color. */
+.icon-button { display: inline-grid; place-items: center; width: 28px; height: 26px; padding: 0; color: var(--muted); }
+.icon-button::before { content: ""; width: 15px; height: 15px; background: currentColor; -webkit-mask: var(--icon) center / contain no-repeat; }
+.icon-button:hover:not(:disabled) { color: var(--accent); }
+.icon-logs { --icon: var(--icon-logs); }
+.icon-stop_all { --icon: var(--icon-stop); }
+.icon-stop_all:hover:not(:disabled) { color: var(--state-failed); border-color: var(--state-failed); }
+.icon-gear { --icon: var(--icon-gear); }
+.command-controls { display: flex; gap: 5px; flex: none; }
+@media (forced-colors: active) { .icon-button::before, .command-state::before { background: ButtonText; } }

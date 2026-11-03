@@ -14,6 +14,15 @@ export function nodeSettings({api, post, session, desktop, guarded, notice, refr
   let loadedData = null, lastProbe = null, lastNetwork = null, statusState = null;
   let nameDirty = false, renderedDefaultName = "";
   const form = $("#settings-form");
+  // The form spans several panes; tell the user that saving submits all of them.
+  const markDirty = dirty => { $("#settings-dirty").hidden = !dirty; };
+  // Language and theme apply immediately through the desktop settings API; they
+  // sit inside this form's DOM but are not submitted with it.
+  const edited = event => {
+    if (event.target?.id !== "settings-locale" && event.target?.name !== "ui-theme") markDirty(true);
+  };
+  listen(form, "input", edited);
+  listen(form, "change", edited);
 
   if (form?.elements?.name?.addEventListener) {
     listen(form.elements.name, "input", () => { nameDirty = true; });
@@ -140,6 +149,7 @@ export function nodeSettings({api, post, session, desktop, guarded, notice, refr
     form.elements.key.value = "";
     form.elements.delete_key.checked = false;
     paintKeyAndRuntime();
+    markDirty(false);
     dialog("#settings");
     $("#settings").scrollTop = 0;
     await updateProbe();
@@ -151,6 +161,7 @@ export function nodeSettings({api, post, session, desktop, guarded, notice, refr
     $("#use-tailnet").onclick = () => {
       form.elements.endpoint.value = network.endpoint;
       form.elements.peer_listen.value = network.listen;
+      markDirty(true);
       statusState = {kind: "tailnet_filled"};
       paintStatusLine();
     };
@@ -190,6 +201,7 @@ export function nodeSettings({api, post, session, desktop, guarded, notice, refr
         paintKeyAndRuntime();
       }
       event.target.elements.key.value = "";
+      markDirty(false);
       statusState = {
         kind: "saved",
         chatAvailable: Boolean(result.capabilities?.chat?.available),

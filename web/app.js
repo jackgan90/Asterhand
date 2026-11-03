@@ -57,19 +57,22 @@ export function mountApp() {
     onlineState = Boolean(online);
     paintConnection();
   };
+  const relocalizeViews = () => {
+    paintConnection();
+    nodes.relocalize();
+    view.relocalize();
+    desktop.relocalize();
+    settings.relocalize();
+    commands.relocalize();
+  };
   const locale = localeController({
     desktop,
     listen,
     notice,
-    onRelocalize: () => {
-      paintConnection();
-      nodes.relocalize();
-      view.relocalize();
-      desktop.relocalize();
-      settings.relocalize();
-      commands.relocalize();
-    },
+    onRelocalize: relocalizeViews,
   });
+  // Views above created runtime text before the restored locale was applied.
+  relocalizeViews();
   async function syncDesktopStream(scope) {
     const rec = await desktop.reconcileLocale();
     if (scope?.active && rec?.outcome !== "stale" && rec?.status) {

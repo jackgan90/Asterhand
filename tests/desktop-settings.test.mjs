@@ -129,3 +129,168 @@ for (const confirmed of [false,true]) test(`page resume reconciles a pending des
   assert.doesNotMatch(dom.select("#desktop-state").textContent,/old response/);
   component.stop();
 });
+
+for (const outcome of ["saved", "rejected"]) test(`theme applies on selection without unsaved shortcut edits (${outcome})`, async () => {
+  const dom = domFixture(), writes = [];
+  globalThis.document = dom.document; globalThis.window = new EventTarget();
+  const radios = ["star", "frost"].map(value => Object.assign(dom.document.createElement("input"), {value}));
+  dom.document.querySelectorAll = selector => selector.includes("ui-theme") ? radios : [];
+  let current = {supported:true,registration:"registered",surface:"ready",desired:{revision:"initial",enabled:true,binding:{modifiers:["ctrl","alt"],key:"KeyJ"},theme_id:"star"}};
+  const component = desktopSettings(async () => structuredClone(current), async (path, body) => {
+    assert.equal(path, "/api/desktop/settings");
+    writes.push(structuredClone(body));
+    if (outcome === "rejected" && writes.length === 1) throw Object.assign(new Error("rejected"), {status:409});
+    current = {...current, last_operation:body.operation_id, desired:{...current.desired, revision:"r"+writes.length, binding:body.binding, enabled:body.enabled, theme_id:body.theme_id}};
+    return structuredClone(current);
+  });
+  await component.open();
+  assert.equal(radios[0].checked, true);
+  dom.select("#desktop-form").elements.key.value = "KeyK"; // unsaved shortcut edit
+  radios[1].checked = true; radios[1].fire("change"); await tick(); await tick();
+  assert.deepEqual(writes[0].binding, {modifiers:["ctrl","alt"], key:"KeyJ"}, "theme save must keep the saved shortcut");
+  assert.equal(writes[0].theme_id, "frost");
+  assert.equal(writes[0].expected_revision, "initial");
+  if (outcome === "rejected") {
+    assert.equal(radios[0].checked, true, "a rejected theme reverts the selection");
+    assert.equal(dom.document.documentElement.dataset.theme, "star");
+    assert.notEqual(dom.select("#theme-status").textContent, "");
+    component.stop();
+    return;
+  }
+  assert.equal(dom.document.documentElement.dataset.theme, "frost");
+  dom.select("#desktop-form").fire("submit"); await tick(); await tick();
+  assert.equal(writes[1].expected_revision, "r1", "a later shortcut save follows the theme revision");
+  assert.equal(writes[1].binding.key, "KeyK");
+  assert.equal(writes[1].theme_id, "frost");
+  component.stop();
+});
+
+for (const writer of ["this page", "another page"]) test(`a lost theme response is reconciled by operation identity (${writer})`, async () => {
+  const dom = domFixture(), writes = [];
+  globalThis.document = dom.document; globalThis.window = new EventTarget();
+  const radios = ["star", "frost"].map(value => Object.assign(dom.document.createElement("input"), {value}));
+  dom.document.querySelectorAll = selector => selector.includes("ui-theme") ? radios : [];
+  let current = {supported:true,registration:"registered",surface:"ready",desired:{revision:"r1",enabled:true,binding:{modifiers:["ctrl","alt"],key:"KeyJ"},theme_id:"star"}};
+  const commit = (body, operation) => {
+    current = {...current, last_operation:operation, desired:{...current.desired, revision:"r"+(Number(current.desired.revision.slice(1))+1), binding:body.binding, enabled:body.enabled, theme_id:body.theme_id}};
+  };
+  const component = desktopSettings(async () => structuredClone(current), async (path, body) => {
+    writes.push(structuredClone(body));
+    if (writes.length === 1) {
+      // The server applies frost, but this page never receives the response.
+      commit(body, writer === "this page" ? body.operation_id : "other-page-operation");
+      throw new Error("connection reset");
+    }
+    if (body.expected_revision !== current.desired.revision) throw Object.assign(new Error("revision conflict"), {status:409});
+    commit(body, body.operation_id);
+    return structuredClone(current);
+  });
+  await component.open();
+  dom.select("#desktop-form").elements.key.value = "KeyK"; // unsaved shortcut edit
+  radios[1].checked = true; radios[1].fire("change"); await tick(); await tick(); await tick();
+  assert.equal(dom.document.documentElement.dataset.theme, "frost");
+  assert.equal(radios[1].checked, true);
+  dom.select("#desktop-form").fire("submit"); await tick(); await tick(); await tick();
+  if (writer === "this page") {
+    assert.equal(dom.select("#theme-status").textContent, "同时应用于快捷面板和此页面。");
+    assert.equal(writes[1].expected_revision, "r2", "the reconciled save advances the shortcut baseline");
+    assert.equal(writes[1].theme_id, "frost");
+    assert.equal(current.desired.binding.key, "KeyK", "the unsaved shortcut edit is kept and saved");
+  } else {
+    assert.equal(writes[1].expected_revision, "r1", "another page's save keeps conflict protection");
+    assert.equal(current.desired.binding.key, "KeyJ");
+  }
+  component.stop();
+});
+
+for (const writer of ["this page", "another page"]) test(`an unknown theme save is settled by a later snapshot after the immediate check fails (${writer})`, async () => {
+  const dom = domFixture(), writes = [];
+  globalThis.document = dom.document; globalThis.window = new EventTarget();
+  const radios = ["star", "frost"].map(value => Object.assign(dom.document.createElement("input"), {value}));
+  dom.document.querySelectorAll = selector => selector.includes("ui-theme") ? radios : [];
+  let current = {supported:true,registration:"registered",surface:"ready",desired:{revision:"r1",enabled:true,binding:{modifiers:["ctrl","alt"],key:"KeyJ"},theme_id:"star"}};
+  let offline = false;
+  const commit = (body, operation) => {
+    current = {...current, last_operation:operation, desired:{...current.desired, revision:"r"+(Number(current.desired.revision.slice(1))+1), binding:body.binding, enabled:body.enabled, theme_id:body.theme_id}};
+  };
+  const component = desktopSettings(async () => {
+    if (offline) throw new Error("temporarily unreachable");
+    return structuredClone(current);
+  }, async (path, body) => {
+    writes.push(structuredClone(body));
+    if (writes.length === 1) {
+      commit(body, writer === "this page" ? body.operation_id : "other-page-operation");
+      offline = true; // the response and the immediate check are both lost
+      throw new Error("connection reset");
+    }
+    if (body.expected_revision !== current.desired.revision) throw Object.assign(new Error("revision conflict"), {status:409});
+    commit(body, body.operation_id);
+    return structuredClone(current);
+  });
+  await component.open();
+  dom.select("#desktop-form").elements.key.value = "KeyK"; // unsaved shortcut edit
+  radios[1].checked = true; radios[1].fire("change"); await tick(); await tick(); await tick();
+  assert.equal(dom.document.documentElement.dataset.theme, "star", "an unconfirmed theme is not shown as applied");
+  offline = false;
+  await component.reconcileLocale();
+  assert.equal(dom.document.documentElement.dataset.theme, "frost");
+  dom.select("#desktop-form").fire("submit"); await tick(); await tick(); await tick();
+  if (writer === "this page") {
+    assert.equal(writes[1].expected_revision, "r2", "the later snapshot confirms this operation and advances the baseline");
+    assert.equal(writes[1].theme_id, "frost");
+    assert.equal(current.desired.binding.key, "KeyK", "the unsaved shortcut edit is kept and saved");
+    assert.equal(dom.select("#theme-status").textContent, "同时应用于快捷面板和此页面。");
+  } else {
+    assert.equal(writes[1].expected_revision, "r1", "another page's save keeps conflict protection");
+    assert.equal(current.desired.binding.key, "KeyJ");
+  }
+  component.stop();
+});
+
+for (const [writer, next] of [["this page", "save again"], ["this page", "refresh then save"], ["another page", "save again"]]) test(`a theme confirmed during an unresolved shortcut save updates the baseline once that save ends (${writer}, ${next})`, async () => {
+  const dom = domFixture(), writes = [];
+  globalThis.document = dom.document; globalThis.window = new EventTarget();
+  const radios = ["star", "frost"].map(value => Object.assign(dom.document.createElement("input"), {value}));
+  dom.document.querySelectorAll = selector => selector.includes("ui-theme") ? radios : [];
+  let current = {supported:true,registration:"registered",surface:"ready",desired:{revision:"r1",enabled:true,binding:{modifiers:["ctrl","alt"],key:"KeyJ"},theme_id:"star"}};
+  let offline = false;
+  const commit = (body, operation) => {
+    current = {...current, last_operation:operation, desired:{...current.desired, revision:"r"+(Number(current.desired.revision.slice(1))+1), binding:body.binding, enabled:body.enabled, theme_id:body.theme_id}};
+  };
+  const component = desktopSettings(async () => {
+    if (offline) throw new Error("temporarily unreachable");
+    return structuredClone(current);
+  }, async (path, body) => {
+    writes.push(structuredClone(body));
+    if (writes.length === 1) {
+      commit(body, writer === "this page" ? body.operation_id : "other-page-operation");
+      offline = true;
+      throw new Error("connection reset");
+    }
+    if (body.expected_revision !== current.desired.revision) throw Object.assign(new Error("revision conflict"), {status:409});
+    commit(body, body.operation_id);
+    return structuredClone(current);
+  });
+  const settle = async () => { for (let i = 0; i < 6; i++) await tick(); };
+  await component.open();
+  dom.select("#desktop-form").elements.key.value = "KeyK"; // unsaved shortcut edit
+  radios[1].checked = true; radios[1].fire("change"); await settle();
+  offline = false;
+  // The user saves before any automatic refresh: the old baseline is rejected,
+  // and the error check is what first confirms the earlier theme save.
+  dom.select("#desktop-form").fire("submit"); await settle();
+  assert.equal(writes[1].expected_revision, "r1");
+  if (next === "refresh then save") await component.reconcileLocale();
+  dom.select("#desktop-form").fire("submit"); await settle();
+  const last = writes.at(-1);
+  if (writer === "this page") {
+    assert.equal(last.expected_revision, "r2", "the confirmed theme revision becomes the shortcut baseline");
+    assert.equal(last.theme_id, "frost");
+    assert.equal(current.desired.binding.key, "KeyK", "the unsaved shortcut edit is kept and saved");
+    assert.equal(current.desired.theme_id, "frost");
+  } else {
+    assert.equal(last.expected_revision, "r1", "another page's save keeps conflict protection");
+    assert.equal(current.desired.binding.key, "KeyJ");
+  }
+  component.stop();
+});

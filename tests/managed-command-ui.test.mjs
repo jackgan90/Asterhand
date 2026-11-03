@@ -23,7 +23,7 @@ function dom() {
   return {get, document:{getElementById:get, createElement:()=>new Element(), createDocumentFragment:()=>new Element(), documentElement:new Element()}};
 }
 const source = async name => (await fs.readFile(new URL('../internal/quickinput/assets/' + name, import.meta.url), 'utf8')).replace(/^import .*;$/gm, '');
-const labels = {canLaunch, summaryLabel:()=>'', applyI18n(){}, setLocale(){}, t:key=>key, getLocale:()=>'', localizeError:()=>'', localizeMessage:()=>'', formatDateTime:()=>'', runLabel:()=>'', reasonLabel:()=>''};
+const labels = {canLaunch, summaryLabel:()=>'', applyI18n(){}, setLocale(){}, t:key=>key, getLocale:()=>'', localizeError:()=>'', localizeMessage:()=>'', formatDateTime:()=>'', runLabel:()=>'', reasonLabel:()=>'', runTone:()=>'', nodeState:()=>'unknown'};
 
 test('log status polling continues independently of a pending pane read', async () => {
   const view = dom(), timers = new Map(); let sequence = 0, statusCalls = 0, paneCalls = 0;

@@ -17,6 +17,14 @@ export function runKey(run) {
   return results[run.result] || 'common.unconfirmed';
 }
 export const reasonKey = run => reasons[run?.reason] || '';
+// Visual tone shared by status icons: running, succeeded, failed, interrupted or unknown.
+export function runTone(run) {
+  if (!run?.phase && !(run?.active_count > 0)) return '';
+  if (runBusy(run)) return 'running';
+  if (run.failed_count > 0) return 'failed';
+  if (run.interrupted_count > 0) return 'interrupted';
+  return results[run.result] ? run.result : 'unknown';
+}
 export const canLaunch = command => Boolean(command) && (!runBusy(command) || command.allow_concurrent === true) && (command.active_count ?? 0) < 8;
 export function summaryParts(run,t) {
   if(!run)return [];

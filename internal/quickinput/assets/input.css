@@ -5,13 +5,17 @@
   font: 14px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif;
 }
 * { box-sizing: border-box; }
+/* Same-origin SVG masks shared by the quick panel and log window (colored via currentColor). */
+:root { --icon-check: url(icons/check.svg); --icon-cross: url(icons/cross.svg); --icon-alert: url(icons/alert.svg); --icon-logs: url(icons/logs.svg); --icon-stop: url(icons/stop.svg); --icon-gear: url(icons/gear.svg); --icon-more: url(icons/more.svg); --icon-down: url(icons/down.svg); }
 body { margin: 0; background: var(--bg); color: var(--fg); }
 main {
-  height: 100vh; border: 1px solid var(--line); border-radius: 15px;
+  height: 100vh; border: 1px solid var(--line);
   overflow: hidden; position: relative;
   background: radial-gradient(ellipse at 90% 0, #a28fff35, transparent 55%),
     radial-gradient(ellipse at 10% 100%, #62dcff20, transparent 60%);
 }
+/* The system draws the rounded outline and border around the native window. */
+:root[data-corners=native] main { border: 0; }
 main::before {
   content: ""; position: absolute; inset: 0; pointer-events: none;
   background: linear-gradient(#76e1ff07 1px, transparent 1px),

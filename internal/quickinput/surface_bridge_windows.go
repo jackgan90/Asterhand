@@ -39,7 +39,7 @@ func (s *nativeSurface) bridgeMessage(raw string) {
 	if m.Kind == "ready" && !s.documentReady {
 		s.documentReady = true
 		text, revision := s.draft.Read()
-		if err := s.postJSON(map[string]any{"kind": "init", "generation": s.epoch, "text": text, "revision": revision, "theme": s.theme, "locale": s.locale}); err != nil {
+		if err := s.postJSON(map[string]any{"kind": "init", "generation": s.epoch, "text": text, "revision": revision, "theme": s.theme, "locale": s.locale, "native_corners": s.nativeCorners}); err != nil {
 			s.ready <- err
 		}
 		return
@@ -121,6 +121,7 @@ func (s *nativeSurface) Update(theme string) error {
 	}
 	return s.dispatch(context.Background(), func() {
 		s.theme = theme
+		s.applyFrameColor()
 		s.invalidateLogShell()
 		if !s.wantsSuspended && s.documentReady && s.core != nil {
 			_ = s.postJSON(map[string]string{"kind": "theme", "theme": theme})

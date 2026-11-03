@@ -35,6 +35,8 @@ export function settingsTabs(root, listen) {
   listen($("#settings-form"), "invalid", event => {
     const pane = event.target.closest?.("[data-pane]");
     if (pane) select(pane.dataset.pane);
+    const disclosure = event.target.closest?.("details");
+    if (disclosure) disclosure.open = true;
   }, true);
   select(root.dataset.tab || "general");
 }

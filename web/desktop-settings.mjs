@@ -51,8 +51,10 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
   const recordInput = document.querySelector("#desktop-record");
   const recordStatus = document.querySelector("#desktop-record-status");
   const recordCancel = document.querySelector("#desktop-record-cancel");
+  const themeStatus = document.querySelector("#theme-status");
+  const themeRadios = [...(document.querySelectorAll?.('input[name="ui-theme"]') ?? [])];
   const page = crypto.randomUUID();
-  let current, formBaseline = null, recording, poll, pending, pendingLocale = null, busy, activeSave = null;
+  let current, formBaseline = null, recording, poll, pending, pendingLocale = null, busy, activeSave = null, themeError = null, pendingTheme = null;
   let recordingGeneration = 0, pageGeneration = 0, localeGeneration = 0;
   let requestClock = 0, latestAppliedClock = 0;
   let stateOverride = null, recordMode = "idle";
@@ -77,6 +79,13 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
   }
   function paintSaveButton() {
     document.querySelector("#desktop-save").textContent = pending ? t("web.desktop.save_retry") : t("web.desktop.save");
+  }
+  function paintTheme() {
+    const id = current?.desired?.theme_id;
+    for (const radio of themeRadios) radio.checked = radio.value === id;
+    if (!themeStatus) return;
+    themeStatus.textContent = themeError ? localizeError(themeError) : t("web.desktop.theme_hint");
+    if (themeStatus.dataset) themeStatus.dataset.tone = themeError ? "error" : "";
   }
   function paintRecordStatus(mode = recordMode) {
     recordMode = mode;
@@ -124,6 +133,7 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
     current = value;
     stateOverride = null;
     paintState();
+    paintTheme();
     const usable = value.registration === "registered" && value.surface === "ready" && value.effective_binding;
     // Retry is only meaningful when an enabled binding is not in effect.
     document.querySelector("#desktop-retry").hidden = !value.supported || (!value.cleanup_pending && (usable || !value.desired.enabled));
@@ -136,6 +146,32 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
     } else if (!pending && formBaseline && sameNonLocale(formBaseline, value.desired)) {
       formBaseline.revision = value.desired.revision;
     }
+    reconcileTheme(value, fill);
+  }
+  // A theme save whose outcome is unknown stays pending until any later valid
+  // snapshot settles it. Only this operation's own record confirms success;
+  // a later write by anyone else ends the wait and keeps the old baseline.
+  // A confirmation that arrives while a shortcut save is still unresolved is
+  // kept and applied once that request has ended, so the baseline cannot stay
+  // behind the theme revision.
+  function reconcileTheme(value, fill) {
+    if (!pendingTheme || !value?.desired) return;
+    if (fill) { pendingTheme = null; return; }
+    if (!pendingTheme.confirmed) {
+      if (value.last_operation === pendingTheme.operation) {
+        pendingTheme.confirmed = structuredClone(value.desired);
+        themeError = null; paintTheme();
+      } else if (value.desired.revision !== pendingTheme.base.revision) {
+        pendingTheme = null;
+        return;
+      }
+    }
+    settleTheme();
+  }
+  function settleTheme() {
+    if (!pendingTheme?.confirmed || pending) return;
+    themeSaved(pendingTheme.base, pendingTheme.confirmed);
+    pendingTheme = null;
   }
   const isCurrent = (generation, scope) => generation === pageGeneration && scope?.active;
   async function fetchSettings({allowError = false, generation = pageGeneration, scope = session(), valid = () => true} = {}) {
@@ -244,6 +280,7 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
     const generation = pageGeneration, scope = session();
     await endRecording();
     if (!isCurrent(generation, scope)) return;
+    settleTheme();
     const expectedRevision = formBaseline ? formBaseline.revision : current.desired.revision;
     pending ||= {operation_id:crypto.randomUUID(), expected_revision:expectedRevision, enabled:fields.enabled.checked, binding:binding(), theme_id:fields.theme.value, reset};
     try {
@@ -255,8 +292,10 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
       const operation = pending.operation_id;
       await refresh();
       if (!isCurrent(generation, scope)) return;
-      if (current.last_operation === operation) { pending = null; formBaseline = snapshotBaseline(current.desired); return; }
+      if (current.last_operation === operation) { pending = null; formBaseline = snapshotBaseline(current.desired); settleTheme(); return; }
       if (error.status || current.desired.revision !== pending.expected_revision) pending = null;
+      // A theme confirmation held back by this request now updates the baseline.
+      settleTheme();
       paintSaveButton();
       throw error;
     }
@@ -345,9 +384,58 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
   }
   function relocalize() {
     paintState();
+    paintTheme();
     paintRecordStatus();
     paintSaveButton();
   }
+  // Theme applies on selection. It keeps the saved enabled state and binding,
+  // so unsaved shortcut edits in the hotkey pane are never submitted with it.
+  // A confirmed save, whether its response arrived or was reconciled later,
+  // moves the hidden theme field and (if the form still started from the
+  // pre-save state) the baseline revision, keeping unsaved shortcut edits.
+  function themeSaved(base, desired) {
+    if (formBaseline && !pending && formBaseline.revision === base.revision) {
+      formBaseline.revision = desired.revision;
+      formBaseline.theme_id = desired.theme_id;
+    }
+    fields.theme.value = desired.theme_id;
+  }
+  async function saveTheme(id) {
+    const generation = pageGeneration, scope = session();
+    if (busy?.generation === pageGeneration || !scope?.active) { paintTheme(); return; }
+    const transaction = busy = {generation};
+    themeError = null;
+    try {
+      // An earlier unknown theme save is settled before taking a new baseline.
+      if (!current?.desired || pendingTheme) await refresh();
+      // A confirmed theme still waiting for an unresolved shortcut save must
+      // not be replaced; its baseline update would otherwise be lost.
+      if (pendingTheme?.confirmed) return;
+      if (!isCurrent(generation, scope) || !current?.desired || current.desired.theme_id === id) return;
+      const base = structuredClone(current.desired), operation = crypto.randomUUID();
+      pendingTheme = {operation, base};
+      applyTheme(id);
+      const result = await post("/api/desktop/settings", {operation_id:operation, expected_revision:base.revision,
+        enabled:base.enabled, binding:structuredClone(base.binding), theme_id:id, reset:false});
+      if (!isCurrent(generation, scope)) return;
+      if (pendingTheme?.operation === operation) pendingTheme = null;
+      commitWriteSnapshot(result, false);
+      themeSaved(base, result.desired);
+    } catch (error) {
+      if (!isCurrent(generation, scope)) return;
+      themeError = error;
+      // A server answer means the save was not applied; otherwise the outcome
+      // stays pending and later snapshots (refresh, reconcile, reopen) settle it.
+      if (error?.status) pendingTheme = null;
+      try { await refresh(); } catch { /* keep the error visible */ }
+      if (!isCurrent(generation, scope)) return;
+      applyTheme(current?.desired?.theme_id);
+    } finally {
+      if (busy === transaction) busy = undefined;
+      if (isCurrent(generation, scope)) paintTheme();
+    }
+  }
+  for (const radio of themeRadios) listen(radio, "change", () => { if (radio.checked) void saveTheme(radio.value); });
   listen(form, "submit", event => { event.preventDefault(); void run(() => save()); });
   listen(document.querySelector("#desktop-reset"), "click", () => run(() => { pending = null; return save(true); }));
   listen(document.querySelector("#desktop-check"), "click", () => run(async () => {

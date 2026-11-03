@@ -23,6 +23,8 @@ export function inputEditor(bridge) {
   function setStatusKey(key) {
     statusState = key ? {kind:"key", key} : null;
     status.textContent = key ? t(key) : "";
+    // The footer appears only with a warning, which changes the window height.
+    if (generation) layout.schedule();
   }
   function setStatusHostError(message) {
     statusState = {
@@ -32,6 +34,7 @@ export function inputEditor(bridge) {
       raw:message.message || "",
     };
     status.textContent = localizeMessage(statusState.key, statusState.args, statusState.raw);
+    if (generation) layout.schedule();
   }
   function relocalizeStatus() {
     if (!statusState) return;
@@ -104,6 +107,8 @@ export function inputEditor(bridge) {
       case "init":
         generation = message.generation; revision = message.revision; staged = null;
         input.value = previous = message.text; document.documentElement.dataset.theme = message.theme;
+        // Rounded corners come from the native window; the page draws none.
+        document.documentElement.dataset.corners = message.native_corners ? "native" : "square";
         if (message.locale) setLocale(message.locale);
         applyI18n(document);
         input.disabled = false;

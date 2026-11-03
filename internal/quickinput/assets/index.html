@@ -16,10 +16,10 @@
   </section>
   <textarea id="input" aria-label="快捷输入" data-i18n-aria-label="quickinput.input_aria" spellcheck="false" autocomplete="off" aria-controls="command-list" aria-autocomplete="list" aria-expanded="false"></textarea>
   <section id="command-panel" hidden aria-label="本地快捷命令" data-i18n-aria-label="quickinput.commands_aria">
-    <div class="command-toolbar"><span data-i18n="quickinput.commands_hint">本地命令 · ↑↓ 选择</span><span id="command-message" role="status" hidden></span><button id="command-settings" type="button" data-i18n="quickinput.commands_manage">管理命令</button><button id="command-as-text" type="button" title="以代码块引用原文，发送给聊天" data-i18n-title="quickinput.commands_as_text_title" data-i18n="quickinput.commands_as_text">作为文本发送</button><button id="command-run" type="button" data-i18n="quickinput.commands_run">执行</button></div>
+    <div class="command-toolbar"><span data-i18n="quickinput.commands_hint">↑↓ 选择 · Enter 执行 · Esc 隐藏</span><span id="command-message" role="status" hidden></span><button id="command-settings" class="icon-button icon-gear" type="button" title="管理命令" aria-label="管理命令" data-i18n-title="quickinput.commands_manage" data-i18n-aria-label="quickinput.commands_manage"></button><button id="command-as-text" type="button" title="以代码块引用原文，发送给聊天" data-i18n-title="quickinput.commands_as_text_title" data-i18n="quickinput.commands_as_text">作为文本发送</button><button id="command-run" type="button" data-i18n="quickinput.commands_run">执行</button></div>
     <div id="command-list" role="listbox" aria-label="已注册命令" data-i18n-aria-label="quickinput.commands_list_aria"></div>
     <div id="command-empty" hidden></div>
   </section>
-  <div class="chat-actions"><span id="chat-status" role="status"><span data-i18n="quickinput.chat_hint">Enter 发送 · Shift+Enter 换行</span></span><button id="chat-stop" type="button" hidden data-i18n="quickinput.stop_reply">停止回复</button><button id="chat-send" type="button" disabled data-i18n="quickinput.send">发送</button></div>
-  <footer><span data-i18n="quickinput.esc_hide">Esc 隐藏</span><span id="status" role="status"></span></footer>
+  <div class="chat-actions"><span id="chat-status" role="status"><span data-i18n="quickinput.chat_hint">Enter 发送 · Shift+Enter 换行 · Esc 隐藏</span></span><button id="chat-stop" type="button" hidden data-i18n="quickinput.stop_reply">停止回复</button><button id="chat-send" type="button" disabled data-i18n="quickinput.send">发送</button></div>
+  <footer><span id="status" role="status"></span></footer>
 </main></body></html>

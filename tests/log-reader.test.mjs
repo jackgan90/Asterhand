@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {logReader,logReadQueue} from '../internal/quickinput/assets/log-reader.mjs';
 import {logPane} from '../internal/quickinput/assets/log-pane.mjs';
+import {logLineMerger,labelLines} from '../internal/quickinput/assets/log-model.mjs';
 import {setLocale,t} from '../internal/quickinput/assets/i18n.mjs';
 import {deferred,tick,domFixture,descendants} from './web-fixture.mjs';
 
@@ -110,7 +111,7 @@ test('hidden panes stop sparse scans and resume without accepting hidden respons
   assert.equal(updates.flatMap(update=>update.chunks??[]).map(item=>item.text).join(''),'visible');
 });
 
-test('real pane controls preserve output and scroll position while translating status and toolbar',async tcase=>{
+test('real pane controls preserve output and scroll position while translating status and edge controls',async tcase=>{
   const dom=domFixture();globalThis.document=dom.document;tcase.after(()=>delete globalThis.document);setLocale('en-US');
   const node={node_id:'a',kind:'script',name:'build',phase:'finished',result:'succeeded'};
   const record={...run,nodes:[node]};
@@ -121,7 +122,7 @@ test('real pane controls preserve output and scroll position while translating s
   const buttons=descendants(pane.element).filter(element=>element.tagName==='BUTTON' && element.className!=='log-pane-stop');buttons[0].focus();
   setLocale('zh-CN');pane.relocalize();
   assert.equal(output.children[0],original);assert.equal(output.scrollTop,40);assert.equal(dom.document.activeElement,buttons[0]);
-  assert.equal(buttons[0].textContent,t('common.command.first'));assert.equal(pane.element.dataset.state,'succeeded');
+  assert.equal(buttons[0].textContent,t('common.command.earlier'));assert.equal(pane.element.dataset.state,'succeeded');
   pane.metadata({...record,nodes:[{...node,result:'failed'}]});assert.equal(pane.element.dataset.state,'failed');
 });
 
@@ -134,7 +135,7 @@ function watchButtons(buttons) {
   return writes;
 }
 
-test('merged and node toolbar controls stay unchanged throughout automatic reads',async tcase=>{
+test('merged and node edge controls stay unchanged throughout automatic reads',async tcase=>{
   for(const nodeID of ['', 'a'])await tcase.test(nodeID?'node pane':'merged pane',async subcase=>{
     const dom=domFixture();globalThis.document=dom.document;subcase.after(()=>delete globalThis.document);setLocale('en-US');
     const record={...run,nodes:[{node_id:'a',kind:'script',name:'build',phase:'running'}]};
@@ -142,7 +143,7 @@ test('merged and node toolbar controls stay unchanged throughout automatic reads
     const pane=logPane({read:async()=>++calls===1?page([chunk('a','initial')],{start:100,next:200}):pending.promise,
       commandID:'command',record,nodeID,encoding:'utf-8'});
     subcase.after(()=>pane.dispose());await pane.refresh();
-    const buttons=descendants(pane.element).filter(element=>element.tagName==='BUTTON' && element.className!=='log-pane-stop'),latest=buttons[3];
+    const buttons=descendants(pane.element).filter(element=>element.tagName==='BUTTON' && element.className!=='log-pane-stop'),latest=buttons[2];
     const writes=watchButtons(buttons);latest.focus();
     for(let cycle=0;cycle<3;cycle++){
       pending=deferred();const refresh=pane.refresh(),before=calls;
@@ -156,7 +157,7 @@ test('merged and node toolbar controls stay unchanged throughout automatic reads
     assert.equal(dom.document.activeElement,latest);
     setLocale('zh-CN');pane.relocalize();
     assert.equal(latest.textContent,t('common.command.latest'));
-    assert.equal(writes.filter(write=>write.property==='textContent').length,4);
+    assert.equal(writes.filter(write=>write.property==='textContent').length,3);
     assert.equal(writes.filter(write=>write.property==='disabled').length,0);
     assert.equal(dom.document.activeElement,latest);setLocale('en-US');
   });
@@ -173,7 +174,7 @@ test('history navigation supersedes background reads and still blocks duplicate 
     return page([chunk('a','latest output')],{start:300,next:400});
   },commandID:'command',record:run,encoding:'utf-8'});
   tcase.after(()=>pane.dispose());
-  const buttons=descendants(pane.element).filter(element=>element.tagName==='BUTTON' && element.className!=='log-pane-stop'),latest=buttons[3];
+  const buttons=descendants(pane.element).filter(element=>element.tagName==='BUTTON' && element.className!=='log-pane-stop'),latest=buttons[2];
   const initial=pane.refresh();assert.equal(latest.disabled,true,'initial loading must prevent duplicate actions');await initial;
   const refresh=pane.refresh();assert.equal(latest.disabled,false);
   buttons[0].onclick();await tick();
@@ -182,10 +183,62 @@ test('history navigation supersedes background reads and still blocks duplicate 
   latest.onclick();await tick();assert.equal(calls.length,3);
   history.resolve(page([chunk('a','history')],{start:0,next:100,end:false}));await tick();
   const output=descendants(pane.element).find(element=>element.className==='log-pane-output');
-  const text=()=>descendants(output).filter(element=>element.dataset.stream).map(element=>element.textContent).join('');
+  // The merged pane writes line labels into the text; compare the output itself.
+  const text=()=>descendants(output).filter(element=>element.dataset.stream).map(element=>element.textContent).join('').replace(/^\[[^\]]*\] /gm,'');
   assert.equal(text(),'history');assert.equal(latest.disabled,false);
   background.resolve(page([chunk('a','stale automatic output')],{start:200,next:300}));await refresh;
   assert.equal(text(),'history');
   latest.onclick();await tick();assert.equal(calls.length,4);assert.equal(calls[3].action,'tail_log');
   assert.equal(text(),'latest output');assert.equal(latest.disabled,false);
+});
+
+test('merged log labels lines, not frames, when sources interleave mid-line',()=>{
+  const merger=logLineMerger();
+  const render=chunks=>chunks.map(chunk=>merger.split(chunk)).filter(Boolean).map(piece=>labelLines(piece,'[')).join('');
+  const out=render([
+    {node_id:'weather',stream:'stdout',text:'rain stopped.'},{node_id:'weather',stream:'stdout',text:'\n'},
+    {node_id:'radio',stream:'stdout',text:'packet 5/6.'},{node_id:'radio',stream:'stderr',text:'signal note 5.'},
+    {node_id:'radio',stream:'stdout',text:'\n'},{node_id:'radio',stream:'stderr',text:'\n'},
+    {node_id:'weather',stream:'stdout',text:'clear\nskies\n'},
+  ]);
+  // A newline written as its own frame stays on its line; a newline that only
+  // closes an interrupted line does not produce an empty labelled row.
+  assert.equal(out,'[rain stopped.\n[packet 5/6.\n[signal note 5.\n[clear\n[skies\n');
+  merger.reset();
+  assert.equal(render([{node_id:'a',stream:'stdout',text:'x'}]),'[x');
+});
+
+test('merged pane keeps one element per chunk for dense lines and relocalizes labels in place',async tcase=>{
+  const dom=domFixture();globalThis.document=dom.document;tcase.after(()=>delete globalThis.document);setLocale('en-US');
+  const record={...run,nodes:[{node_id:'a',kind:'script',name:'build',phase:'running'}]};
+  const dense='x\n'.repeat(4096);
+  const pane=logPane({read:async()=>page([chunk('a',dense),chunk('a',dense)],{start:0,next:16384}),commandID:'command',record,encoding:'utf-8'});
+  tcase.after(()=>pane.dispose());await pane.refresh();
+  const output=descendants(pane.element).find(element=>element.className==='log-pane-output');
+  const spans=()=>descendants(output).filter(el=>el.dataset.stream);
+  assert.equal(spans().length,2,'labels must not add an element per line');
+  const lines=spans().map(el=>el.textContent).join('').split('\n').filter(Boolean);
+  assert.equal(lines.length,8192);
+  assert.ok(lines.every(line=>line===t('common.graph.log_prefix',{name:'build'})+'x'));
+  const first=spans()[0];setLocale('zh-CN');pane.relocalize();
+  assert.equal(spans()[0],first);
+  assert.ok(first.textContent.startsWith(t('common.graph.log_prefix',{name:'build'})+'x\n'));
+  setLocale('en-US');
+});
+
+test('line labels are inserted literally even when node names contain replacement patterns',async tcase=>{
+  for(const label of ["[$'] ","[$&] ","[$$] ","[$`] "]){
+    const piece={text:'first\nsecond\nthird\n',breakBefore:false,labelFirst:true};
+    assert.equal(labelLines(piece,label),label+'first\n'+label+'second\n'+label+'third\n');
+    const dense={text:'x\n'.repeat(512),breakBefore:false,labelFirst:true};
+    assert.equal(labelLines(dense,label).length,512*(label.length+2));
+  }
+  const dom=domFixture();globalThis.document=dom.document;tcase.after(()=>delete globalThis.document);setLocale('en-US');
+  const record={...run,nodes:[{node_id:'a',kind:'script',name:"$'build$&",phase:'running'}]};
+  const pane=logPane({read:async()=>page([chunk('a','one\ntwo\n')]),commandID:'command',record,encoding:'utf-8'});
+  tcase.after(()=>pane.dispose());await pane.refresh();
+  const text=()=>descendants(pane.element).filter(el=>el.dataset.stream).map(el=>el.textContent).join('');
+  const expected=()=>{const prefix=t('common.graph.log_prefix',{name:"$'build$&"});return prefix+'one\n'+prefix+'two\n';};
+  assert.equal(text(),expected());
+  setLocale('zh-CN');pane.relocalize();assert.equal(text(),expected());setLocale('en-US');
 });

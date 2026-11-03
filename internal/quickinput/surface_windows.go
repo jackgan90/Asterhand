@@ -58,6 +58,7 @@ type nativeSurface struct {
 	initialized                   bool
 	closing                       bool
 	attention                     bool
+	nativeCorners                 bool
 	environment, controller, core *comRef
 	subscriptions                 []eventSubscription
 	class                         *uint16
@@ -219,6 +220,7 @@ func (s *nativeSurface) createWindow() error {
 		return err
 	}
 	s.hwnd.Store(hwnd)
+	s.applyWindowFrame()
 	if s.log == nil {
 		s.positionForShow()
 	} else {

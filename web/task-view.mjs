@@ -33,7 +33,6 @@ const outcomeKeys = {
 };
 const size = bytes => bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
 const time = value => value ? new Date(value).toLocaleString(currentLocaleEntry().htmlLang, {month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit", hour12:false}) : "";
-const refreshClock = dateObj => dateObj.toLocaleTimeString(currentLocaleEntry().htmlLang, {hour:"2-digit", minute:"2-digit", hour12:false});
 
 function stateText(state) {
   return stateKeys[state] ? t(stateKeys[state]) : state;
@@ -44,7 +43,7 @@ function outcomeText(outcome) {
 }
 
 export function taskView({guarded, callbacks, submissionChanged}) {
-  let editing = false, answeringCount = 0, context, lastRefreshAt = null, eventsRoot;
+  let editing = false, answeringCount = 0, context, eventsRoot;
   let detailState = null;
   let cardRelocalizers = [];
   const answerDrafts = new Map();
@@ -54,11 +53,6 @@ export function taskView({guarded, callbacks, submissionChanged}) {
     for (const [draftKey, input] of questionInputs) {
       if (input.value) answerDrafts.set(draftKey, input.value);
     }
-  }
-
-  function paintLastRefresh() {
-    if (!lastRefreshAt) return;
-    $("#last-refresh").textContent = t("web.tasks.last_refresh", {time: refreshClock(lastRefreshAt)});
   }
 
   function paintCards(views, selection) {
@@ -73,12 +67,10 @@ export function taskView({guarded, callbacks, submissionChanged}) {
       cardRelocalizers.push(() => { emptyEl.textContent = t("web.tasks.empty_hint"); });
       root.append(emptyEl);
     }
-    paintLastRefresh();
   }
 
   function render(views, selection) {
     syncDraftValuesFromDOM();
-    lastRefreshAt = new Date();
     paintCards(views, selection);
   }
 
@@ -249,18 +241,21 @@ export function taskView({guarded, callbacks, submissionChanged}) {
     };
   }
 
+  // One conclusion first; secondary outcomes only when they need attention.
   function buildSummaryItems(summary, job) {
     const item = (label, value) => {
       const cell = node("div");
       cell.append(node("span", label), node("strong", value));
       return cell;
     };
-    summary.replaceChildren(
-      item(t("web.task.detail.status"), stateText(job.state)),
-      item(t("web.task.detail.execution"), outcomeText(job.execution_outcome || "not_run")),
-      item(t("web.task.detail.verification"), outcomeText(job.verification_outcome || "not_run")),
-      item(t("web.task.detail.acceptance"), outcomeText(job.user_acceptance || "pending")),
-    );
+    const items = [item(t("web.task.detail.status"), stateText(job.state))];
+    if (job.execution_outcome === "unknown_manually_closed")
+      items.push(item(t("web.task.detail.execution"), outcomeText(job.execution_outcome)));
+    if (job.verification_outcome === "failed")
+      items.push(item(t("web.task.detail.verification"), outcomeText(job.verification_outcome)));
+    if (job.state === "completed_unverified")
+      items.push(item(t("web.task.detail.acceptance"), outcomeText(job.user_acceptance || "pending")));
+    summary.replaceChildren(...items);
   }
 
   function formatTechMeta(job) {
@@ -301,7 +296,6 @@ export function taskView({guarded, callbacks, submissionChanged}) {
 
   function relocalize() {
     for (const update of cardRelocalizers) update();
-    paintLastRefresh();
     if (detailState && $("#detail")?.open) {
       buildSummaryItems(detailState.summary, detailState.job);
       detailState.techSummary.textContent = t("web.task.detail.tech_summary");

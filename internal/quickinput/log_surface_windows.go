@@ -126,7 +126,7 @@ func (s *nativeSurface) showLogWindow(anchor *hostipc.WindowAnchor) error {
 		mode = 3
 	}
 	uiDLL.NewProc("ShowWindow").Call(s.hwnd.Load(), mode)
-	uiDLL.NewProc("SetForegroundWindow").Call(s.hwnd.Load())
+	s.activateForeground()
 	visible, _, _ := uiDLL.NewProc("IsWindowVisible").Call(s.hwnd.Load())
 	s.log.visible.Store(visible != 0)
 	if visible == 0 {

@@ -1,6 +1,6 @@
 import {commandClient} from './command-client.mjs';
 import {commandQuery, filterCommands} from './command-model.mjs';
-import {runBusy, runStoppable, runLabel, summaryLabel, canLaunch} from './command-run.mjs';
+import {runBusy, runStoppable, runLabel, runTone, summaryLabel, reasonLabel, canLaunch} from './command-run.mjs';
 import {commandResults} from './command-results.mjs';
 import {getLocale, localizeError, localizeMessage, t} from './i18n.mjs';
 
@@ -74,24 +74,36 @@ export function commandPanel(bridge, {input, post, changed, sendText}) {
       const info = document.createElement('span'), title = document.createElement('span'), description = document.createElement('small');
       info.className = 'command-info';
       const aliases = [...(entry.aliases ?? [])].sort((a, b) => Number(b === entry.matchedName) - Number(a === entry.matchedName));
-      title.textContent = entry.name + (aliases.length ? ' · ' + aliases.join(' / ') : '');
-      title.title = title.textContent;
+      const name = document.createElement('span'), aliasText = document.createElement('span');
+      name.textContent = entry.name;
+      aliasText.className = 'command-aliases'; aliasText.textContent = aliases.join(' / ');
+      title.className = 'command-title';
+      title.append(name, aliasText);
+      title.title = entry.name + (aliases.length ? ' · ' + aliases.join(' / ') : '');
       const detailText = localizeMessage(entry.detail_key, entry.detail_args, entry.detail || '');
       const failed = !['ready', 'checking'].includes(entry.state);
-      description.textContent = [summaryLabel(entry), failed ? detailText : entry.description || t(entry.state === 'checking' ? 'quickinput.commands_checking' : 'quickinput.commands_local_script')].filter(Boolean).join(' · ');
-      row.title = [title.textContent, entry.description, failed ? detailText : ''].filter(Boolean).join('\n');
+      // State is an icon; text appears only for problems that need attention.
+      const tone = runTone(entry), summary = summaryLabel(entry);
+      const icon = document.createElement('span');
+      icon.className = 'command-state'; icon.dataset.state = tone || 'idle';
+      if (summary) { icon.title = summary; icon.setAttribute('aria-label', summary); }
+      const problem = failed ? detailText : ['failed', 'interrupted'].includes(tone) ? reasonLabel(entry) : '';
+      description.textContent = problem || entry.description || (entry.state === 'checking' ? t('quickinput.commands_checking') : '');
+      description.dataset.problem = String(Boolean(problem));
+      row.title = [title.title, summary, entry.description, problem].filter(Boolean).join('\n');
       info.append(title, description);
       const error = document.createElement('span');
       const errText = rowErrorText(entry.id);
       error.className = 'command-error'; error.textContent = errText; error.hidden = !errText;
       error.title = errText ? t('quickinput.commands_open_config_hint', {error: errText}) : '';
       error.setAttribute('role', 'status');
-      row.append(info, error);
+      row.append(icon, info, error);
       if(entry.run_id){
         const controls=document.createElement("span");controls.className="command-controls";
         for(const [action,key] of [["logs","common.command.logs"],["stop_all","common.command.stop_all"]]){
           if(action==="stop_all"&&!runBusy(entry))continue;
-          const button=document.createElement("button");button.type="button";button.textContent=t(key);
+          const button=document.createElement("button");button.type="button";
+          button.className=`icon-button icon-${action}`;button.title=t(key);button.setAttribute("aria-label",t(key));
           button.disabled=action==="stop_all"&&!runStoppable(entry);
           button.addEventListener("click",event=>{event.stopPropagation();void control(action,entry,button);});controls.append(button);
         }

@@ -41,7 +41,7 @@ pwsh -NoProfile -File ./scripts/check-i18n.ps1
 
 ### 前端与桥接 JavaScript
 
-- 直接与带参翻译：`t("web.tasks.last_refresh", {time: clockText})`（快捷输入资源中使用对应的 `t(...)`）。
+- 直接与带参翻译：`t("web.node.revoke_confirm", {name: displayName})`（快捷输入资源中使用对应的 `t(...)`）。
 - 显式映射字典：对象值必须填写完整的词表键名，再将键传给 `t(...)`，不得在字典中写死中文或未登记假键：
 
 ```js

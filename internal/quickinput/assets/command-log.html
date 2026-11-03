@@ -2,26 +2,28 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title data-i18n="brand.log_window_title"></title><link rel="stylesheet" href="input.css"><link rel="stylesheet" href="command-log.css"></head>
 <body><main>
-  <header><div><strong id="log-name"></strong><span id="log-state" role="status"></span></div><button id="log-stop" data-i18n="common.command.stop_all"></button></header>
-  <section id="log-details"></section><p id="log-warning" role="status" hidden></p>
-  <nav class="log-tools">
-    <label><span data-i18n="common.command.encoding"></span><select id="log-encoding">
-      <option value="utf-8" data-i18n="common.command.utf8"></option><option value="gbk" data-i18n="common.command.gbk"></option>
-      <option value="big5" data-i18n="common.command.big5"></option><option value="utf-16le" data-i18n="common.command.utf16"></option>
-    </select></label>
-  </nav>
-  <section id="log-graph" hidden>
-    <label><span data-i18n="common.command.instance"></span><select id="log-run-picker"></select></label>
-    <div id="log-nodes" data-i18n-aria-label="common.graph.nodes"></div>
-    <details id="log-view-picker">
-      <summary id="log-view-summary"></summary>
-      <div class="log-view-options">
-        <label><input id="log-view-all" type="checkbox"><span data-i18n="common.graph.all"></span></label>
-        <label><input id="log-view-active" type="radio" name="log-view-mode"><span data-i18n="common.graph.active_logs"></span></label>
-        <p data-i18n="common.graph.fixed_nodes"></p>
-        <div id="log-node-options"></div>
+  <header>
+    <div class="log-title"><strong id="log-name"></strong><span id="log-state" role="status"></span><span id="log-elapsed"></span></div>
+    <button id="log-stop" class="log-stop" hidden data-i18n="common.command.stop_all"></button>
+    <details id="log-menu" class="log-menu">
+      <summary data-i18n-title="common.command.more" data-i18n-aria-label="common.command.more"></summary>
+      <div class="log-menu-panel">
+        <label><span data-i18n="common.command.encoding"></span><select id="log-encoding">
+          <option value="utf-8" data-i18n="common.command.utf8"></option><option value="gbk" data-i18n="common.command.gbk"></option>
+          <option value="big5" data-i18n="common.command.big5"></option><option value="utf-16le" data-i18n="common.command.utf16"></option>
+        </select></label>
       </div>
     </details>
+  </header>
+  <p id="log-warning" role="status" hidden></p>
+  <section id="log-graph" hidden>
+    <div class="log-view-bar">
+      <div class="log-view-modes" role="group" data-i18n-aria-label="common.command.view_label">
+        <button id="log-view-all" type="button" data-i18n="common.command.view_all"></button><button id="log-view-active" type="button" data-i18n="common.command.view_active"></button><button id="log-view-custom" type="button" data-i18n="common.command.view_custom"></button>
+      </div>
+      <label id="log-run-field" hidden><span data-i18n="common.command.instance"></span><select id="log-run-picker"></select></label>
+    </div>
+    <div id="log-nodes" data-i18n-aria-label="common.graph.nodes"></div>
   </section>
   <p id="log-empty" role="status" hidden></p>
   <p id="log-limit" role="status" hidden data-i18n="common.command.pane_limit"></p>

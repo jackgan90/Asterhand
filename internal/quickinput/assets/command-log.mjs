@@ -2,7 +2,7 @@ import {webview2Bridge} from './webview2-bridge.mjs';
 import {commandClient} from './command-client.mjs';
 import {applyI18n, setLocale, t, localizeError, formatDateTime} from './i18n.mjs';
 import {runStoppable, runLabel, reasonLabel} from './command-run.mjs';
-import {nodeName, nodeLabel} from './log-node.mjs';
+import {nodeName, nodeLabel, nodeState} from './log-node.mjs';
 import {logGraphView} from './log-graph.mjs';
 import {logPane} from './log-pane.mjs';
 import {logReadQueue} from './log-reader.mjs';
@@ -17,21 +17,29 @@ const client = commandClient(bridge, post), read = logReadQueue(client.call);
 const graphView = logGraphView({byID, changed: () => void refresh(), createPane: (nodeID, next) =>
   logPane({read, commandID, record: next, nodeID, encoding: encoding.value, stop: stopRun})});
 
+// The header shows name, status and duration; times move to the tooltip and
+// exit details appear only when the run did not succeed.
 function renderMetadata() {
   byID('log-name').textContent = record?.command?.name || t('brand.log_window_title');
-  byID('log-state').textContent = runLabel(record);
-  stop.disabled = stopping || !runs.runs.some(runStoppable);
-  const details = [];
-  if (record?.started_at) details.push(t('common.command.started', {time: formatDateTime(record.started_at)}));
-  if (record?.ended_at) details.push(t('common.command.ended', {time: formatDateTime(record.ended_at)}));
-  if (record) details.push(t('common.command.elapsed', {seconds: record.elapsed_seconds.toFixed(1)}));
-  if (record?.command?.timeout_seconds) details.push(t('common.command.timeout_value', {seconds: record.command.timeout_seconds}));
-  if (record?.exit?.code !== undefined) details.push(t('common.command.exit_code', {code: record.exit.code}));
-  if (reasonLabel(record)) details.push(reasonLabel(record));
-  const failed = record?.nodes?.find(node => node.node_id === record.failed_node_id);
-  if (failed) details.push(t('common.graph.failed_detail', {name: nodeName(failed), reason: reasonLabel(failed) || nodeLabel(failed)}));
-  byID('log-details').replaceChildren(...details.map(text => { const element = document.createElement('span'); element.textContent = text; return element; }));
-  const warnings = [error && localizeError(error), record?.log_complete === false && t('common.command.log_incomplete'),
+  const state = byID('log-state');
+  state.textContent = runLabel(record);
+  state.dataset.state = record ? nodeState(record) : '';
+  byID('log-elapsed').textContent = record ? t('common.command.elapsed', {seconds: record.elapsed_seconds.toFixed(1)}) : '';
+  const stoppable = runs.runs.some(runStoppable);
+  stop.hidden = !stoppable && !stopping;
+  stop.disabled = stopping || !stoppable;
+  const times = [];
+  if (record?.started_at) times.push(t('common.command.started', {time: formatDateTime(record.started_at)}));
+  if (record?.ended_at) times.push(t('common.command.ended', {time: formatDateTime(record.ended_at)}));
+  if (record?.command?.timeout_seconds) times.push(t('common.command.timeout_value', {seconds: record.command.timeout_seconds}));
+  byID('log-name').title = times.join('\n');
+  const failed = record?.phase === 'finished' && record.result && record.result !== 'succeeded';
+  const failedNode = record?.nodes?.find(node => node.node_id === record.failed_node_id);
+  const warnings = [error && localizeError(error),
+    failed && reasonLabel(record),
+    failed && record.exit?.code !== undefined && record.exit.code !== 0 && t('common.command.exit_code', {code: record.exit.code}),
+    failedNode && t('common.graph.failed_detail', {name: nodeName(failedNode), reason: reasonLabel(failedNode) || nodeLabel(failedNode)}),
+    record?.log_complete === false && t('common.command.log_incomplete'),
     record?.storage_error && t('common.command.storage_error'), (record?.cleanup_pending || runs.cleanup_pending) && t('common.command.cleanup_pending')].filter(Boolean);
   byID('log-warning').textContent = warnings.join(' · ');
   byID('log-warning').hidden = !warnings.length;
@@ -73,6 +81,9 @@ async function refresh() {
 }
 
 encoding.onchange = () => graphView.setEncoding(encoding.value);
+const menu = byID('log-menu');
+document.addEventListener?.('pointerdown', event => { if (menu.open && !menu.contains(event.target)) menu.open = false; });
+menu.addEventListener('keydown', event => { if (event.key === 'Escape') menu.open = false; });
 async function stopRun(runID) {
   await client.call('stop', {command_id: commandID, run_id: runID});
   void refresh();

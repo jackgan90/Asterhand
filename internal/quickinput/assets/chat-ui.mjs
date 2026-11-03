@@ -27,10 +27,10 @@ export function chatPanel(bridge, editor) {
   const cleanup = [];
   const listen = (node, name, fn) => { node.addEventListener(name, fn); cleanup.push(() => node.removeEventListener(name, fn)); };
   const statusView = replyStatusView(status);
-  statusView.message(t('quickinput.chat_hint'));
+  statusView.message(t('quickinput.chat_hint'), false, true);
   const sayKey = (key, args) => {
     lastStatus = {kind: 'key', key, args};
-    return statusView.message(t(key, args));
+    return statusView.message(t(key, args), false, key === 'quickinput.chat_hint');
   };
   const sayError = (err, fallbackKey = '') => {
     lastStatus = {kind: 'error', err, fallbackKey};

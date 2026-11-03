@@ -1,5 +1,5 @@
 import {localizeError, t} from './i18n.mjs';
-import {runKey, runBusy, runStoppable, timeoutSeconds, summaryParts} from './command-run.mjs';
+import {runKey, runBusy, runStoppable, runTone, timeoutSeconds, summaryParts} from './command-run.mjs';
 import {$, node, dialog} from './ui.mjs';
 import {graphEditor} from './graph-editor.mjs';
 
@@ -59,6 +59,7 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
     const locked=busy||runBusy(runStates[selected]);
     for(const control of form.querySelectorAll('button,input,textarea,select'))control.disabled=locked;
     editor.setLocked(locked);
+    paintRunBar();
   }
   function paint() {
     const term = search.value.trim().toLocaleLowerCase('en-US');
@@ -68,24 +69,41 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
       if (![command.name, ...(command.aliases ?? [])].some(name => name.toLocaleLowerCase('en-US').includes(term))) continue;
       const button = node('button', null, 'registered-command'); button.type = 'button';
       button.setAttribute('aria-pressed', String(command.id === selected));
-      button.append(node('strong',command.name), node('span',summaryParts(runStates[command.id], t).join(' · ')), node('span', (command.aliases ?? []).join(' / ')), node('small', t('common.graph.script_count',{count:command.graph.nodes.filter(n=>n.kind==='script').length})));
+      const run = runStates[command.id], summary = summaryParts(run, t).join(' · ');
+      const title = node('strong'), dot = node('span', null, 'run-dot');
+      dot.dataset.state = runTone(run); dot.hidden = !dot.dataset.state;
+      if (summary) { dot.title = summary; dot.setAttribute('aria-label', summary); }
+      title.append(dot, node('span', command.name));
+      button.append(title, node('span', command.description || (command.aliases ?? []).join(' / ')));
       button.addEventListener('click', () => {if (!busy && canDiscard()) {populate(command); paintStatus(null);}});
-      const row=node('div',null,'registered-command-row');row.append(button);
-      const run=runStates[command.id];
-      if(run?.run_id){
-        const controls=node('div',null,'actions compact');
-        for(const [action,key] of [['logs','common.command.logs'],['stop-all','common.command.stop_all']]){
-          if(action==='stop-all'&&!runBusy(run))continue;
-          const control=node('button',t(key),'quiet');control.type='button';control.disabled=busy||action==='stop-all'&&!runStoppable(run);
-          control.addEventListener('click',async()=>{control.disabled=true;try{await post('/api/local-commands/'+action,{id:command.id,...(action==='stop-all'?{run_ids:[...(run.active_run_ids??[])]}:{})});}catch(error){paintStatus({kind:'error',error});}finally{void refreshStates();}});controls.append(control);
-        }row.append(controls);
-      }
-      list.append(row);
+      list.append(button);
     }
     if (!list.children.length) {
       list.append(node('p', catalog.commands.length ? t('web.commands.empty_no_match') : t('web.commands.empty_none')));
     }
-    $('#command-count').textContent = t('web.commands.count', {count: catalog.commands.length});lockForm();
+    lockForm();
+  }
+  // The selected command's run state and actions sit above its form. Painted
+  // after the form lock so running commands keep their log and stop actions.
+  function paintRunBar() {
+    const run = runStates[selected], bar = $('#command-run-bar');
+    bar.hidden = !selected || !run?.run_id;
+    if (bar.hidden) return;
+    const state = $('#command-run-state');
+    state.textContent = summaryParts(run, t).join(' · ');
+    state.dataset.state = runTone(run);
+    $('#command-logs').disabled = busy;
+    $('#command-stop-all').hidden = !runBusy(run);
+    $('#command-stop-all').disabled = busy || !runStoppable(run);
+  }
+  async function runAction(action) {
+    const run = runStates[selected], id = selected;
+    if (!id || !run?.run_id) return;
+    const control = $(action === 'logs' ? '#command-logs' : '#command-stop-all');
+    control.disabled = true;
+    try { await post('/api/local-commands/'+action, {id, ...(action === 'stop-all' ? {run_ids:[...(run.active_run_ids ?? [])]} : {})}); }
+    catch (error) { paintStatus({kind:'error', error}); }
+    finally { void refreshStates(); }
   }
   async function refreshStates(){
     clearTimeout(stateTimer);stateTimer=null;
@@ -168,6 +186,8 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
   listen(form, 'submit', event => {event.preventDefault(); void mutate();});
   listen($('#command-delete'), 'click', () => mutate(true));
   listen(search, 'input', paint);
+  listen($('#command-logs'), 'click', () => runAction('logs'));
+  listen($('#command-stop-all'), 'click', () => runAction('stop-all'));
   listen($('#commands-close'), 'click', () => {if (!busy && canDiscard()) panel.close();});
   listen(panel, 'cancel', event => {if (busy || !canDiscard()) event.preventDefault();});
   function stop() { clearTimeout(stateTimer);generation++; picker?.abort(); picker = null; setBusy(false); }

@@ -33,29 +33,35 @@ export function nodeController({api, post, session, guarded, notice, actions, li
     ];
     for (const p of all) {
       const card = node("div", null, "node"),
-        name = node("strong");
-      name.append(
-        node("span", null, `dot${p.online ? "" : " off"}`),
-        document.createTextNode(p.name),
-      );
-      card.append(
-        name,
-        node(
-          "small",
-          `${p.local ? t("web.node.local_prefix") : ""}${p.online ? t("web.node.online") : t("web.node.offline")}`,
-        ),
-      );
+        name = node("strong"),
+        online = p.online ? t("web.node.online") : t("web.node.offline"),
+        dot = node("span", null, `dot${p.online ? "" : " off"}`);
+      dot.title = online;
+      dot.setAttribute("aria-label", online);
+      name.append(dot, node("span", p.name, "node-name"));
+      if (p.local) name.append(node("span", t("web.node.local_tag"), "node-tag"));
+      card.append(name);
+      // Healthy devices need no text; only offline or unready states explain themselves.
+      const lines = [];
+      if (!p.online) lines.push(online);
       if (p.info) {
         const status = modelTaskStatus(p.info);
-        card.append(node("small", `${p.online ? "" : t("web.node.last_state_prefix")}${status.available ? t("web.node.ready") : status.detail}`));
-        if (p.info.capabilities?.chat?.available && !status.available)
-          card.append(node("small", t("web.node.chat_available")));
+        if (!status.available) {
+          lines.push(`${p.online ? "" : t("web.node.last_state_prefix")}${status.detail}`);
+          if (p.info.capabilities?.chat?.available) lines.push(t("web.node.chat_available"));
+        }
       }
+      for (const line of lines) card.append(node("small", line));
       const peerError = localizeMessage(p.error_key, p.error_args, p.error || "");
       if (peerError) card.append(node("small", peerError, "error-text"));
       if (!p.local) {
+        const menu = node("details", null, "node-menu"), toggle = node("summary");
+        toggle.setAttribute("aria-label", t("web.node.more"));
+        toggle.title = t("web.node.more");
         const revoke = node("button", t("web.node.revoke"), "quiet");
+        revoke.type = "button";
         revoke.addEventListener("click", () => {
+          menu.open = false;
           if (actions.confirm(t("web.node.revoke_confirm", {name: p.name})))
             guarded(async () => {
               const scope = session();
@@ -66,7 +72,8 @@ export function nodeController({api, post, session, guarded, notice, actions, li
               if (scope?.active) await refreshPeers();
             });
         });
-        card.append(revoke);
+        menu.append(toggle, revoke);
+        card.append(menu);
       }
       root.append(card);
     }

@@ -22,8 +22,12 @@ textarea.input-measure {
 }
 main:has(#chat-panel[hidden]) { overflow-y: auto; }
 footer { flex: none; padding: 8px 18px; font-size: 11px; }
-#status { max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The footer only carries input warnings; key hints live in the action row. */
+footer:has(#status:empty) { display: none; }
+#status { max-width: 100%; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-actions { display: flex; align-items: center; gap: 8px; padding: 8px 18px; position: relative; }
+/* In command mode an idle hint row only repeats the command toolbar. */
+main:has(#command-panel:not([hidden])) .chat-actions:has(#chat-status[data-idle=true]):has(#chat-stop[hidden]) { display: none; }
 #chat-status { flex: 1; min-width: 0; height: 18px; line-height: 18px; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .reply-dots { display: inline-block; width: 3ch; font-family: monospace; animation: reply-dots 1.2s steps(1, end) infinite; }
 @keyframes reply-dots {
@@ -47,7 +51,12 @@ footer { flex: none; padding: 8px 18px; font-size: 11px; }
 .chat-session-bar { display: flex; align-items: center; justify-content: space-between; padding: 6px 18px; color: var(--muted); font-size: 12px; }
 .chat-session-identity { display: flex; align-items: center; gap: 4px; min-width: 0; }
 #chat-conversation-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#chat-connection { flex: none; white-space: nowrap; }
+#chat-connection { flex: none; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+#chat-connection::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+/* Connected needs no words: a green dot, with the text kept for screen readers. */
+#chat-connection[data-state=connected] { font-size: 0; gap: 0; }
+.chat-session-identity:has(#chat-connection[data-state=connected]) > span[aria-hidden] { display: none; }
+.chat-session-identity:has(#chat-connection[data-state=connected]) { gap: 8px; }
 #chat-connection[data-state=connecting] { color: #eab308; }
 #chat-connection[data-state=connected] { color: #22c55e; }
 #chat-connection[data-state=unavailable] { color: #f87171; }

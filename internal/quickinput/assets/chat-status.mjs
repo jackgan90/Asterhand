@@ -9,10 +9,12 @@ export function replyStatusView(container) {
   container.replaceChildren(label, dots);
   let visible = false, replying = false;
   const update = () => { dots.hidden = !visible || !replying; dots.textContent = replying ? '...' : ''; };
-  function message(text, active = false) {
+  function message(text, active = false, idle = false) {
     // Avoid replacing the live-region text on every reconciliation tick.
     if (label.textContent !== text) label.textContent = text;
     container.title = text;
+    // Idle means only the key hint is shown; command mode may then hide the row.
+    container.dataset.idle = String(idle);
     replying = active;
     update();
   }
@@ -21,7 +23,7 @@ export function replyStatusView(container) {
     message,
     turn(turn, suffix = '', submitting = false) {
       message([turnStatus(turn, submitting), suffix].filter(Boolean).join(' · '),
-        submitting || awaitingReply(turn));
+        submitting || awaitingReply(turn), !turn && !submitting && !suffix);
     },
     visible(value) { visible = value; update(); },
     dispose() { visible = false; replying = false; update(); },

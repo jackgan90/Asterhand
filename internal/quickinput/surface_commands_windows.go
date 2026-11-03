@@ -15,6 +15,7 @@ func (s *nativeSurface) commandRequest(message bridgeMessage) {
 	call := hostipc.Message{Kind: hostipc.CommandCall, Epoch: epoch, CommandID: message.ID, Command: message.Command}
 	if message.Command.Action == "logs" {
 		call.Anchor = logAnchorForWindow(s.hwnd.Load())
+		allowForegroundTransfer()
 	}
 	_ = s.commandSend(call)
 }

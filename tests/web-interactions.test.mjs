@@ -6,9 +6,10 @@ import {domFixture, clockFixture, tick, descendants, deferred} from "./web-fixtu
 setLocale("zh-CN");
 
 let sequence = 0;
-async function page(t, handler = () => undefined) {
+async function page(t, handler = () => undefined, setup = () => {}) {
   let app;
   const dom = domFixture(), clock = clockFixture(), requests = [], streams = [];
+  setup(dom);
   const info = {node_id:"local", name:"Test node", ready:true, version:"test", projects:[{id:"project",name:"Workspace",root:"test-workspace"}]};
   const storage = new Map();
   const restore = [];
@@ -97,7 +98,7 @@ test("cancelled stop and reconciliation prompts cause no write", async t => {
   const job = {id:"job", owner:"local", state:"reconciliation_required", request:{goal:"check"}};
   const ui = await page(t, path => path === "/api/jobs" ? [job] : undefined);
   ui.select("#stop-node").fire("click");
-  descendants(ui.select("#tasks")).find(el => el.textContent === "核对后关闭").fire("click");
+  descendants(ui.select("#tasks")).find(el => el.textContent === "我已检查，关闭").fire("click");
   await tick();
   assert.equal(ui.requests.filter(r => r.options.method === "POST").length,0);
 });
@@ -127,7 +128,8 @@ test("an unconfigured node opens the main page without a settings or model reque
   assert.equal(ui.select("#workspace").hidden,false);
   assert.equal(ui.requests.some(r => ["/api/settings","/api/probe","/api/network"].includes(r.path)),false);
   assert.match(ui.select("#submit-status").textContent,/API key/);
-  assert.match(ui.select("#nodes").children[0].children[1].textContent,/在线/);
+  // A healthy device shows only its status dot; an unready one explains why.
+  assert.match(ui.select("#nodes").children[0].children[1].textContent,/API key/);
 });
 
 test("definite task rejection is distinct from unknown delivery and has no cancel action", async t => {
@@ -183,4 +185,33 @@ test("stopping subscriptions retains an unknown write and never resends it", asy
   assert.equal(ui.requests.filter(request => request.body?.goal === "write").length,1);
   assert.ok(ui.storage.has("asterhand-pending"));
   assert.equal(ui.select("#goal").value,"write");
+});
+
+test("runtime text created before the locale is restored shows the restored language on first render", async t => {
+  // The page module starts in the fallback language; the browser asks for zh-CN.
+  setLocale("en-US");
+  t.after(() => setLocale("zh-CN"));
+  const ui = await page(t, undefined, dom => {
+    dom.select("#local-commands");
+    dom.select("#command-form").elements.namedItem = name => dom.select("#command-form").elements[name];
+  });
+  const labels = descendants(ui.select("#command-graph-editor")).map(el => el.textContent);
+  assert.ok(labels.includes("添加脚本节点"), "graph editor controls must follow the restored locale");
+  assert.equal(labels.includes("Add script node"), false);
+});
+
+test("theme and language choices do not mark node settings unsaved, and never clear real edits", async t => {
+  const ui = await page(t);
+  const form = ui.select("#settings-form"), dirty = ui.select("#settings-dirty");
+  // Theme and language controls live inside the form's DOM, so their events bubble to it.
+  const bubble = (type, target) => { const event = new Event(type); Object.defineProperty(event, "target", {value:target}); form.dispatchEvent(event); };
+  const theme = Object.assign(ui.document.createElement("input"), {name:"ui-theme", value:"frost"});
+  const locale = Object.assign(ui.document.createElement("select"), {id:"settings-locale"});
+  dirty.hidden = true;
+  for (const type of ["input", "change"]) { bubble(type, theme); bubble(type, locale); }
+  assert.equal(dirty.hidden, true, "choosing a theme or language alone is not an unsaved node setting");
+  bubble("input", form.elements.name);
+  assert.equal(dirty.hidden, false);
+  bubble("change", theme);
+  assert.equal(dirty.hidden, false, "a later theme choice keeps the real unsaved edit visible");
 });

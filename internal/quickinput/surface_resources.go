@@ -24,6 +24,10 @@ func resourceTypes() map[string]string {
 	for _, name := range []string{"input.css", "chat.css", "commands.css", "command-log.css"} {
 		allowed[name] = "text/css; charset=utf-8"
 	}
+	// Monochrome CSS mask icons; the page colors them with the theme.
+	for _, name := range []string{"check", "cross", "alert", "logs", "stop", "gear", "more", "down"} {
+		allowed["icons/"+name+".svg"] = "image/svg+xml"
+	}
 	for _, name := range []string{"input.js", "i18n.mjs", "i18n-catalog.mjs", "input-model.mjs", "composer-layout.mjs", "webview2-bridge.mjs", "chat-client.mjs",
 		"chat-model.mjs", "chat-renderer.mjs", "chat-ui.mjs", "chat-outbox.mjs", "chat-status.mjs", "chat-queue.mjs", "chat-connection.mjs",
 		"chat-markup.mjs", "chat-math.mjs", "command-client.mjs", "command-model.mjs", "command-results.mjs", "command-ui.mjs", "command-log.mjs", "command-run.mjs", "log-model.mjs", "log-graph.mjs", "log-node.mjs", "log-reader.mjs", "log-pane.mjs"} {

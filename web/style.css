@@ -684,7 +684,7 @@ details.advanced > summary:hover { color: var(--fg); }
 }
 
 /* Local commands */
-#local-commands { width: min(1000px, 94vw); max-width: 1000px; }
+#local-commands { width: min(1280px, 96vw); max-width: 1280px; }
 .commands-management { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 28px; }
 .commands-sidebar { min-width: 0; }
 .commands-sidebar > input { margin-top: 0; }

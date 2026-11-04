@@ -1,140 +1,205 @@
-import {t,localizeError} from './i18n.mjs';
+import {t, localizeError} from './i18n.mjs';
 import {node} from './ui.mjs';
 import {timeoutSeconds} from './command-run.mjs';
-import {copyGraph,newGraph,edgeIssue,graphIssue,removeGraphNode,graphLimits} from './graph-model.mjs';
+import {copyGraph, newGraph, edgeIssue, graphIssue, removeGraphNode, graphLimits} from './graph-model.mjs';
+import {graphCanvas, edgeKey, nodeWidth, clampCoordinate, coordinateLimit} from './graph-canvas.mjs';
+import {graphInspector} from './graph-inspector.mjs';
+import {graphMenu} from './graph-menu.mjs';
 
-export function graphEditor({container,onChange,browse}) {
-  let graph=null,selected='',locked=false,error=null;
-  const labels=[],buttons=new Map(),argumentRows=[];
-  const text=(tag,key,className)=>{const el=node(tag,t(key),className);labels.push([el,key]);return el;};
-  const button=key=>{const el=text('button',key,'quiet');el.type='button';return el;};
-  const label=(key,control)=>{const el=node('label',null,'field');el.append(text('span',key),control);return el;};
-  const nameOf=n=>n.kind==='start'?t('common.graph.start'):n.kind==='end'?t('common.graph.end'):n.name||t('common.graph.unnamed');
-  const controls=node('div',null,'actions compact');
-  const add=button('web.graph.add'),remove=button('web.graph.remove'),parallel=node('input');
-  parallel.type='number';parallel.min='1';parallel.max=String(graphLimits.parallelism);
-  controls.append(add,remove,label('web.graph.parallelism',parallel));
-  const viewport=node('div',null,'graph-viewport'),stage=node('div',null,'graph-stage');
-  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.classList.add('graph-edges');svg.setAttribute('aria-hidden','true');
-  stage.append(svg);viewport.append(stage);
-  const links=node('div',null,'graph-links'),target=node('select'),edgeList=node('select');
-  const connect=button('web.graph.connect'),disconnect=button('web.graph.disconnect');
-  links.append(label('web.graph.target',target),connect,label('web.graph.edges',edgeList),disconnect);
-  const properties=node('fieldset',null,'graph-properties'),title=text('legend','web.graph.properties');
-  const name=node('input'),script=node('input'),directory=node('input'),timeout=node('input');
-  name.maxLength=128;script.placeholder='C:\\Scripts\\step.ps1';timeout.type='number';timeout.min='1';
-  const path=node('div',null,'command-script-path'),pick=button('web.commands.browse');path.append(script,pick);
-  const args=node('div'),addArg=button('web.commands.arg_add');
-  properties.append(title,label('web.graph.node_name',name),label('web.commands.script_label',path),label('web.commands.dir_label',directory),
-    label('web.graph.node_timeout',timeout),label('web.commands.args_label',args),addArg);
-  const hint=text('p','web.graph.hint','graph-hint'),message=node('p',null,'graph-error');message.setAttribute('role','status');
-  container.append(controls,hint,viewport,links,properties,message);
+// Node-style script graph editor. It edits an in-memory copy; the command form
+// reads it back through read(), which validates with the shared graph model.
+export function graphEditor({container, onChange, browse}) {
+  let graph = null, selection = null, locked = false, error = null, fullscreen = false;
+  const labels = [], viewControls = [];
+  const text = (tag, key, className) => { const el = node(tag, t(key), className); labels.push([el, 'text', key]); return el; };
+  const button = (key, className = 'quiet') => { const el = text('button', key, className); el.type = 'button'; return el; };
+  const label = (key, control) => { const el = node('label', null, 'field'); el.append(text('span', key), control); return el; };
+  // Icon-like view buttons keep their name in title and aria-label.
+  const iconButton = (glyph, key, className) => {
+    const el = node('button', glyph, `quiet graph-icon ${className}`); el.type = 'button';
+    labels.push([el, 'title', key]); el.title = t(key); el.setAttribute('aria-label', t(key));
+    viewControls.push(el); return el;
+  };
 
-  function changed(){onChange();error=null;paint();}
-  function option(select,value,labelText){const el=node('option',labelText);el.value=value;select.append(el);}
-  function replaceOptions(select,entries){
-    const value=select.value;select.replaceChildren();
-    for(const [id,labelText] of entries)option(select,id,labelText);
-    if(entries.some(([id])=>id===value))select.value=value;
-  }
-  function drawEdges(){
-    svg.replaceChildren();
-    const definitions=document.createElementNS(svg.namespaceURI,'defs'),marker=document.createElementNS(svg.namespaceURI,'marker');
-    for(const [key,value] of Object.entries({id:'graph-arrow',viewBox:'0 0 10 10',refX:'9',refY:'5',markerWidth:'6',markerHeight:'6',orient:'auto-start-reverse'}))marker.setAttribute(key,value);
-    const arrow=document.createElementNS(svg.namespaceURI,'path');arrow.setAttribute('d','M 0 0 L 10 5 L 0 10 z');marker.append(arrow);definitions.append(marker);svg.append(definitions);
-    for(const edge of graph.edges){
-      const from=graph.nodes.find(n=>n.id===edge.from),to=graph.nodes.find(n=>n.id===edge.to);if(!from||!to)continue;
-      const path=document.createElementNS(svg.namespaceURI,'path');
-      const x=from.x+180,y=from.y+28,tx=to.x,ty=to.y+28,bend=Math.max(60,Math.abs(tx-x)/2);
-      path.setAttribute('d',`M ${x} ${y} C ${x+bend} ${y}, ${tx-bend} ${ty}, ${tx} ${ty}`);
-      path.setAttribute('marker-end','url(#graph-arrow)');path.classList.add('graph-edge');svg.append(path);
-    }
-  }
-  function nodeButton(n){
-    const el=node('button',null,'graph-node');el.type='button';
-    el.onclick=()=>{if(!locked)select(n.id);};
-    el.onpointerdown=event=>{
-      if(locked||event.button!==0)return;
-      select(n.id);
-      const initial={x:event.clientX,y:event.clientY,nx:n.x,ny:n.y};
-      el.setPointerCapture(event.pointerId);
-      el.onpointermove=move=>{
-        if(locked)return;
-        n.x=Math.min(8000,Math.max(0,Math.round(initial.nx+move.clientX-initial.x)));
-        n.y=Math.min(8000,Math.max(0,Math.round(initial.ny+move.clientY-initial.y)));
-        changed();
-      };
-      const end=()=>{el.onpointermove=null;el.onpointerup=null;el.onpointercancel=null;};
-      el.onpointerup=end;el.onpointercancel=end;
-    };
-    return el;
-  }
-  function paint(){
-    if(!graph)return;
-    const ids=new Set(graph.nodes.map(n=>n.id));
-    for(const [id,el] of buttons)if(!ids.has(id)){el.remove();buttons.delete(id);}
-    for(const n of graph.nodes){
-      if(!buttons.has(n.id)){const el=nodeButton(n);buttons.set(n.id,el);stage.append(el);}
-      const el=buttons.get(n.id);el.textContent=nameOf(n);el.style.left=`${n.x}px`;el.style.top=`${n.y}px`;
-      el.dataset.kind=n.kind;el.setAttribute('aria-pressed',String(selected===n.id));el.disabled=locked;
-    }
-    stage.style.width=`${Math.max(780,...graph.nodes.map(n=>n.x+240))}px`;
-    stage.style.height=`${Math.max(280,...graph.nodes.map(n=>n.y+100))}px`;
-    drawEdges();
-    replaceOptions(target,graph.nodes.filter(n=>n.id!==selected&&n.kind!=='start').map(n=>[n.id,nameOf(n)]));
-    replaceOptions(edgeList,graph.edges.map((e,i)=>[String(i),t('web.graph.edge_label',{from:nameOf(graph.nodes.find(n=>n.id===e.from)),to:nameOf(graph.nodes.find(n=>n.id===e.to))})]));
-    message.textContent=error?localizeError(error):'';
+  const toolbar = node('div', null, 'graph-toolbar');
+  const add = button('web.graph.add', 'secondary graph-add');
+  const fit = button('web.graph.fit', 'quiet graph-fit'); viewControls.push(fit);
+  const zoomOut = iconButton('−', 'web.graph.zoom_out', 'graph-zoom-out'), zoomLevel = node('span', '100%', 'graph-zoom-level');
+  const zoomIn = iconButton('+', 'web.graph.zoom_in', 'graph-zoom-in');
+  const expand = button('web.graph.fullscreen', 'quiet graph-fullscreen'); viewControls.push(expand);
+  const parallel = node('input', null, 'graph-parallel');
+  parallel.type = 'number'; parallel.min = '1'; parallel.max = String(graphLimits.parallelism);
+  const parallelField = node('label', null, 'graph-parallel-field'); parallelField.append(text('span', 'web.graph.parallelism'), parallel);
+  const spacer = node('span', null, 'graph-spacer');
+  toolbar.append(add, fit, zoomOut, zoomLevel, zoomIn, expand, spacer, parallelField);
+
+  const canvas = graphCanvas({
+    select: next => select(next),
+    move: (id, x, y) => { const n = find(id); if (n && (n.x !== x || n.y !== y)) { n.x = x; n.y = y; changed(); } },
+    canConnect: (from, to) => !edgeIssue(graph, from, to),
+    connect: (from, to) => { graph.edges.push({from, to}); select({kind: 'edge', id: edgeKey({from, to})}); changed(); },
+    rename: (id, name) => { const n = find(id); if (n && n.name !== name) { n.name = name; inspector.show(n, true); changed(); } },
+    add: point => addStep(point),
+    menu: (target, at) => openMenu(target, at),
+    viewChanged: zoom => { zoomLevel.textContent = `${Math.round(zoom * 100)}%`; },
+  });
+  const inspector = graphInspector({text, button, label,
+    onEdit: (field, value) => { const n = selectedStep(); if (n && !locked) { n[field] = value; changed(false); } },
+    onBrowse: () => chooseScript(selectedStep()?.id),
+  });
+  const body = node('div', null, 'graph-body');
+  body.append(canvas.element, inspector.element);
+  const hint = text('p', 'web.graph.hint', 'graph-hint'), message = node('p', null, 'graph-error');
+  message.setAttribute('role', 'status');
+  container.classList?.add('graph-editor');
+  container.append(toolbar, body, hint, message);
+  const menu = graphMenu(body);
+
+  const find = id => graph?.nodes.find(n => n.id === id);
+  const selectedStep = () => selection?.kind === 'node' ? find(selection.id) : null;
+  function changed(repaint = true) { onChange(); error = null; if (repaint) paint(); else { canvas.render(graph, selection, locked); message.textContent = ''; } }
+  function paint() {
+    if (!graph) return;
+    canvas.render(graph, selection, locked);
+    inspector.show(selectedStep());
+    message.textContent = error ? localizeError(error) : '';
     applyLock();
   }
-  function argument(value=''){
-    const row=node('div',null,'command-argument'),input=node('input'),remove=node('button',t('web.commands.arg_remove'),'quiet');remove.type='button';
-    input.value=value;row.append(input,remove);args.append(row);argumentRows.push({row,input,remove});
-    const update=()=>{graph.nodes.find(n=>n.id===selected).arguments=argumentRows.map(a=>a.input.value);changed();};
-    input.oninput=update;
-    remove.onclick=()=>{if(locked)return;argumentRows.splice(argumentRows.findIndex(a=>a.row===row),1);row.remove();update();};
-  }
-  function select(id){
-    selected=id;const n=graph.nodes.find(n=>n.id===id);
-    name.value=n.name;script.value=n.script??'';directory.value=n.directory??'';timeout.value=n.timeout_seconds??'';
-    args.replaceChildren();argumentRows.length=0;for(const value of n.arguments??[])argument(value);
+  function select(next) {
+    if (next?.kind === 'node' && !find(next.id)) next = null;
+    selection = next;
     paint();
   }
-
-  function applyLock(){
-    const n=graph?.nodes.find(n=>n.id===selected);
-    for(const el of container.querySelectorAll('button,input,select,textarea'))el.disabled=locked;
-    properties.hidden=n?.kind!=='script';
-    properties.disabled=locked||n?.kind!=='script';
-    remove.disabled=locked||n?.kind!=='script';add.disabled=locked||(graph?.nodes.length??0)>=graphLimits.nodes;
-    connect.disabled=locked||!target.value||n?.kind==='end';disconnect.disabled=locked||!graph?.edges.length;
+  function addStep(point) {
+    if (locked || !graph || graph.nodes.length >= graphLimits.nodes) return;
+    const at = point ?? canvas.center();
+    const n = {id: globalThis.crypto.randomUUID(), kind: 'script', name: t('web.graph.default_name', {index: graph.nodes.filter(item => item.kind === 'script').length + 1}),
+      script: '', arguments: [], directory: '', failure_policy: 'abort',
+      x: clampCoordinate(at.x - nodeWidth({kind: 'script'}) / 2), y: clampCoordinate(at.y - 32)};
+    graph.nodes.push(n);
+    selection = {kind: 'node', id: n.id};
+    changed();
   }
-  for(const [input,field] of [[name,'name'],[script,'script'],[directory,'directory']])input.oninput=()=>{
-    if(locked)return;graph.nodes.find(n=>n.id===selected)[field]=input.value;changed();
-  };
-  timeout.oninput=()=>{if(!locked){graph.nodes.find(n=>n.id===selected).timeout_seconds=timeout.value.trim()===''?null:Number(timeout.value);changed();}};
-  parallel.oninput=()=>{if(!locked){graph.parallelism=Number(parallel.value);changed();}};
-  pick.onclick=()=>browse(path=>{if(!graph)return;graph.nodes.find(n=>n.id===selected).script=path;script.value=path;changed();});
-  addArg.onclick=()=>{if(!locked){argument();graph.nodes.find(n=>n.id===selected).arguments=argumentRows.map(a=>a.input.value);changed();}};
-  add.onclick=()=>{
-    if(locked||graph.nodes.length>=graphLimits.nodes)return;
-    const n={id:newID(),kind:'script',name:t('web.graph.default_name',{index:graph.nodes.filter(n=>n.kind==='script').length+1}),script:'',arguments:[],directory:'',failure_policy:'abort',x:290,y:Math.max(...graph.nodes.map(n=>n.y))+100};
-    n.y=Math.min(n.y,8000);graph.nodes.push(n);select(n.id);changed();
-  };
-  remove.onclick=()=>{if(!locked&&removeGraphNode(graph,selected)){select(graph.nodes[0].id);changed();}};
-  connect.onclick=()=>{
-    if(locked)return;error=edgeIssue(graph,selected,target.value);
-    if(!error){graph.edges.push({from:selected,to:target.value});onChange();}paint();
-  };
-  disconnect.onclick=()=>{if(!locked&&edgeList.value!==''){graph.edges.splice(Number(edgeList.value),1);changed();}};
+  function removeSelection() {
+    if (locked || !selection) return;
+    if (selection.kind === 'edge') {
+      const index = graph.edges.findIndex(edge => edgeKey(edge) === selection.id);
+      if (index >= 0) { graph.edges.splice(index, 1); selection = null; changed(); }
+    } else if (removeGraphNode(graph, selection.id)) { selection = null; changed(); }
+  }
+  function chooseScript(id) {
+    if (locked || find(id)?.kind !== 'script') return;
+    browse(path => {
+      const n = find(id); if (!n) return;
+      n.script = path;
+      if (selectedStep()?.id === id) inspector.setScript(path);
+      changed();
+    });
+  }
+  function openMenu(target, at) {
+    const items = [];
+    if (target.kind === 'canvas') {
+      items.push({label: t('web.graph.add'), disabled: locked || graph.nodes.length >= graphLimits.nodes, action: () => addStep(target.point)});
+      items.push({label: t('web.graph.fit'), action: () => canvas.fit()});
+    } else if (target.kind === 'node' && find(target.id)?.kind === 'script') {
+      items.push({label: t('web.graph.rename'), disabled: locked, action: () => canvas.startRename(target.id)});
+      items.push({label: t('web.graph.choose_script'), disabled: locked, action: () => chooseScript(target.id)});
+      items.push({label: t('web.graph.remove'), disabled: locked, danger: true, action: removeSelection});
+    } else if (target.kind === 'edge') {
+      items.push({label: t('web.graph.disconnect'), disabled: locked, danger: true, action: removeSelection});
+    }
+    menu.show(at.x, at.y, items);
+  }
+  // Saved coordinates must be 0-8000 on each axis. A layout that was moved
+  // above or left of the origin is translated back as a whole, never squeezed;
+  // a layout wider or taller than the saved range cannot be saved.
+  function layoutShift(candidate) {
+    const xs = candidate.nodes.map(n => n.x), ys = candidate.nodes.map(n => n.y);
+    if (Math.max(...xs) - Math.min(...xs) > coordinateLimit || Math.max(...ys) - Math.min(...ys) > coordinateLimit) {
+      return {issue: {messageKey: 'err.graph.layout_too_large', messageArgs: {}}};
+    }
+    // With the span in range, at most one end can be outside 0..8000.
+    const shift = values => {
+      const low = Math.min(...values), high = Math.max(...values);
+      return low < 0 ? -low : high > coordinateLimit ? coordinateLimit - high : 0;
+    };
+    return {x: shift(xs), y: shift(ys)};
+  }  function setFullscreen(value) {
+    fullscreen = value;
+    container.dataset.fullscreen = String(value);
+    labels.find(entry => entry[0] === expand)[2] = value ? 'web.graph.exit_fullscreen' : 'web.graph.fullscreen';
+    expand.textContent = t(value ? 'web.graph.exit_fullscreen' : 'web.graph.fullscreen');
+    globalThis.requestAnimationFrame?.(() => canvas.fit());
+  }
+  function applyLock() {
+    // Menu items manage their own state; view controls stay usable while locked.
+    for (const control of container.querySelectorAll('button,input,select,textarea')) {
+      if (!viewControls.includes(control) && !String(control.className).includes('graph-menu-item')) control.disabled = locked;
+    }
+    for (const control of viewControls) control.disabled = false;
+    add.disabled = locked || (graph?.nodes.length ?? 0) >= graphLimits.nodes;
+    inspector.setLocked(locked);
+  }
 
-  const newID=()=>globalThis.crypto.randomUUID();
+  add.onclick = () => addStep();
+  fit.onclick = () => canvas.fit();
+  zoomIn.onclick = () => canvas.zoomBy(1.2);
+  zoomOut.onclick = () => canvas.zoomBy(1 / 1.2);
+  expand.onclick = () => setFullscreen(!fullscreen);
+  parallel.oninput = () => { if (!locked) { graph.parallelism = Number(parallel.value); onChange(); } };
+  container.addEventListener('keydown', event => {
+    const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target?.tagName);
+    if (event.key === 'Escape' && fullscreen && !menu.open) { event.preventDefault(); event.stopPropagation(); setFullscreen(false); return; }
+    if ((event.key === 'Delete' || event.key === 'Backspace') && !typing && selection) { event.preventDefault(); removeSelection(); }
+  });
+
   return {
-    load(value){graph=value?copyGraph(value):newGraph();if(!value)graph.nodes[1].name=t('web.graph.default_name',{index:1});error=null;for(const el of buttons.values())el.remove();buttons.clear();parallel.value=graph.parallelism;select(graph.nodes.find(n=>n.kind==='script').id);},
-    read(){
-      for(const n of graph.nodes)if(n.kind==='script'&&n.timeout_seconds!=null)n.timeout_seconds=timeoutSeconds(n.timeout_seconds,1);
-      error=graphIssue(graph);paint();if(error)throw error;return copyGraph(graph);
+    // keepView: the same command was just saved, so the user's pan, zoom and
+    // selection stay; opening or switching commands fits the view.
+    load(value, {keepView = false} = {}) {
+      canvas.cancelInteraction();
+      const keep = keepView ? selection : null;
+      graph = value ? copyGraph(value) : newGraph();
+      if (!value) graph.nodes[1].name = t('web.graph.default_name', {index: 1});
+      error = null; menu.close();
+      parallel.value = graph.parallelism;
+      const first = graph.nodes.find(n => n.kind === 'script');
+      const kept = keep?.kind === 'node' ? find(keep.id) : keep?.kind === 'edge' ? graph.edges.find(edge => edgeKey(edge) === keep.id) : null;
+      selection = kept ? keep : first ? {kind: 'node', id: first.id} : null;
+      inspector.show(null);
+      paint();
+      if (!keepView) globalThis.requestAnimationFrame?.(() => canvas.fit());
     },
-    setLocked(value){locked=value;applyLock();},
-    relocalize(){for(const [el,key] of labels)el.textContent=t(key);for(const row of argumentRows)row.remove.textContent=t('web.commands.arg_remove');paint();},
+    // Validates a candidate copy first; the editor's graph and view change only
+    // when everything passes, together, so a failure leaves the draft untouched.
+    read() {
+      const candidate = copyGraph(graph);
+      for (const n of candidate.nodes) if (n.kind === 'script' && n.timeout_seconds != null) n.timeout_seconds = timeoutSeconds(n.timeout_seconds, 1);
+      const shift = layoutShift(candidate);
+      if (shift.issue) { error = shift.issue; paint(); throw error; }
+      for (const n of candidate.nodes) { n.x += shift.x; n.y += shift.y; }
+      error = graphIssue(candidate);
+      if (error) { paint(); throw error; }
+      graph = candidate;
+      if (shift.x || shift.y) canvas.panBy(-shift.x * canvas.zoom, -shift.y * canvas.zoom);
+      paint();
+      return copyGraph(graph);
+    },
+    // Only the unlocked -> locked transition voids gestures; repeated status
+    // refreshes while locked must not interrupt panning, which stays allowed.
+    setLocked(value) {
+      const entering = value && !locked;
+      locked = value;
+      if (entering) { canvas.cancelInteraction(); menu.close(); }
+      paint(); applyLock();
+    },
+    cancelInteraction() { canvas.cancelInteraction(); menu.close(); },
+    relocalize() {
+      for (const [el, kind, key] of labels) {
+        if (kind === 'text') el.textContent = t(key);
+        else { el.title = t(key); el.setAttribute('aria-label', t(key)); }
+      }
+      inspector.relocalize(); menu.close(); paint();
+    },
   };
 }

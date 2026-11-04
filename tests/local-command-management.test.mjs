@@ -68,3 +68,37 @@ test('graph validation reason and node context both relocalize in the command fo
     assert.equal(h.select('#commands-status').textContent,translate('err.graph.script',{node:'build',err:translate('err.localcmd.unsupported_ext')}));
   }
 });
+
+test('saving the open command keeps the graph view through the success reload', async t => {
+  globalThis.requestAnimationFrame = callback => callback();
+  t.after(() => delete globalThis.requestAnimationFrame);
+  const dom = domFixture(), panel = dom.select('#local-commands'), form = dom.select('#command-form'), scope = {active:true};
+  for (const name of ['name','aliases','description','allow_concurrent','timeout','timeout_unit']) form.elements[name] = dom.document.createElement('input');
+  form.elements.namedItem = name => form.elements[name];
+  panel.querySelectorAll = () => [...dom.elements.values()];
+  form.querySelectorAll = () => Object.values(form.elements).filter(value => typeof value !== 'function');
+  globalThis.document = dom.document;
+  let catalog = {revision:'r1', commands:[]}, posted = null;
+  const controller = localCommands({
+    api: async path => path === '/api/local-commands/state' ? {runs:{}, managed_available:true} : catalog,
+    post: async (path, body) => {
+      posted = body;
+      const command = {...body.command, id:'command-1', revision:'c1'};
+      catalog = {revision:'r2', commands:[command]};
+      return {id:'command-1', catalog};
+    },
+    session:() => scope, listen:(target, name, callback) => target.addEventListener(name, callback), guarded:callback => callback(), actions:{confirm:() => true},
+  });
+  t.after(() => {controller.stop(); delete globalThis.document;});
+  await controller.open();
+  const editor = descendants(dom.select('#command-graph-editor'));
+  editor.find(el => el.className === 'command-script-path').children[0].value = 'C:\\step.cmd';
+  editor.find(el => el.className === 'command-script-path').children[0].oninput();
+  form.elements.name.value = 'build';
+  const stage = editor.find(el => el.className === 'graph-stage');
+  editor.find(el => el.className?.includes('graph-zoom-in')).onclick();
+  const view = stage.style.transform;
+  form.fire('submit'); await tick(); await tick();
+  assert.ok(posted, 'the command was saved');
+  assert.equal(stage.style.transform, view, 'the success reload does not refit the view');
+});

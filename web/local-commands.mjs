@@ -44,12 +44,13 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
   function paintFormTitle() {
     $('#command-form-title').textContent = selected ? t('web.commands.form_edit') : t('web.commands.form_new');
   }
-  function populate(command = {}) {
+  // keepView: after saving the same command, keep the graph's pan and zoom.
+  function populate(command = {}, {keepView = false} = {}) {
     selected = command.id ?? '';
     for (const name of ['name', 'description']) field(name).value = command[name] ?? '';
     field('aliases').value = (command.aliases ?? []).join('\n');
     field('allow_concurrent').checked=command.allow_concurrent===true;
-    editor.load(command.graph);
+    editor.load(command.graph, {keepView});
     field('timeout').value=command.timeout_seconds ?? '';field('timeout_unit').value='1';
     $('#command-delete').hidden = !selected;
     paintFormTitle();
@@ -152,7 +153,7 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
         {id:selected, revision:catalog.revision} : {revision:catalog.revision, command});
       if (!scope?.active || version !== generation) return;
       catalog = remove ? result : result.catalog;
-      populate(remove ? undefined : catalog.commands.find(value => value.id === result.id));
+      populate(remove ? undefined : catalog.commands.find(value => value.id === result.id), {keepView: !remove});
       paintStatus(remove ? {kind: 'deleted_done'} : {kind: 'saved_done'});
     } catch (error) {
       if (scope?.active && version === generation) paintStatus({kind: 'error', error, conflict: error.status === 409});
@@ -190,6 +191,8 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
   listen($('#command-stop-all'), 'click', () => runAction('stop-all'));
   listen($('#commands-close'), 'click', () => {if (!busy && canDiscard()) panel.close();});
   listen(panel, 'cancel', event => {if (busy || !canDiscard()) event.preventDefault();});
-  function stop() { clearTimeout(stateTimer);generation++; picker?.abort(); picker = null; setBusy(false); }
+  // Unfinished canvas gestures never outlive the dialog or the page session.
+  listen(panel, 'close', () => editor.cancelInteraction());
+  function stop() { clearTimeout(stateTimer);generation++; picker?.abort(); picker = null; editor.cancelInteraction(); setBusy(false); }
   return {open, relocalize, stop};
 }

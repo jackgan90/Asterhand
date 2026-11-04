@@ -196,8 +196,8 @@ test("runtime text created before the locale is restored shows the restored lang
     dom.select("#command-form").elements.namedItem = name => dom.select("#command-form").elements[name];
   });
   const labels = descendants(ui.select("#command-graph-editor")).map(el => el.textContent);
-  assert.ok(labels.includes("添加脚本节点"), "graph editor controls must follow the restored locale");
-  assert.equal(labels.includes("Add script node"), false);
+  assert.ok(labels.includes("添加步骤"), "graph editor controls must follow the restored locale");
+  assert.equal(labels.includes("Add step"), false);
 });
 
 test("theme and language choices do not mark node settings unsaved, and never clear real edits", async t => {

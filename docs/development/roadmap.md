@@ -42,10 +42,11 @@
 | 运行期界面与状态/错误提示中英双语实时无损切换、系统语言优先/浏览器语言次选自动匹配、单一权威词表与四层静态硬编码守卫（工程验证、独立复审及本机双语切换用户验收通过） | [运行期国际化框架](features/internationalization-framework/plan.md)、[验证说明](features/internationalization-framework/validation.md)、[国际化开发指南](i18n-guide.md) |
 | 日志窗口快速显示与关闭复用、初始化失败恢复和同屏定位（工程验证、独立审计修复复审及本机日志体验与双屏用户验收通过） | [日志窗口响应与定位](features/log-window-responsiveness-and-placement/plan.md)、[验证说明](features/log-window-responsiveness-and-placement/validation.md) |
 | 前端信息精简第一阶段：状态图标化、日志窗口与设置页重组、首次显示语言、日志窗口前台、面板圆角与合并日志按行标注（工程验证、本机用户验收及独立评审复审通过） | [前端信息精简与显示修复](features/frontend-cognitive-simplification/plan.md) |
+| 前端信息精简第二阶段：脚本图编辑器节点式交互，画布平移缩放与全屏、右键菜单、端口拖线、原地改名、属性面板，负坐标编辑与保存前布局平移（工程验证、本机用户验收及独立评审复审通过） | [前端信息精简与显示修复](features/frontend-cognitive-simplification/plan.md) |
 
 ## 后续验证与功能
 
-- [前端信息精简与显示修复](features/frontend-cognitive-simplification/plan.md)第二阶段：脚本图编辑器改为节点式交互（画布平移缩放、右键菜单、端口拖线、双击改名、属性面板），开始前补充设计与验收。
+- 脚本图编辑器在 Windows 中文输入法下的原地改名候选确认，按[前端信息精简计划](features/frontend-cognitive-simplification/plan.md)的验证说明在实体输入法中复核。
 
 - [托管本地命令](features/managed-local-commands/plan.md)：实现、工程检查、独立审计修复复审及用户验收已完成，真实环境专项和平台支持边界见功能验证说明。新增托管/非托管类型、独立 Asterhand 日志窗口、最近执行结果和完整日志、按命令单实例、强制中断及可选超时；退出节点停止托管脚本，非托管行为保持。首个实现为 Windows，注册策略、执行/计时、窗口/传输及文件操作留出窄平台边界，macOS/Linux 接入后独立验收。
 

@@ -3,7 +3,7 @@ import {node} from './ui.mjs';
 
 export const zoomLimits = {min: 0.4, max: 2};
 // Saved coordinates are 0-8000. While editing, steps may also move left of or
-// above the origin; the editor shifts the layout back into range on read().
+// above the origin; the editor shifts only the exported copy on read().
 export const coordinateLimit = 8000;
 const height = 64, portGap = 7;
 export const clampCoordinate = value => clamp(Math.round(value), -coordinateLimit, coordinateLimit);
@@ -62,7 +62,7 @@ export function graphCanvas(intents) {
   // Pointer capture keeps a drag alive when the pointer leaves its element.
   // Every running gesture registers a cancel function, so locking, loading
   // another graph or closing the editor can end it without committing.
-  function track(element, event, move, end = () => {}) {
+  function track(element, event, move, end = () => {}, cancel = () => {}) {
     cancelGesture();
     element.setPointerCapture?.(event.pointerId);
     const start = {x: event.clientX, y: event.clientY};
@@ -77,10 +77,11 @@ export function graphCanvas(intents) {
       if (moved) move(next.clientX - start.x, next.clientY - start.y);
     };
     element.onpointerup = () => { clear(); end(moved); };
-    element.onpointercancel = clear;
-    gesture = {clear};
+    const abort = () => { clear(); cancel(); };
+    element.onpointercancel = abort;
+    gesture = {clear, cancel: abort};
   }
-  function cancelGesture() { gesture?.clear(); gesture = null; }
+  function cancelGesture() { const active = gesture; gesture = null; if (active) (active.cancel ?? active.clear)(); }
 
   function startConnect(from, event) {
     cancelGesture();
@@ -140,10 +141,12 @@ export function graphCanvas(intents) {
       const owner = graph, current = graph.nodes.find(item => item.id === n.id);
       if (!current) return;
       const origin = {x: current.x, y: current.y};
+      let editing = false;
       track(element, event, (dx, dy) => {
         if (locked || graph !== owner) return;
+        if (!editing) { intents.beginMove?.(n.id, 'pointer'); editing = true; }
         intents.move(n.id, clampCoordinate(origin.x + dx / view.zoom), clampCoordinate(origin.y + dy / view.zoom));
-      });
+      }, () => { if (editing) intents.endMove?.(); }, () => { if (editing) intents.cancelMove?.(); });
     });
     element.addEventListener('click', () => intents.select({kind: 'node', id: n.id}));
     element.addEventListener('dblclick', event => { event.stopPropagation(); startRename(n.id); });
@@ -161,21 +164,26 @@ export function graphCanvas(intents) {
       if (event.key === 'F2') { event.preventDefault(); startRename(n.id); }
       else if (moves[event.key] && !locked) {
         event.preventDefault();
+        cancelGesture();
+        intents.beginMove?.(n.id, 'keyboard');
         const current = graph.nodes.find(item => item.id === n.id), [dx, dy] = moves[event.key];
         intents.move(n.id, clampCoordinate(current.x + dx), clampCoordinate(current.y + dy));
       }
     });
+    element.addEventListener('keyup', event => { if (event.key.startsWith('Arrow')) intents.endMove?.(); });
+    element.addEventListener('blur', () => intents.endMove?.());
     stage.append(element);
     return {element, title, detail};
   }
   // Inline rename replaces the title with an input; Enter commits, Esc cancels.
   function startRename(id) {
+    cancelGesture();
     const n = graph?.nodes.find(item => item.id === id);
     if (locked || n?.kind !== 'script' || renaming) return;
     const {element, title} = cards.get(id), input = node('input', null, 'graph-rename');
     input.value = n.name; input.maxLength = 128;
     input.setAttribute('aria-label', t('web.graph.node_name'));
-    renaming = {id, input, cancel: () => finish(false)};
+    renaming = {id, input, cancel: () => finish(false), commit: () => finish(true)};
     title.hidden = true; element.insertBefore(input, title);
     let composing = false;
     const finish = commit => {
@@ -216,7 +224,7 @@ export function graphCanvas(intents) {
       if (selection?.kind === 'edge' && selection.id === key) group.dataset.selected = 'true';
       const title = svgNode('title'); title.textContent = t('web.graph.edge_label', {from: nodeName(from), to: nodeName(to)});
       group.append(title, hit, line);
-      hit.addEventListener('pointerdown', event => { event.stopPropagation(); intents.select({kind: 'edge', id: key}); });
+      hit.addEventListener('pointerdown', event => { event.stopPropagation(); viewport.focus?.(); intents.select({kind: 'edge', id: key}); });
       hit.addEventListener('click', () => intents.select({kind: 'edge', id: key}));
       hit.addEventListener('contextmenu', event => {
         event.preventDefault(); event.stopPropagation();
@@ -275,8 +283,9 @@ export function graphCanvas(intents) {
     // Graph point at the visible centre, for steps added from the toolbar.
     center() { const rect = rectOf(viewport); return toGraph(rect.left + rect.width / 2, rect.top + rect.height / 2); },
     startRename,
+    finishRename() { renaming?.commit(); },
     // Ends any drag, connection or rename without committing it.
     cancelInteraction() { cancelGesture(); renaming?.cancel(); },
-    focusNode(id) { cards.get(id)?.element.focus?.(); },
+    focusNode(id) { cards.get(id)?.element.focus?.({preventScroll:true}); },
   };
 }

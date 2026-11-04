@@ -35,6 +35,7 @@ test('canvas context menus add, rename, choose a script for and delete steps', t
   assert.throws(added, 'a new unconnected step is reported by validation');
   const step = h.nodeEl(t('web.graph.default_name', {index: 2}));
   assert.ok(step, 'the new step is drawn on the canvas');
+  assert.equal(h.dom.document.activeElement?.dataset.nodeId, step.dataset.nodeId, 'adding from a dismissed menu focuses the new node for keyboard shortcuts');
   emit(step, 'contextmenu');
   assert.deepEqual(h.menuItems().map(item => item.textContent), [t('web.graph.rename'), t('web.graph.choose_script'), t('web.graph.remove')]);
   h.menuItems()[1].onclick();
@@ -267,11 +268,13 @@ test('steps can be dragged above or left of the origin and are saved back in ran
   emit(card, 'pointerdown', {clientX: 0, clientY: 0});
   card.onpointermove({clientX: -400, clientY: -250}); card.onpointerup({});
   assert.equal(card.style.top, '-150px', 'dragging upward is not stopped at the origin');
+  const view = stage.style.transform;
   const saved = h.editor.read();
   const step = saved.nodes.find(n => n.kind === 'script'), start = saved.nodes.find(n => n.kind === 'start');
   assert.deepEqual([step.x, step.y], [0, 0], 'the layout is shifted so every coordinate is valid');
   assert.deepEqual([start.x - step.x, start.y - step.y], [40 + 110, 100 + 150], 'relative positions are kept');
-  assert.match(stage.style.transform, /translate\(-110px, -150px\)/, 'the view moves with the shift, so nothing jumps');
+  assert.equal(stage.style.transform, view, 'export leaves the view unchanged');
+  assert.deepEqual([card.style.left, card.style.top], ['-110px', '-150px'], 'export leaves the draft unchanged');
   assert.ok(saved.nodes.every(n => n.x >= 0 && n.y >= 0 && n.x <= 8000 && n.y <= 8000));
 });
 
@@ -320,8 +323,8 @@ test('a later validation failure leaves negative coordinates and the view untouc
   timeout.value = '30'; timeout.oninput();
   const saved = h.editor.read();
   assert.deepEqual([saved.nodes[1].x, saved.nodes[1].y], [0, 0]);
-  assert.deepEqual([card.style.left, card.style.top], ['0px', '0px'], 'nodes and view move together');
-  assert.match(stage.style.transform, /translate\(-110px, -150px\)/);
+  assert.deepEqual([card.style.left, card.style.top], ['-110px', '-150px'], 'successful export still preserves the draft');
+  assert.equal(stage.style.transform, view);
 });
 
 test('reloading after a save keeps the view and selection; opening a command fits it', tcase => {
@@ -337,4 +340,158 @@ test('reloading after a save keeps the view and selection; opening a command fit
   assert.equal(h.nodeEl('end').getAttribute('aria-pressed'), 'true');
   h.editor.load(h.editor.read());
   assert.notEqual(stage.style.transform, view, 'opening a command fits the view');
+});
+
+const historyButton = (h, action) => h.all().find(el => el.className === `quiet graph-${action}`);
+const historyKey = (h, key, props = {}) => emit(h.container, 'keydown', {key, ctrlKey:true, ...props});
+
+test('delete and undo restore the complete step, edges, selection and keyboard focus', tcase => {
+  const h = setup(tcase), initial = h.editor.read();
+  emit(h.nodeEl('compile'), 'click');
+  emit(h.container, 'keydown', {key:'Delete'});
+  assert.equal(h.dom.document.activeElement, h.viewport, 'deleting the focused card leaves shortcuts in the editor');
+  assert.equal(h.nodeEl('compile'), undefined);
+  historyKey(h, 'z');
+  assert.deepEqual(h.editor.read(), initial);
+  assert.equal(h.nodeEl('compile').getAttribute('aria-pressed'), 'true');
+  assert.equal(h.dom.document.activeElement, h.nodeEl('compile'));
+  historyKey(h, 'y'); assert.equal(h.nodeEl('compile'), undefined);
+  historyKey(h, 'z'); historyKey(h, 'Z', {shiftKey:true}); assert.equal(h.nodeEl('compile'), undefined);
+});
+
+test('undo and redo additions preserve IDs and invalid drafts without save validation', tcase => {
+  const h = setup(tcase);
+  emit(h.viewport, 'dblclick', {clientX:400, clientY:200});
+  const added = h.nodeEl(t('web.graph.default_name', {index:2})), id = added.dataset.nodeId;
+  assert.throws(() => h.editor.read());
+  historyButton(h, 'undo').onclick();
+  assert.equal(h.editor.read().nodes.length, 3);
+  historyButton(h, 'redo').onclick();
+  assert.equal(h.nodeEl(t('web.graph.default_name', {index:2})).dataset.nodeId, id);
+  assert.throws(() => h.editor.read());
+  historyButton(h, 'undo').onclick();
+  emit(h.nodeEl('start'), 'click'); emit(h.container, 'keydown', {key:'Delete'});
+  assert.equal(historyButton(h, 'redo').disabled, false, 'protected-node deletion is a no-op');
+});
+
+test('a drag is one operation; cancellation and locking roll back without destroying redo', tcase => {
+  const h = setup(tcase), initial = h.editor.read();
+  const card = h.nodeEl('compile');
+  const start = () => emit(card, 'pointerdown');
+  start();
+  for (const x of [20, 40, 90]) card.onpointermove({clientX:x, clientY:0});
+  card.onpointerup();
+  historyKey(h, 'z'); assert.deepEqual(h.editor.read(), initial);
+  assert.equal(historyButton(h, 'undo').disabled, true);
+  start(); card.onpointermove({clientX:70, clientY:50}); card.onpointercancel();
+  assert.deepEqual(h.editor.read(), initial);
+  assert.equal(historyButton(h, 'redo').disabled, false);
+  start(); card.onpointermove({clientX:70, clientY:50}); h.editor.setLocked(true);
+  assert.deepEqual(h.editor.read(), initial);
+  historyKey(h, 'y'); assert.deepEqual(h.editor.read(), initial);
+  h.editor.setLocked(false); historyKey(h, 'y');
+  assert.equal(h.editor.read().nodes[1].x, 380);
+});
+
+test('held arrow keys merge until keyup and keyboard edits terminate a pointer drag safely', tcase => {
+  const h = setup(tcase), card = h.nodeEl('compile');
+  emit(card, 'keydown', {key:'ArrowRight'});
+  emit(card, 'keydown', {key:'ArrowRight', repeat:true});
+  emit(card, 'keydown', {key:'ArrowRight', repeat:true});
+  emit(card, 'keyup', {key:'ArrowRight'});
+  assert.equal(h.editor.read().nodes[1].x, 320);
+  historyKey(h, 'z'); assert.equal(h.editor.read().nodes[1].x, 290);
+  emit(card, 'pointerdown'); card.onpointermove({clientX:80, clientY:0});
+  emit(card, 'keydown', {key:'ArrowRight'}); emit(card, 'keyup', {key:'ArrowRight'});
+  assert.equal(h.editor.read().nodes[1].x, 300, 'the abandoned drag did not leak into the keyboard edit');
+  assert.equal(card.onpointermove, null);
+  historyKey(h, 'z'); assert.equal(h.editor.read().nodes[1].x, 290);
+});
+
+test('property inputs merge per field and force refill on undo; parameter structure is separate', tcase => {
+  const h = setup(tcase), name = h.all().find(el => el.tagName === 'INPUT' && el.value === 'compile');
+  for (const value of ['b', 'bu', 'build']) { name.value = value; name.fire('input'); }
+  name.blur();
+  historyKey(h, 'z'); assert.equal(name.value, 'compile');
+  assert.equal(historyButton(h, 'undo').disabled, true);
+  historyKey(h, 'y'); assert.equal(name.value, 'build');
+  const addArg = h.all().find(el => el.tagName === 'BUTTON' && el.textContent === t('web.commands.arg_add'));
+  addArg.onclick();
+  let row = h.all().find(el => el.className === 'command-argument');
+  row.children[0].value = 'one'; row.children[0].fire('input'); row.children[0].blur();
+  addArg.onclick(); row = h.all().filter(el => el.className === 'command-argument')[1];
+  row.children[0].value = 'two'; row.children[0].fire('input'); row.children[0].blur();
+  h.all().find(el => el.className === 'command-argument').children[1].onclick();
+  assert.deepEqual(h.editor.read().nodes[1].arguments, ['two']);
+  historyKey(h, 'z');
+  assert.deepEqual(h.editor.read().nodes[1].arguments, ['one', 'two']);
+  assert.deepEqual(h.all().filter(el => el.className === 'command-argument').map(el => el.children[0].value), ['one', 'two']);
+});
+
+test('parallelism, renamed nodes and file choices participate in history and redo branching', tcase => {
+  const h = setup(tcase), parallel = h.all().find(el => el.className === 'graph-parallel');
+  parallel.value = '8'; parallel.fire('input'); parallel.blur();
+  const card = h.nodeEl('compile'); emit(card, 'dblclick');
+  const input = card.children.find(el => el.className === 'graph-rename');
+  input.value = 'build'; emit(input, 'keydown', {key:'Enter'});
+  emit(h.nodeEl('build'), 'contextmenu'); h.menuItems()[1].onclick();
+  historyKey(h, 'z'); assert.equal(h.editor.read().nodes[1].script, 'C:\\step.cmd');
+  historyKey(h, 'z'); assert.equal(h.editor.read().nodes[1].name, 'compile');
+  historyKey(h, 'z'); assert.equal(parallel.value, 4);
+  assert.equal(historyButton(h, 'redo').disabled, false);
+  parallel.value = '4'; parallel.fire('input'); parallel.blur();
+  assert.equal(historyButton(h, 'redo').disabled, false);
+  parallel.value = '9'; parallel.fire('input'); parallel.blur();
+  assert.equal(historyButton(h, 'redo').disabled, true);
+});
+
+test('shortcut scope leaves native editing and composition alone and relocalizes operation labels', tcase => {
+  const h = setup(tcase);
+  emit(h.nodeEl('compile'), 'keydown', {key:'ArrowRight'}); emit(h.nodeEl('compile'), 'keyup', {key:'ArrowRight'});
+  for (const props of [{isComposing:true}, {keyCode:229}, {altKey:true}, {metaKey:true}]) {
+    assert.equal(historyKey(h, 'z', props).defaultPrevented, false);
+  }
+  for (const tag of ['input', 'textarea', 'select', 'div']) {
+    const input = h.dom.document.createElement(tag); if (tag === 'div') input.isContentEditable = true;
+    const event = new Event('keydown', {cancelable:true});
+    Object.assign(event, {key:'z', ctrlKey:true}); Object.defineProperty(event, 'target', {value:input});
+    h.container.dispatchEvent(event); assert.equal(event.defaultPrevented, false);
+  }
+  assert.equal(h.editor.read().nodes[1].x, 300);
+  for (const locale of ['en-US', 'zh-CN']) {
+    setLocale(locale); h.editor.relocalize();
+    assert.ok(historyButton(h, 'undo').title.includes(t('web.graph.action_move')));
+  }
+  historyKey(h, 'z'); assert.equal(h.editor.read().nodes[1].x, 290);
+});
+
+test('locking, selection and view changes preserve history; loading replaces the editing session', tcase => {
+  const h = setup(tcase), card = h.nodeEl('compile');
+  emit(card, 'keydown', {key:'ArrowRight'}); emit(card, 'keyup', {key:'ArrowRight'});
+  h.editor.setLocked(true); h.editor.setLocked(true); h.editor.setLocked(false);
+  emit(h.nodeEl('end'), 'click');
+  h.all().find(el => el.className?.includes('graph-zoom-in')).onclick();
+  const view = h.all().find(el => el.className === 'graph-stage').style.transform;
+  historyKey(h, 'z');
+  assert.equal(h.editor.read().nodes[1].x, 290);
+  assert.equal(h.all().find(el => el.className === 'graph-stage').style.transform, view);
+  h.editor.load(h.graph);
+  assert.equal(historyButton(h, 'undo').disabled, true);
+  assert.equal(historyButton(h, 'redo').disabled, true);
+});
+
+test('late file selections cannot affect a new session or a graph that entered a run lock', tcase => {
+  const dom = domFixture(); globalThis.document = dom.document; tcase.after(() => delete globalThis.document);
+  const container = dom.document.createElement('section'), callbacks = [];
+  const editor = graphEditor({container, onChange() {}, browse: apply => callbacks.push(apply)});
+  const graph = newGraph(); Object.assign(graph.nodes[1], {name:'build', script:'C:\\old.cmd'});
+  const browse = () => descendants(container).find(el => el.tagName === 'BUTTON' && el.textContent === t('web.commands.browse')).onclick();
+  editor.load(graph); browse(); editor.load(graph); callbacks[0]('C:\\late.cmd');
+  assert.equal(editor.read().nodes[1].script, 'C:\\old.cmd');
+  browse(); editor.setLocked(true, {allowBrowse:true}); editor.setLocked(true); editor.setLocked(false); callbacks[1]('C:\\late.cmd');
+  assert.equal(editor.read().nodes[1].script, 'C:\\old.cmd');
+  browse(); editor.setLocked(true, {allowBrowse:true}); callbacks[2]('C:\\new.cmd'); editor.setLocked(false);
+  assert.equal(editor.read().nodes[1].script, 'C:\\new.cmd');
+  descendants(container).find(el => el.className === 'quiet graph-undo').onclick();
+  assert.equal(editor.read().nodes[1].script, 'C:\\old.cmd');
 });

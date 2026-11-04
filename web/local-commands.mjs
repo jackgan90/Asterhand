@@ -2,6 +2,8 @@ import {localizeError, t} from './i18n.mjs';
 import {runKey, runBusy, runStoppable, runTone, timeoutSeconds, summaryParts} from './command-run.mjs';
 import {$, node, dialog} from './ui.mjs';
 import {graphEditor} from './graph-editor.mjs';
+import {sameValue} from './graph-history.mjs';
+import {graphContent} from './graph-model.mjs';
 
 const runLabel = run => t(runKey(run));
 
@@ -11,7 +13,26 @@ const statusKeys = {
   saving: 'web.commands.saving',
   deleted_done: 'web.commands.deleted_done',
   saved_done: 'web.commands.saved_done',
+  modified: 'web.commands.unsaved_changes',
 };
+
+// The server can normalize paths, names and aliases. Either the submitted or
+// confirmed value of each field represents saved content; independent fields
+// can be undone separately. This comparison never rewrites draft/history data.
+function matchesSavedContent(current, {submitted, saved}) {
+  if (sameValue(current, saved) || sameValue(current, submitted)) return true;
+  if (!current || !submitted || !saved || [current, submitted, saved].some(value => typeof value !== 'object')) return false;
+  if (Array.isArray(current) !== Array.isArray(saved) || Array.isArray(submitted) !== Array.isArray(saved)) return false;
+  const keys = Object.keys(saved);
+  return keys.length === Object.keys(current).length && keys.length === Object.keys(submitted).length &&
+    keys.every(key => Object.hasOwn(current, key) && Object.hasOwn(submitted, key) &&
+      matchesSavedContent(current[key], {submitted:submitted[key], saved:saved[key]}));
+}
+
+function commandContent(command) {
+  return {name:command.name, aliases:command.aliases ?? [], description:command.description ?? '',
+    allow_concurrent:command.allow_concurrent === true, timeout_seconds:command.timeout_seconds ?? null, graph:graphContent(command.graph)};
+}
 
 export function localCommands({api, post, session, listen, guarded, actions}) {
   const panel = $('#local-commands');
@@ -20,8 +41,9 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
   const search = $('#commands-search');
   let catalog = {revision:'', commands:[]}, selected = '', dirty = false, busy = false, generation = 0;
   let picker = null, statusState = null, runStates = {}, stateTimer = null, stateLoading = false, managedAvailable=true;
+  let baseline = null;
   const field = name => form.elements.namedItem(name);
-  const editor = graphEditor({container:$('#command-graph-editor'),onChange:()=>{dirty=true;},browse});
+  const editor = graphEditor({container:$('#command-graph-editor'),onChange:updateDirty,browse});
 
   function paintStatus(next = statusState) {
     statusState = next;
@@ -39,27 +61,45 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
     status.textContent = t(statusKeys[next.kind] || '');
   }
 
-  const canDiscard = () => !dirty || actions.confirm(t('web.commands.discard_confirm'));
+  function formContent() {
+    let timeout;
+    try { timeout = timeoutSeconds(field('timeout').value, field('timeout_unit').value); }
+    catch { timeout = {value: field('timeout').value, unit: field('timeout_unit').value}; }
+    return {name: field('name').value.trim(), aliases: field('aliases').value.split('\n').map(value => value.trim()).filter(Boolean),
+      description: field('description').value.trim(), allow_concurrent: field('allow_concurrent').checked,
+      timeout_seconds: timeout, graph: editor.comparison()};
+  }
+  function updateDirty() {
+    if (!baseline) return;
+    dirty = !matchesSavedContent(formContent(), baseline);
+    form.dataset.dirty = String(dirty);
+    if (!statusState || ['modified', 'saved_done'].includes(statusState.kind)) paintStatus(dirty ? {kind:'modified'} : selected ? {kind:'saved_done'} : null);
+  }
+  function markSaved(saved, submitted) {
+    const current = formContent();
+    baseline = structuredClone({submitted:submitted ? commandContent(submitted) : current, saved:saved ? commandContent(saved) : current});
+    dirty = !matchesSavedContent(current, baseline); form.dataset.dirty = String(dirty);
+  }
+  const canDiscard = () => { editor.finishEditing(); updateDirty(); return !dirty || actions.confirm(t('web.commands.discard_confirm')); };
 
   function paintFormTitle() {
     $('#command-form-title').textContent = selected ? t('web.commands.form_edit') : t('web.commands.form_new');
   }
-  // keepView: after saving the same command, keep the graph's pan and zoom.
-  function populate(command = {}, {keepView = false} = {}) {
+  function populate(command = {}) {
     selected = command.id ?? '';
     for (const name of ['name', 'description']) field(name).value = command[name] ?? '';
     field('aliases').value = (command.aliases ?? []).join('\n');
     field('allow_concurrent').checked=command.allow_concurrent===true;
-    editor.load(command.graph, {keepView});
+    editor.load(command.graph);
     field('timeout').value=command.timeout_seconds ?? '';field('timeout_unit').value='1';
     $('#command-delete').hidden = !selected;
     paintFormTitle();
-    dirty = false; paint();
+    markSaved(); paint();
   }
   function lockForm(){
     const locked=busy||runBusy(runStates[selected]);
     for(const control of form.querySelectorAll('button,input,textarea,select'))control.disabled=locked;
-    editor.setLocked(locked);
+    editor.setLocked(locked, {allowBrowse: Boolean(picker) && !runBusy(runStates[selected])});
     paintRunBar();
   }
   function paint() {
@@ -153,7 +193,12 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
         {id:selected, revision:catalog.revision} : {revision:catalog.revision, command});
       if (!scope?.active || version !== generation) return;
       catalog = remove ? result : result.catalog;
-      populate(remove ? undefined : catalog.commands.find(value => value.id === result.id), {keepView: !remove});
+      if (remove) populate();
+      else {
+        selected = result.id;
+        $('#command-delete').hidden = false;
+        markSaved(catalog.commands.find(value => value.id === result.id), command); paintFormTitle(); paint();
+      }
       paintStatus(remove ? {kind: 'deleted_done'} : {kind: 'saved_done'});
     } catch (error) {
       if (scope?.active && version === generation) paintStatus({kind: 'error', error, conflict: error.status === 409});
@@ -161,12 +206,12 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
   }
   async function browse(apply) {
     if (busy) return;
-    const scope = session(), version = generation, request = new AbortController();
+    const scope = session(), version = generation, id = selected, request = new AbortController();
     picker = request; setBusy(true); paintStatus(null);
     try {
       const result = await api('/api/local-commands/browse', {method:'POST', body:'{}', signal:request.signal});
-      if (!scope?.active || version !== generation) return;
-      if (result.path) { apply(result.path); dirty = true; }
+      if (!scope?.active || version !== generation || picker !== request || request.signal.aborted || !panel.open || id !== selected || runBusy(runStates[id])) return;
+      if (result.path) { apply(result.path); updateDirty(); }
     } catch (error) {
       if (scope?.active && version === generation && !request.signal.aborted) paintStatus({kind: 'error', error, conflict: false});
     } finally {
@@ -183,7 +228,7 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
   listen($('#commands-open'), 'click', () => guarded(() => open()));
   listen($('#commands-refresh'), 'click', () => {if (!busy && canDiscard()) guarded(() => refresh());});
   listen($('#command-new'), 'click', () => {if (!busy && canDiscard()) {populate(); paintStatus(null);}});
-  listen(form, 'input', () => {dirty = true;});
+  listen(form, 'input', updateDirty);
   listen(form, 'submit', event => {event.preventDefault(); void mutate();});
   listen($('#command-delete'), 'click', () => mutate(true));
   listen(search, 'input', paint);

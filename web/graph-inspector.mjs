@@ -4,7 +4,7 @@ import {node} from './ui.mjs';
 // Right-hand panel for the selected script step. Inputs are created once and
 // only refilled on selection, so unsaved values, focus and selection survive
 // language changes.
-export function graphInspector({text, button, label, onEdit, onBrowse}) {
+export function graphInspector({text, button, label, onEdit, onBrowse, onFinish = () => {}}) {
   const element = node('aside', null, 'graph-inspector');
   const empty = text('p', 'web.graph.empty_selection', 'graph-inspector-empty');
   const properties = node('fieldset', null, 'graph-properties'), title = text('legend', 'web.graph.properties');
@@ -29,18 +29,21 @@ export function graphInspector({text, button, label, onEdit, onBrowse}) {
     remove.type = 'button'; input.value = value; input.disabled = locked; remove.disabled = locked;
     row.append(input, remove); args.append(row);
     const entry = {row, input, remove}; rows.push(entry);
-    input.oninput = () => { if (!locked) onEdit('arguments', values()); };
+    input.oninput = () => { if (!locked) onEdit('arguments', values(), input); };
+    input.addEventListener('blur', onFinish);
     remove.onclick = () => {
       if (locked) return;
-      rows.splice(rows.indexOf(entry), 1); row.remove(); onEdit('arguments', values());
+      onFinish(); rows.splice(rows.indexOf(entry), 1); row.remove(); onEdit('arguments', values()); onFinish();
     };
   }
   for (const [input, field] of [[name, 'name'], [script, 'script'], [directory, 'directory']]) {
-    input.oninput = () => { if (!locked) onEdit(field, input.value); };
+    input.oninput = () => { if (!locked) onEdit(field, input.value, input); };
+    input.addEventListener('blur', onFinish);
   }
-  timeout.oninput = () => { if (!locked) onEdit('timeout_seconds', timeout.value.trim() === '' ? null : Number(timeout.value)); };
+  timeout.oninput = () => { if (!locked) onEdit('timeout_seconds', timeout.value.trim() === '' ? null : Number(timeout.value), timeout); };
+  timeout.addEventListener('blur', onFinish);
   pick.onclick = () => { if (!locked) onBrowse(); };
-  addArg.onclick = () => { if (!locked) { argument(); onEdit('arguments', values()); } };
+  addArg.onclick = () => { if (!locked) { onFinish(); argument(); onEdit('arguments', values()); onFinish(); } };
 
   function applyLock() {
     for (const control of [name, script, directory, timeout, pick, addArg]) control.disabled = locked;

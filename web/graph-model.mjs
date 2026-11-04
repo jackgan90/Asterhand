@@ -7,6 +7,15 @@ export function newGraph(id = newID) {
   return {nodes:[start,script,end],edges:[{from:start.id,to:script.id},{from:script.id,to:end.id}],parallelism:4};
 }
 export const copyGraph = graph => structuredClone(graph);
+// Optional fields omitted by the server and explicit empty UI values represent
+// the same editable content. Keep invalid numeric drafts intact for comparison.
+export function graphContent(graph) {
+  if (!graph) return graph;
+  return {...graph, nodes: graph.nodes.map(n => n.kind !== 'script' ? n : {
+    ...n, script: n.script ?? '', directory: n.directory ?? '', arguments: n.arguments ?? [],
+    timeout_seconds: n.timeout_seconds ?? null, failure_policy: n.failure_policy || 'abort',
+  })};
+}
 const issue = (key, node = '') => ({messageKey:key,messageArgs:{node}});
 
 export function edgeIssue(graph, from, to) {

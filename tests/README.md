@@ -1,5 +1,7 @@
 # 测试入口
 
+脚本图撤销重做、操作合并、保存基线与容量检查见[编辑历史计划](../docs/development/features/graph-edit-history/plan.md)。`graph-history.test.mjs` 验证快照和容量，`graph-editor.test.mjs` 与 `local-command-management.test.mjs` 验证编辑/保存；`graph-history-browser.mjs` 用实际 Edge 与内存 API 检查原生文字撤销和图快捷键，运行前配置方法见计划。
+
 统一脚本图命令的接纳竞争、同轮多实例日志、原子换轮、容量、恢复与跨实例分屏，见[统一命令验证](../docs/development/features/unified-command-runs/validation.md)。旧非托管启动和自动合并用例已由统一图执行与独立注册规则替代。
 
 本地脚本图的依赖、失败/停止竞争、节点恢复、并行日志和编辑验证见[脚本图验证](../docs/development/features/local-script-graphs/validation.md)。

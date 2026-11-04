@@ -24,6 +24,8 @@
 
 ## 其他入口
 
+- [脚本图编辑历史与撤销重做](development/features/graph-edit-history/plan.md)：操作快照、Ctrl+Z / Ctrl+Y、输入与拖动合并、保存后保留历史及脏状态比较；工程验证及本机用户验收通过，包含实体中文输入法设置节点名称与重命名。
+
 - [命令模式下 Esc 直接隐藏快捷窗口](development/features/command-mode-escape-hide/plan.md)：命令列表和无匹配空态均一次隐藏，保留查询与输入法保护；重新呼出先恢复列表再测量，连续中间帧不先缩小再撑大；工程验证及本机用户验收通过。
 
 - [日志工具栏自动刷新稳定性](development/features/log-toolbar-refresh-stability/plan.md)：后台补读保留按钮状态与文字，主动操作优先于在途自动读取；工程验证及本机用户验收通过。

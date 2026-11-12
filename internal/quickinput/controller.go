@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackgan90/Asterhand/internal/i18n"
+	"github.com/jackgan90/Asterhand/internal/operations"
 )
 
 type Registrar interface {
@@ -124,16 +125,18 @@ func (s Status) Localize(locale string) Status {
 }
 
 type Change struct {
-	Operation string  `json:"operation_id"`
-	Revision  string  `json:"expected_revision"`
-	Enabled   bool    `json:"enabled"`
-	Binding   Binding `json:"binding"`
-	Theme     string  `json:"theme_id"`
-	Locale    *string `json:"locale,omitempty"`
-	Reset     bool    `json:"reset,omitempty"`
+	publication *operations.Identity
+	Operation   string  `json:"operation_id"`
+	Revision    string  `json:"expected_revision"`
+	Enabled     bool    `json:"enabled"`
+	Binding     Binding `json:"binding"`
+	Theme       string  `json:"theme_id"`
+	Locale      *string `json:"locale,omitempty"`
+	Reset       bool    `json:"reset,omitempty"`
 }
 
 type Controller struct {
+	journal           operations.Journal
 	op                sync.Mutex
 	mu                sync.Mutex
 	home              string
@@ -154,6 +157,7 @@ type Controller struct {
 	draft             Draft
 	chat              *chatController
 	commands          CommandHandler
+	liveEditors       EditorHandler
 	readyAt           time.Time
 	recoveryUsed      bool
 	pendingActivation activationIntent

@@ -66,7 +66,6 @@
   "common.default_node_name": "My Node",
   "common.default_workspace_name": "Workspace",
   "common.unconfirmed": "Unconfirmed",
-
   "brand.primary": "Asterhand",
   "brand.subtitle": "Asterhand",
   "brand.page_title": "Asterhand",
@@ -77,7 +76,6 @@
   "brand.theme.star.desc": "Deep space neon",
   "brand.theme.frost.name": "Frost",
   "brand.theme.frost.desc": "Bright & crisp",
-
   "web.topbar.connecting": "Connecting…",
   "web.topbar.not_logged_in": "Signed out",
   "web.topbar.node_offline": "{name} · Disconnected",
@@ -86,29 +84,23 @@
   "web.topbar.commands": "Commands",
   "web.topbar.settings": "Settings",
   "web.common.close": "Close",
-
   "web.login.title": "Welcome back",
   "web.login.lead": "Enter the sign-in code shown at startup, or open via the sign-in link.",
   "web.login.token_label": "Sign-in code",
   "web.login.submit": "Sign in",
-
   "web.sidebar.my_devices": "My Devices",
   "web.sidebar.pair_open": "+ Pair New Device",
-
   "web.hero.eyebrow": "Your devices, working together",
   "web.hero.title": "What would you like to get done today?",
-
   "web.composer.placeholder": "Describe what you want to accomplish…",
   "web.composer.goal_aria": "Task description",
   "web.composer.device_label": "Device",
   "web.composer.project_label": "Folder",
   "web.composer.submit": "Send",
   "web.composer.submitting": "Sending…",
-
   "web.tasks.heading": "Tasks",
   "web.tasks.empty_initial": "No tasks yet",
   "web.tasks.empty_hint": "No tasks yet — describe what you want to accomplish above",
-
   "web.node.online": "Online",
   "web.node.offline": "Offline",
   "web.node.last_state_prefix": "Last seen: ",
@@ -121,20 +113,17 @@
   "web.node.offline_queued_hint": " · Device offline; will deliver automatically when reconnected",
   "web.node.invite_copied": "Copied. Paste it on the other device within 10 minutes.",
   "web.node.pair_success": "Device paired",
-
   "web.vm.local_reason": "This device: {detail}",
   "web.vm.target_reason": "Selected device: {detail}",
   "web.vm.missing_project": "The selected device has no workspace folder yet. Add one in Settings first.",
   "web.vm.missing_model_status": "Model configuration unavailable. Check Settings on that device.",
   "web.vm.legacy_node": "This device uses legacy verification rules; please upgrade it before use.",
-
   "web.settings.title": "Settings",
   "web.settings.tabs_aria": "Settings categories",
   "web.settings.tab.general": "General",
   "web.settings.tab.model": "Assistant",
   "web.settings.tab.hotkey": "Quick Input",
   "web.settings.tab.network": "Devices",
-
   "web.settings.general.lead": "Device name, language and appearance.",
   "web.settings.general.language_label": "Language",
   "web.settings.general.language_hint": "Follow system language automatically or pin a specific interface language.",
@@ -143,7 +132,6 @@
   "web.settings.general.root_label": "Workspace folder",
   "web.settings.general.root_placeholder": "e.g. D:\\AsterhandWorkspace",
   "web.settings.general.root_hint": "File tasks read and write only inside this folder; leave blank for chat only.",
-
   "web.settings.model.lead": "Choose a model service and the folder the assistant may use. Keys are encrypted on this device and never uploaded.",
   "web.settings.model.provider_label": "Provider",
   "web.settings.model.model_label": "Model",
@@ -161,7 +149,6 @@
   "web.settings.probe.passed": "Connection verified",
   "web.settings.probe.failed": "Test failed",
   "web.settings.probe.stale": "Settings changed; you can test again",
-
   "web.settings.network.lead": "Let your other devices reach this computer.",
   "web.settings.network.detecting": "Checking network…",
   "web.settings.network.use_tailnet": "Use Tailscale Address",
@@ -175,13 +162,11 @@
   "web.settings.network.stop_button": "Stop",
   "web.settings.network.stop_confirm": "Stop the local service?\n\nRunning local tasks will stop and require reconciliation on next startup; unsent queued messages will be discarded. Tasks already accepted by other devices will continue.",
   "web.settings.network.stopping_notice": "Stopping service. Reopen from the launcher when needed.",
-
   "web.settings.save_button": "Save Settings",
   "web.settings.saved_prefix": "Settings saved.",
   "web.settings.saved_chat_ready": "Model is ready for chat.",
   "web.settings.saved_chat_optional": "Add an API key whenever you need model features; testing ahead of time is optional.",
   "web.settings.saved_restart_required": "Listen address changed. Stop and restart the local service to apply.",
-
   "web.desktop.lead": "Press the shortcut anytime to summon the Asterhand chat panel.",
   "web.desktop.loading": "Loading…",
   "web.desktop.enable_label": "Enable Quick Input",
@@ -219,7 +204,6 @@
   "web.desktop.reg.unsupported": "Unsupported on this system",
   "web.desktop.reg.config_invalid": "Invalid settings; restore defaults",
   "web.desktop.reg.pending": "Not active yet",
-
   "web.pair.eyebrow": "Multi-device",
   "web.pair.title": "Pair New Device",
   "web.pair.step1_title": "Invite Another Device",
@@ -233,7 +217,6 @@
   "web.pair.peer_code_aria": "Other device's pairing code",
   "web.pair.peer_code_placeholder": "Paste pairing code",
   "web.pair.submit": "Add Device",
-
   "web.commands.title": "Local Commands",
   "web.commands.lead": "Type / in the quick panel to choose and run a command. Scripts run in the background and do not accept interactive input.",
   "web.commands.sidebar_aria": "Registered commands",
@@ -267,7 +250,6 @@
   "web.commands.deleted_done": "Command deleted (script file kept).",
   "web.commands.saved_done": "Saved and available immediately in the quick-input panel.",
   "web.commands.conflict_suffix": " Copy any edits you want to keep, then click Refresh.",
-
   "web.detail.title": "Task Details",
   "web.task.state.queued": "Queued",
   "web.task.state.running": "Running",
@@ -309,10 +291,8 @@
   "web.task.detail.acceptance": "Your confirmation",
   "web.task.detail.tech_summary": "Technical log",
   "web.task.detail.tech_meta": "Task ID {id} · Attempt {attempt} · Created {created}",
-
   "web.api.same_origin_only": "Requests must use the local same-origin API",
   "web.api.request_failed": "Request failed ({status})",
-
   "quickinput.nav_aria": "Conversation actions",
   "quickinput.history": "History",
   "quickinput.new_chat": "New Chat",
@@ -402,7 +382,6 @@
   "quickinput.ui.sending_wait_switch": "Message is being sent; switch chats in a moment",
   "quickinput.ui.ime_wait_switch": "Finish IME composition before switching chats",
   "quickinput.ui.draft_changed_reselect": "Draft changed; select the target chat again",
-
   "desktop.state.stopping": "Exiting",
   "desktop.state.running": "Node running",
   "desktop.tray.title_with_name": "Asterhand · {name}",
@@ -438,7 +417,6 @@
   "desktop.cli.flag.locale": "Interface locale identifier",
   "desktop.launcher.flag.no_browser": "Start node without opening browser",
   "desktop.launcher.flag.quiet": "Return non-zero exit code without showing a dialog on failure",
-
   "status.availability.invalid_config": "Model or runtime settings are invalid; check local node Settings",
   "status.availability.credential_missing": "Configure a model API key in local node Settings",
   "status.availability.credential_unreadable": "Model credential cannot be read; re-save the API key in local node Settings",
@@ -464,12 +442,10 @@
   "status.quickinput.host_recovering": "Input panel interrupted; recovering",
   "status.quickinput.recovery_host": "Input panel was interrupted and restored the latest draft from the main process; unsent edits or uncommitted IME text may be lost.",
   "status.quickinput.recovery_banner": "Input panel was interrupted and restored the latest draft from the main process; check any unfinished input.",
-
   "err.cli.picker_no_args": "Script picker does not accept positional arguments",
   "err.cli.available_commands": "Available commands: setup, start, open, status, doctor, repair, version",
   "err.cli.acceptance_delay_range": "Acceptance delay must be 0-60 seconds",
   "err.cli.locale_invalid": "Unsupported locale identifier",
-
   "err.http.invalid_host": "Invalid local Web Host header",
   "err.http.login_link_required": "Use the sign-in link shown when the node started",
   "err.http.origin_failed": "Request origin verification failed",
@@ -482,7 +458,6 @@
   "err.http.invalid_cursor_resync": "Invalid event cursor; reload the task snapshot",
   "err.http.node_stopping_restart": "Node is shutting down; restart it in a moment",
   "err.http.extra_body": "Request contains unexpected trailing data",
-
   "err.app.listen_pending_restart": "Listen address changes are pending; restart this node before pairing",
   "err.app.name_required": "Enter a device name",
   "err.app.root_must_be_abs": "Workspace folder must be an absolute path",
@@ -509,15 +484,12 @@
   "err.app.remote_peer_revoked": "Peer has been unpaired",
   "err.app.remote_invalid_answer": "Invalid reply",
   "err.app.remote_answer_conflict": "Different reply content submitted for the same answer ID",
-
   "err.config.dedicated_dir_required": "Node data directory must be a dedicated application folder",
   "err.config.dir_not_empty": "Directory already contains unrelated files; choose an empty folder or an existing Asterhand data directory",
   "err.config.credential_corrupt": "Invalid credential format; pair the device again",
   "err.config.service_locked": "This node data directory is already in use by another service or is not writable",
   "err.config.invalid_credential_ref": "Invalid credential reference format",
-
   "err.network.listen_format": "Peer listen address must be IP:port with port 1-65535",
-
   "err.peer.address_changed_during_verify": "Node address changed during verification; try again shortly",
   "err.peer.identity_changed": "Peer identity or authorization changed; recheck the device",
   "err.peer.metadata_mismatch": "Node metadata does not match the paired identity",
@@ -537,14 +509,11 @@
   "err.peer.connect_failed": "Failed to connect to {endpoint}: {err}",
   "err.peer.response_oversized": "Peer response exceeded size limit",
   "err.peer.token_invalid_or_revoked": "Peer credential is invalid or revoked",
-
   "err.llm.model_unsupported": "Unsupported DeepSeek model: {model}",
   "err.llm.custom_endpoint_unsupported": "Custom endpoints are not supported by the DeepSeek adapter yet",
   "err.llm.provider_missing": "Model provider is not installed: {id}",
-
   "err.env.manifest_mismatch": "Bundle dependency manifest does not match embedded manifest",
   "err.env.bundle_target": "Bundle target {id}: {err}",
-
   "err.store.rejection_mismatch": "Task rejection receipt does not match request",
   "err.store.invalid_operation_evidence": "Invalid file completion evidence",
   "err.store.evidence_wrong_attempt": "File evidence does not belong to the active attempt",
@@ -555,7 +524,6 @@
   "err.store.schema_newer": "Database schema {schema} is newer than supported version {supported}; use a newer Asterhand release",
   "err.store.event_oversized": "Event exceeds 64 KiB limit",
   "err.store.invalid_cursor": "Invalid cursor",
-
   "err.tasks.invalid_request_bounds": "Invalid request ID or task length",
   "err.tasks.unsupported_mode": "Unsupported task mode",
   "err.tasks.invalid_start_before": "Invalid start deadline",
@@ -593,7 +561,6 @@
   "err.tasks.approval_local_only": "Approvals must be handled locally on the executing node",
   "err.tasks.answer_already_answered": "Question has already been answered",
   "err.tasks.attempt_state_changed": "Active attempt state has changed",
-
   "err.executor.missing_credential": "Configure the credential for the selected model in local Settings",
   "err.executor.openclaw_missing": "OpenClaw runtime environment is not installed; run repair",
   "err.executor.openclaw_invalid_output": "OpenClaw did not return a valid result: {err}; {detail}",
@@ -617,7 +584,6 @@
   "err.executor.protected_dir_invalid": "Invalid protected runtime directory: {err}",
   "err.executor.workspace_overlap": "Workspace folder must be separate from node data and protected runtime directories",
   "err.executor.abs_dir_required": "An absolute directory path is required",
-
   "err.conv.not_found": "Conversation not found",
   "err.conv.catalog_mismatch": "Conversation catalog version or target mismatch",
   "err.conv.turn_mismatch": "Turn catalog version or target mismatch",
@@ -670,7 +636,6 @@
   "err.conv.runtime.starting_draft_kept": "Chat runtime is still starting; draft kept, try again shortly",
   "err.conv.runtime.closed": "Chat runtime is closed",
   "err.conv.runtime.binding_unavailable": "Runtime binding for this conversation is unavailable; restore previous settings",
-
   "err.chatbridge.not_dispatched_conn": "Connection was not ready before dispatch; draft kept, refresh and resend",
   "err.chatbridge.not_dispatched_session": "Session changed before dispatch; draft kept, refresh and resend",
   "err.chatbridge.invalid_wait": "Invalid runtime startup wait parameter",
@@ -698,7 +663,6 @@
   "err.chatbridge.page_oversized": "Conversation page exceeded size limit",
   "err.chatbridge.runtime_unavailable": "Chat runtime temporarily unavailable; check status",
   "err.chatbridge.invalid_fragment_offset": "Invalid message segment offset",
-
   "err.localcmd.invalid_name": "Command name must start with an English letter and contain only letters, digits, - or _ (max 64 chars)",
   "err.localcmd.invalid_aliases_desc": "Up to 16 aliases allowed; description up to 512 UTF-8 bytes without control characters",
   "err.localcmd.invalid_alias": "Aliases cannot be empty, start with /, or contain control characters (max 128 UTF-8 bytes)",
@@ -730,7 +694,6 @@
   "err.localcmd.precheck_timeout": "Pre-launch check timed out; try again",
   "err.localcmd.stat_timeout": "File check timed out; verify disk availability and retry",
   "err.localcmd.invalid_wire_req": "Invalid local command request",
-
   "err.quickinput.modifiers_only": "Shortcut supports only Ctrl, Alt, and Shift modifiers",
   "err.quickinput.ctrl_or_alt_required": "Shortcut must include Ctrl or Alt",
   "err.quickinput.unsupported_key": "Unsupported key; choose a letter, digit, or named key (except F12/Win/Fn)",
@@ -831,7 +794,6 @@
   "err.quickinput.browser_cleaning": "WebView2 browser cleanup is still running; preserving profile",
   "err.quickinput.host_privilege_error": "Input host privilege error: must run with an unelevated token",
   "err.quickinput.focus_denied_taskbar": "System prevented focusing the input box; retry from the taskbar",
-
   "err.desktop.queue_full": "Desktop action queue is full",
   "err.desktop.tray_closed": "System tray is closed",
   "err.desktop.hotkey_ids_exhausted": "Shortcut registration IDs exhausted; restart the node",
@@ -849,7 +811,6 @@
   "err.desktop.create_window_failed": "Failed to create tray window: {err}",
   "err.desktop.register_taskbar_msg": "Failed to register taskbarcreated message: {err}",
   "err.desktop.create_timer_failed": "Failed to create tray status timer: {err}",
-
   "err.launch.log_regular_file": "Launcher log must be a regular file",
   "err.launch.read_install_failed": "Failed to read installation record; rerun the installer: {err}",
   "err.launch.unsupported_install_schema": "Unsupported installation record version; rerun the installer",
@@ -968,5 +929,6 @@
   "web.graph.no_script": "No script selected",
   "web.graph.more": "More settings",
   "web.graph.empty_selection": "Select a step to edit its script here. Right-click or double-click the canvas to add a step, and drag from a step's right-hand dot to another step to connect them.",
-  "err.graph.layout_too_large": "The steps are spread too far apart: the horizontal or vertical span cannot exceed 8000. Move them closer together and save again."
+  "err.graph.layout_too_large": "The steps are spread too far apart: the horizontal or vertical span cannot exceed 8000. Move them closer together and save again.",
+  "common.draft.agent_changes": "Agent edits"
 }

@@ -445,6 +445,44 @@ func checkGoFileAST(rel string, src []byte, exemptSymbols map[string]bool, valid
 	if err != nil {
 		return []string{fmt.Sprintf("%s: parse error: %v", rel, err)}, refs
 	}
+	protocolNames := map[token.Pos]bool{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		if rel == "internal/app/automation_schemas.go" {
+			if call, ok := n.(*ast.CallExpr); ok && len(call.Args) > 0 {
+				if fn, ok := call.Fun.(*ast.Ident); ok && fn.Name == "set" {
+					if value, ok := call.Args[0].(*ast.BasicLit); ok {
+						protocolNames[value.Pos()] = true
+					}
+				}
+			}
+		}
+		literal, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		typ, ok := literal.Type.(*ast.SelectorExpr)
+		if !ok || typ.Sel.Name != "Definition" {
+			return true
+		}
+		pkg, ok := typ.X.(*ast.Ident)
+		if !ok || pkg.Name != "automation" {
+			return true
+		}
+		for _, element := range literal.Elts {
+			pair, ok := element.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+			key, ok := pair.Key.(*ast.Ident)
+			if !ok || key.Name != "Name" {
+				continue
+			}
+			if value, ok := pair.Value.(*ast.BasicLit); ok {
+				protocolNames[value.Pos()] = true
+			}
+		}
+		return true
+	})
 	checkSubtree := func(node ast.Node, exempted bool) {
 		ast.Inspect(node, func(n ast.Node) bool {
 			switch x := n.(type) {
@@ -461,7 +499,7 @@ func checkGoFileAST(rel string, src []byte, exemptSymbols map[string]bool, valid
 				if err != nil {
 					return true
 				}
-				if guardKeyRe.MatchString(val) {
+				if guardKeyRe.MatchString(val) && !protocolNames[x.Pos()] {
 					refs[val] = true
 					if !validKeys[val] {
 						pos := fset.Position(x.Pos())

@@ -42,12 +42,13 @@ function outcomeText(outcome) {
   return outcomeKeys[outcome] ? t(outcomeKeys[outcome]) : outcome;
 }
 
-export function taskView({guarded, callbacks, submissionChanged}) {
+export function taskView({guarded, callbacks, submissionChanged, editors}) {
   let editing = false, answeringCount = 0, context, eventsRoot;
   let detailState = null;
   let cardRelocalizers = [];
   const answerDrafts = new Map();
   const questionInputs = new Map();
+  const liveAnswers = new Map();
 
   function syncDraftValuesFromDOM() {
     for (const [draftKey, input] of questionInputs) {
@@ -62,6 +63,7 @@ export function taskView({guarded, callbacks, submissionChanged}) {
     const root = $("#tasks");
     root.replaceChildren();
     for (const view of views) root.append(taskCard(view.job, view.out, view.goal));
+    for(const [key,row] of liveAnswers)if(!questionInputs.has(key)){row.registration.dispose();liveAnswers.delete(key);}
     if (!root.children.length) {
       const emptyEl = node("div", t("web.tasks.empty_hint"), "empty");
       cardRelocalizers.push(() => { emptyEl.textContent = t("web.tasks.empty_hint"); });
@@ -211,26 +213,41 @@ export function taskView({guarded, callbacks, submissionChanged}) {
     input.maxLength = 4000;
     input.setAttribute("aria-label", t("web.task.answer_aria"));
     form.append(input, button);
-    form.addEventListener("submit", (event) => {
-      event.preventDefault();
-      if (button.disabled) return;
-      guarded(async () => {
+    const sendAnswer=async (external='', stillCurrent=()=>true) => {
+        if(button.disabled || external && !input.value.trim())throw Object.assign(new Error('busy'),{code:'busy'});
         button.disabled = true;
         answeringCount++;
         let answered = false;
         try {
-          answered = Boolean(await callbacks.answer(job, out, input.value));
+          answered = Boolean(await callbacks.answer(job, out, input.value, external || undefined));
         } finally {
           answeringCount--;
           button.disabled = false;
         }
         if (answered) {
-          answerDrafts.delete(draftKey);
-          input.blur();
+          if (!external || stillCurrent()) {
+            answerDrafts.delete(draftKey);
+            input.blur();
+          }
           await callbacks.refresh();
         }
-      });
+        return answered?'accepted':'unknown';
+    };
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (button.disabled) return;
+      guarded(sendAnswer);
     });
+    if(editors && job.interaction.kind==='question'){
+      let row=liveAnswers.get(draftKey);
+      if(!row){
+        row={};liveAnswers.set(draftKey,row);
+        row.registration=editors.register({target:()=>row.target,busy:()=>row.button.disabled,read:()=>({text:row.input.value}),ownsInput:el=>el===row.input||el===row.form,
+          apply:v=>{row.input.value=v.text;if(v.text)answerDrafts.set(draftKey,v.text);else answerDrafts.delete(draftKey);},commit:(id,_snapshot,stillCurrent)=>row.send(id,stillCurrent)});
+      }
+      Object.assign(row,{input,form,button,send:sendAnswer,target:{kind:'task_answer',node_id:out?.peer_id||job.owner,project_id:job.request.project_id,
+        task_kind:out?'outbox':'job',task_id:out?.id||job.id,attempt:job.interaction.attempt,interaction_id:job.interaction.id}});
+    }
     root.append(form);
     return {
       root,

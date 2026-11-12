@@ -166,6 +166,9 @@ func (a *App) local(w http.ResponseWriter, r *http.Request) {
 		send(w, 200, map[string]string{"csrf": s.csrf})
 		return
 	}
+	if a.automationHumanAPI(w, r) {
+		return
+	}
 	a.api(w, r)
 }
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
@@ -364,7 +367,15 @@ func (a *App) jobAPI(w http.ResponseWriter, r *http.Request, actor string, local
 			a.fail(w, r, 409, i18n.Err("err.http.invalid_cursor_resync"))
 			return
 		}
-		events, err := a.Store.Events(j.ID, after)
+		limit := 200
+		if raw := r.URL.Query().Get("limit"); raw != "" {
+			limit, err = strconv.Atoi(raw)
+			if err != nil || limit < 1 || limit > 200 {
+				a.fail(w, r, 400, i18n.Err("err.http.invalid_cursor_resync"))
+				return
+			}
+		}
+		events, err := a.Store.EventsLimit(j.ID, after, limit)
 		if err != nil {
 			a.fail(w, r, 500, err)
 			return

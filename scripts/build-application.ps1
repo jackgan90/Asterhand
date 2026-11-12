@@ -42,6 +42,9 @@ function Copy-ApplicationLicenses {
     $mathRoot = Join-Path $OutputDirectory 'licenses/katex'
     [IO.Directory]::CreateDirectory($mathRoot) | Out-Null
     Copy-Item -LiteralPath (Join-Path $repo 'internal/quickinput/assets/vendor/katex/LICENSE'),(Join-Path $repo 'internal/quickinput/assets/vendor/katex/manifest.json') -Destination $mathRoot
+    $encodingRoot = Join-Path $OutputDirectory 'licenses/whatwg-encoding'
+    [IO.Directory]::CreateDirectory($encodingRoot) | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repo 'internal/localcommands/encodingdata/LICENSE'),(Join-Path $repo 'internal/localcommands/encodingdata/README.md') -Destination $encodingRoot
 }
 
 try {
@@ -57,6 +60,8 @@ try {
     }
     Invoke-BuildProcess 'Verify frontend assets' $Node @((Join-Path $PSScriptRoot 'verify-frontend-assets.mjs'))
     Invoke-BuildProcess 'Verify frontend i18n guardrails' $Node @((Join-Path $PSScriptRoot 'sync-i18n.mjs'),'--check')
+    Invoke-BuildProcess 'Verify automation operation coverage' $Go @('-C',$repo,'test','-count=1','./internal/app','-run','^TestAutomationCoverage$')
+    Invoke-BuildProcess 'Verify UI automation coverage' $Node @('--test',(Join-Path $repo 'tests/automation-coverage.test.mjs'))
     foreach ($target in @(
         @{name='asterhand';file='asterhand.exe';gui=$false},
         @{name='asterhand-launcher';file='AsterhandLauncher.exe';gui=$true},

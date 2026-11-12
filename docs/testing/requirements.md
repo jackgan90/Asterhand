@@ -1,5 +1,13 @@
 # 测试需求
 
+## 自动化验证要求
+
+- TEST-AUTO-01：公共操作、CLI/MCP 定义与日常 UI 覆盖登记一致，缺失或 schema 漂移阻断交付；静态登记不能替代行为验证。
+- TEST-AUTO-02：使用三入口验证相同业务结果及拒绝，覆盖接纳丢响应、进程崩溃、过期/清理、并发编辑、停止竞争、批次部分完成和有界资源。
+- TEST-AUTO-03：真实 Windows 进程/本机通道和实际 MCP 客户端验证，模型及双机任务按条件独立验收，不借 fixture 宣称产品支持。
+
+可复现步骤与已有测试依据见[自动化验证说明](../development/features/agent-automation/validation.md)。
+
 ## 持续聊天验证
 
 下列要求对应[本机持续聊天](../development/features/local-node-chat/plan.md)，工程测试、原生运行时和桌面验证已提供独立入口；实际模型与人工验收单列。

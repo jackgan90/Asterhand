@@ -1,5 +1,11 @@
 # 当前机器契约
 
+## 公共自动化协议
+
+[统一自动化计划](../docs/development/features/agent-automation/plan.md)定义独立版本化的日常业务协议，CLI/MCP 共用操作 schema、稳定错误、操作身份及结果查询方式。它适配现有领域服务，保留 UI 的 HTTP/IPC 和 peer `/v1/jobs`；不把浏览器管理权限、私有宿主序号或原生 Gateway RPC 当成 agent 契约。具体规则见[自动化设计](../docs/automation/design.md)，通过 `asterhand automation schema` 查看当前输入输出；[覆盖登记](automation-coverage.json)关联全部公共操作、UI 入口和测试，使用方法见[指南](../docs/automation/usage.md)。
+
+## 现有契约
+
 [本机持续聊天](../docs/development/features/local-node-chat/plan.md)另行定义[会话语义](../docs/assistant/conversations.md)，封闭请求与响应权威位于 `internal/conversation/wire/protocol.go`；不复用 job ID 表示会话，不改变下文 `/v1/jobs` 任务协议。首版仅本地桥，远程聊天端点留待后续 feature，本地宿主封装位于 `internal/quickinput/hostipc/chat.go`，不透传原生 RPC。
 
 版本前缀 /v1。节点服务使用 TLS 1.3、固定证书和独立 bearer token；/v1/pair 仅接受一次性邀请。配对后 /v1/info、/v1/jobs、/v1/jobs/{id}、events、answer、cancel 与 cancel-request 均按 peer/project/origin 检查。

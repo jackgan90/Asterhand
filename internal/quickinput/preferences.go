@@ -10,15 +10,17 @@ import (
 
 	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/model"
+	"github.com/jackgan90/Asterhand/internal/operations"
 )
 
 type Preferences struct {
-	Schema   int     `json:"schema_version"`
-	Revision string  `json:"revision"`
-	Enabled  bool    `json:"enabled"`
-	Binding  Binding `json:"binding"`
-	Theme    string  `json:"theme_id"`
-	Locale   string  `json:"locale"`
+	Publication *operations.Publication `json:"automation_publication,omitempty"`
+	Schema      int                     `json:"schema_version"`
+	Revision    string                  `json:"revision"`
+	Enabled     bool                    `json:"enabled"`
+	Binding     Binding                 `json:"binding"`
+	Theme       string                  `json:"theme_id"`
+	Locale      string                  `json:"locale"`
 }
 
 func Defaults() Preferences {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/jackgan90/Asterhand/internal/i18n"
@@ -22,6 +23,9 @@ func (a *App) submit(j model.Job, input tasks.Submission) (model.Outbox, error) 
 	}
 	if j.Request.TargetExplicit && input.Target != j.Request.Target {
 		return model.Outbox{}, i18n.Err("err.app.target_selector_conflict")
+	}
+	if strings.HasPrefix(j.SubmittedBy, "automation:") && input.Project != j.Request.ProjectID {
+		return model.Outbox{}, i18n.Err("err.tasks.project_unauthorized")
 	}
 	if input.Target != a.Config.Get().NodeID {
 		p, err := a.Peers.Get(input.Target)

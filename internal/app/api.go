@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackgan90/Asterhand/internal/automation"
 	"github.com/jackgan90/Asterhand/internal/config"
 	"github.com/jackgan90/Asterhand/internal/executor"
 	"github.com/jackgan90/Asterhand/internal/i18n"
@@ -170,7 +171,7 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 	c := a.Config.Get()
 	if r.Method == "GET" {
 		_, err := a.Config.Key()
-		send(w, 200, map[string]any{"config": c, "has_key": err == nil, "home": a.Config.Home, "providers": llm.Available(), "runtimes": executor.Available()})
+		send(w, 200, map[string]any{"config": c, "revision": nodeSettingsRevision(c), "has_key": err == nil, "home": a.Config.Home, "providers": llm.Available(), "runtimes": executor.Available()})
 		return
 	}
 	if r.Method != "POST" {
@@ -182,6 +183,8 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 	c = a.Config.Get()
 	before := c
 	var input struct {
+		Operation    string         `json:"operation_id,omitempty"`
+		Revision     string         `json:"expected_revision,omitempty"`
 		Name         string         `json:"name"`
 		NameEdited   *bool          `json:"name_edited,omitempty"`
 		Endpoint     string         `json:"endpoint"`
@@ -197,14 +200,26 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, 400, err)
 		return
 	}
-	if strings.TrimSpace(input.Name) == "" || len(input.Name) > 80 {
-		a.fail(w, r, 400, i18n.Err("err.app.name_required"))
+	identity, finish, beginErr := a.beginHumanSettings(input.Operation, input)
+	if beginErr != nil {
+		a.fail(w, r, 409, beginErr)
+		return
+	}
+	var rejected error
+	defer func() { finish(rejected) }()
+	reject := func(status int, err error) { rejected = err; a.fail(w, r, status, err) }
+	if err := validateNodeName(input.Name); err != nil {
+		reject(400, err)
+		return
+	}
+	if input.Revision != "" && input.Revision != nodeSettingsRevision(c) {
+		reject(409, automation.Fail("conflict", "Node settings changed; retain the current form and reload its baseline"))
 		return
 	}
 	if input.PeerListen != nil {
 		c.PeerListen = strings.TrimSpace(*input.PeerListen)
 		if err := network.ValidateListener(c.PeerListen); err != nil {
-			a.fail(w, r, 400, err)
+			reject(400, err)
 			return
 		}
 	}
@@ -217,11 +232,11 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 		c.AgentRuntime = input.AgentRuntime
 	}
 	if err := executor.ValidateSelection(c); err != nil {
-		a.fail(w, r, 400, err)
+		reject(400, err)
 		return
 	}
 	if input.Root != "" && !filepath.IsAbs(input.Root) {
-		a.fail(w, r, 400, i18n.Err("err.app.root_must_be_abs"))
+		reject(400, i18n.Err("err.app.root_must_be_abs"))
 		return
 	}
 	root := ""
@@ -232,48 +247,26 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 			err = executor.ValidateWorkspace(c, a.Config.Home, root)
 		}
 		if err != nil {
-			a.fail(w, r, 400, err)
+			reject(400, err)
 			return
 		}
 	}
-	var jobs []model.Job
-	if err = a.Store.List("job", &jobs); err != nil {
-		a.fail(w, r, 500, err)
+	release, guardErr := a.settingsAdmissionLocked(before, c, input.Key != "" || input.DeleteKey)
+	if guardErr != nil {
+		reject(409, guardErr)
 		return
 	}
-	for _, j := range jobs {
-		if !model.Terminal(j.State) {
-			a.fail(w, r, 409, i18n.Err("err.app.busy_tasks_before_settings"))
-			return
-		}
-	}
-	if a.probeRunning {
-		a.fail(w, r, 409, i18n.Err("err.app.wait_probe"))
-		return
-	}
-	if a.stopping {
-		a.fail(w, r, 503, i18n.Err("err.app.node_stopping"))
-		return
-	}
-	chatChanged := input.Key != "" || input.DeleteKey || model.Hash(before.LLM) != model.Hash(c.LLM) || before.AgentRuntime != c.AgentRuntime
-	if chatChanged {
-		release, guardErr := a.Chat.BeginConfiguration()
-		if guardErr != nil {
-			a.fail(w, r, 409, guardErr)
-			return
-		}
-		defer release()
-	}
-	if root != "" {
-		if err = os.MkdirAll(root, 0700); err != nil {
-			a.fail(w, r, 400, err)
-			return
-		}
-	}
+	defer release()
 	if input.Endpoint != "" {
 		u, parseErr := url.Parse(input.Endpoint)
 		if parseErr != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" {
-			a.fail(w, r, 400, i18n.Err("err.app.endpoint_format"))
+			reject(400, i18n.Err("err.app.endpoint_format"))
+			return
+		}
+	}
+	if root != "" {
+		if err = os.MkdirAll(root, 0700); err != nil {
+			reject(400, err)
 			return
 		}
 	}
@@ -294,7 +287,12 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 	if diagnosticChanged {
 		c.InvalidateModelDiagnostic()
 	}
-	if err = a.Config.Save(c); err != nil {
+	if identity != nil {
+		err = a.Config.SaveOperation(c, *identity)
+	} else {
+		err = a.Config.Save(c)
+	}
+	if err != nil {
 		a.fail(w, r, 500, err)
 		return
 	}
@@ -302,90 +300,25 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 		a.probeStatus, a.probeError, a.probeErrorKey, a.probeErrorArgs = string(c.DiagnosticStatus()), "", "", nil
 	}
 	a.requestPeerSync()
-	send(w, 200, map[string]any{"saved": true, "ready": c.ModelVerified, "capabilities": executor.ConfiguredCapabilities(a.Config, c).Localize(a.requestLocale(r)), "restart_required": !network.ListenerMatches(c.PeerListen, a.peerAddress)})
+	send(w, 200, map[string]any{"saved": true, "revision": nodeSettingsRevision(a.Config.Get()), "ready": c.ModelVerified, "capabilities": executor.ConfiguredCapabilities(a.Config, c).Localize(a.requestLocale(r)), "restart_required": !network.ListenerMatches(c.PeerListen, a.peerAddress)})
 }
 func (a *App) probe(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
 	if r.Method == "GET" {
-		state, detail := a.probeStatus, a.probeError
-		errKey, errArgs := a.probeErrorKey, i18n.CloneArgs(a.probeErrorArgs)
-		if !a.probeRunning && state != "failed" {
-			state, detail, errKey, errArgs = string(a.Config.Get().DiagnosticStatus()), "", "", nil
-		}
-		a.mu.Unlock()
-		if errKey != "" {
-			detail = i18n.LocalizeMessage(a.requestLocale(r), errKey, errArgs, detail)
-		}
-		payload := map[string]any{"state": state, "error": detail}
-		if errKey != "" {
-			payload["message_key"] = errKey
-		}
-		if len(errArgs) > 0 {
-			payload["message_args"] = errArgs
-		}
-		send(w, 200, payload)
+		send(w, 200, a.probeSnapshot(a.requestLocale(r)))
 		return
 	}
 	if r.Method != "POST" {
-		a.mu.Unlock()
 		w.WriteHeader(405)
 		return
 	}
-	if a.probeRunning {
-		a.mu.Unlock()
-		a.fail(w, r, 409, i18n.Err("err.app.probe_running"))
+	if err := a.startProbe(nil, nil); err != nil {
+		status := 409
+		if a.Stopping() {
+			status = 503
+		}
+		a.fail(w, r, status, err)
 		return
 	}
-	if a.stopping {
-		a.mu.Unlock()
-		a.fail(w, r, 503, i18n.Err("err.app.node_stopping"))
-		return
-	}
-	a.probeRunning = true
-	a.probeStatus = "running"
-	a.probeError = ""
-	a.probeErrorKey = ""
-	a.probeErrorArgs = nil
-	token := model.ID()
-	a.probeTokens[token] = false
-	a.mu.Unlock()
-	a.wg.Add(1)
-	go func() {
-		defer a.wg.Done()
-		ctx, cancel := context.WithTimeout(a.ctx, 3*time.Minute)
-		defer cancel()
-		_, err := a.Engine.Executor.Execute(ctx, executor.Run{ID: model.ID(), Mode: "probe", Callback: a.Engine.Callback, Token: token, Goal: "Call asterhand_probe exactly once to check this node. This tool has no side effects. Then reply with a short readiness confirmation. Do not use any other tools."})
-		a.mu.Lock()
-		called := a.probeTokens[token]
-		delete(a.probeTokens, token)
-		if err == nil && !called {
-			err = i18n.Err("err.app.probe_tool_not_called")
-		}
-		c := a.Config.Get()
-		c.ModelVerified = err == nil
-		c.ModelDiagnostic = config.DiagnosticFailed
-		if err == nil {
-			c.ModelDiagnostic = config.DiagnosticPassed
-			c.VerifiedBundle = executor.BundleIdentity()
-			c.VerifiedExecution = executor.ExecutionIdentity(c)
-		}
-		if saveErr := a.Config.Save(c); saveErr != nil {
-			err = saveErr
-		}
-		a.probeRunning = false
-		a.probeStatus = "passed"
-		a.probeError = ""
-		a.probeErrorKey = ""
-		a.probeErrorArgs = nil
-		if err != nil {
-			msg, key, args := i18n.LocalizeError(i18n.Effective(), err)
-			a.probeStatus = "failed"
-			a.probeError = msg
-			a.probeErrorKey = key
-			a.probeErrorArgs = args
-		}
-		a.mu.Unlock()
-	}()
 	send(w, 202, map[string]string{"state": "running"})
 }
 func localizePeerInfo(locale string, info map[string]any) map[string]any {
@@ -512,8 +445,6 @@ func (a *App) jobsAPI(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(405)
 		return
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	var req model.Request
 	if err := read(w, r, &req); err != nil {
 		a.fail(w, r, 400, err)
@@ -522,15 +453,8 @@ func (a *App) jobsAPI(w http.ResponseWriter, r *http.Request) {
 	if req.Target == "" {
 		req.Target = a.Config.Get().NodeID
 	}
-	if req.Target != a.Config.Get().NodeID {
-		var p model.Peer
-		if err := a.Store.Get("peer", req.Target, &p); err != nil || p.Revoked {
-			a.fail(w, r, 400, i18n.Err("err.app.pair_target_first"))
-			return
-		}
-	}
 	req.Mode = "route"
-	j, err := a.Engine.Accept(a.Config.Get().NodeID, req)
+	j, err := a.submitTask(req, "")
 	if err != nil {
 		failAdmission(w, reqLocale, req, err)
 		return
@@ -547,6 +471,9 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	tick := time.NewTicker(2 * time.Second)
 	defer tick.Stop()
+	editorCtx, cancelEditors := context.WithCancel(r.Context())
+	defer cancelEditors()
+	pages := a.Editors.Commands(editorCtx, "web", r.URL.Query().Get("editor_page"))
 	for {
 		refresh := a.refreshDone()
 		http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Second))
@@ -554,11 +481,26 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		flusher.Flush()
-		select {
-		case <-r.Context().Done():
-			return
-		case <-refresh:
-		case <-tick.C:
+	waitRefresh:
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-refresh:
+				break waitRefresh
+			case <-tick.C:
+				break waitRefresh
+			case msg, ok := <-pages:
+				if !ok {
+					pages = nil
+					continue
+				}
+				http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Second))
+				if _, err := fmt.Fprintf(w, "event: editor\ndata: %s\n\n", compactResult(map[string]any{"node_id": a.Config.Get().NodeID, "request": msg})); err != nil {
+					return
+				}
+				flusher.Flush()
+			}
 		}
 	}
 }

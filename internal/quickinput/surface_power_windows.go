@@ -38,6 +38,12 @@ func (s *nativeSurface) resume() {
 }
 
 func (s *nativeSurface) suspend(complete func()) {
+	if s.activeEditor != nil {
+		if complete != nil {
+			complete()
+		}
+		return
+	}
 	s.wantsSuspended = true
 	if s.core == nil || s.closing {
 		if complete != nil {

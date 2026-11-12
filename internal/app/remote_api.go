@@ -12,6 +12,7 @@ import (
 )
 
 type pendingAnswer struct {
+	Actor    string          `json:"actor,omitempty"`
 	ID       string          `json:"id"`
 	OutboxID string          `json:"outbox_id"`
 	Body     json.RawMessage `json:"body"`
@@ -31,14 +32,7 @@ func (a *App) remoteAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if parts[1] == "cancel" && r.Method == "POST" {
-		err := a.Store.Modify("outbox", o.ID, func(raw []byte) (any, error) {
-			var current model.Outbox
-			if err := decode(raw, &current); err != nil {
-				return nil, err
-			}
-			current.Cancel = true
-			return current, nil
-		})
+		err := a.cancelOutbox(o.ID, "")
 		if err != nil {
 			a.fail(w, r, 500, err)
 			return
@@ -70,33 +64,13 @@ func (a *App) remoteAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if parts[1] == "answer" && r.Method == "POST" {
-		var input struct {
-			InteractionID string `json:"interaction_id"`
-			Attempt       string `json:"attempt"`
-			AnswerID      string `json:"answer_id"`
-			Answer        string `json:"answer"`
-		}
+		var input remoteAnswerInput
 		if err := read(w, r, &input); err != nil {
 			a.fail(w, r, 400, err)
 			return
 		}
-		if len(input.AnswerID) < 8 || input.Answer == "" || len(input.Answer) > 4000 {
-			a.fail(w, r, 400, i18n.Err("err.app.remote_invalid_answer"))
-			return
-		}
-		body, _ := json.Marshal(input)
-		key := model.Hash([]string{o.ID, input.InteractionID, input.AnswerID})
-		var existing pendingAnswer
-		if err := a.Store.Get("answer-outbox", key, &existing); err == nil {
-			if string(existing.Body) != string(body) {
-				a.fail(w, r, 409, i18n.Err("err.app.remote_answer_conflict"))
-				return
-			}
-			send(w, 200, existing)
-			return
-		}
-		answer := pendingAnswer{ID: key, OutboxID: o.ID, Body: body, State: "saved"}
-		if err := a.Store.Put("answer-outbox", key, answer); err != nil {
+		answer, err := a.queueRemoteAnswer(o, input, "")
+		if err != nil {
 			a.fail(w, r, 500, err)
 			return
 		}

@@ -13,8 +13,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackgan90/Asterhand/internal/automation"
 	"github.com/jackgan90/Asterhand/internal/config"
 	"github.com/jackgan90/Asterhand/internal/conversation"
+
+	"github.com/jackgan90/Asterhand/internal/editors"
 	"github.com/jackgan90/Asterhand/internal/executor"
 	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/localcommands"
@@ -30,6 +33,9 @@ type session struct {
 	csrf    string
 }
 type App struct {
+	Automation *automation.Server
+
+	Editors         *editors.Broker
 	Config          *config.Manager
 	Store           *store.Store
 	Peers           *peer.Manager
@@ -46,6 +52,7 @@ type App struct {
 	sessions        map[string]session
 	probeTokens     map[string]bool
 	probeRunning    bool
+	runningBatches  int
 	probeStatus     string
 	probeError      string
 	probeErrorKey   string
@@ -113,6 +120,10 @@ func New(c *config.Manager, x executor.Executor) (*App, error) {
 	a.Input.SetConversationClient(conversation.Client{Target: a.Chat.Target(), Transport: a.Chat})
 	a.Chat.SetCompletionHandler(a.Input.ReplyCompleted)
 	a.desktopRequests = make(chan struct{}, 8)
+	if err = a.prepareAutomation(); err != nil {
+		a.Close()
+		return nil, err
+	}
 	return a, nil
 }
 func (a *App) Start(ctx context.Context) (string, error) {
@@ -146,6 +157,11 @@ func (a *App) Start(ctx context.Context) (string, error) {
 		return "", err
 	}
 	a.Chat.Start()
+	if err = a.startAutomation(ctx); err != nil {
+		web.Close()
+		remote.Close()
+		return "", err
+	}
 	localServer := &http.Server{Handler: a.requests.wrap(a.local), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 * 1024}
 	peerServer := &http.Server{Handler: a.requests.wrap(a.remote), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 * 1024}
 	tlsListener := tls.NewListener(remote, &tls.Config{Certificates: []tls.Certificate{a.Peers.TLS}, MinVersion: tls.VersionTLS13})
@@ -165,10 +181,18 @@ func (a *App) Start(ctx context.Context) (string, error) {
 		a.RequestStop(true)
 		localServer.Close()
 		peerServer.Close()
+		if a.Automation != nil {
+			shutdown, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+			defer cancel()
+			_ = a.Automation.Close(shutdown)
+		}
 	}()
 	return fmt.Sprintf("http://%s/#login=%s", a.webAddress, a.loginToken), nil
 }
 func (a *App) Close() error {
+	if a.Editors != nil {
+		a.Editors.Close()
+	}
 	a.closeOnce.Do(func() {
 		a.RequestStop(true)
 		a.requests.wg.Wait()

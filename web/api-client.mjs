@@ -46,5 +46,5 @@ export function apiClient({fetch: request = globalThis.fetch, EventSource: Sourc
     authentication = transaction.catch(() => {});
     return transaction;
   }
-  return {api, post, authenticate, stream:() => new Source("/api/stream")};
+  return {api, post, authenticate, stream:page => new Source(page ? '/api/stream?editor_page='+encodeURIComponent(page) : '/api/stream')};
 }

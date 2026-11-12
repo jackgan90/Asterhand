@@ -1,3 +1,4 @@
+import {editorOperation} from './live-editors.mjs';
 import {localizeError, localizeMessage, t} from "./i18n.mjs";
 import {applyTheme} from "./ui.mjs";
 
@@ -45,7 +46,7 @@ function snapshotBaseline(desired) {
   };
 }
 
-export function desktopSettings(api, post, {listen = (target, event, callback) => target.addEventListener(event, callback), session = () => ({active:true})} = {}) {
+export function desktopSettings(api, post, {listen = (target, event, callback) => target.addEventListener(event, callback), session = () => ({active:true}), editors} = {}) {
   const form = document.querySelector("#desktop-form"), fields = form.elements;
   const state = document.querySelector("#desktop-state");
   const recordInput = document.querySelector("#desktop-record");
@@ -59,6 +60,24 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
   let requestClock = 0, latestAppliedClock = 0;
   let stateOverride = null, recordMode = "idle";
   let cancellation = Promise.resolve();
+  const live=editors?.register({
+    ownsInput:el=>form.contains(el),
+    target:()=>document.querySelector("#settings").open && current?.supported && formBaseline?
+      {kind:'settings',settings:'desktop',node_id:editors.nodeID,baseline_revision:formBaseline.revision}:null,
+    busy:()=>Boolean(recording||busy||activeSave||pending||pendingLocale||pendingTheme),
+    read:()=>({enabled:fields.enabled.checked,binding:binding(),theme_id:fields.theme.value,locale:current.desired.locale}),
+    apply:v=>{
+      // Language and theme have their own immediate-save controls. They are
+      // available through settings.patch; the hotkey editor stages its own fields.
+      if(v.locale!==current.desired.locale||v.theme_id!==fields.theme.value)throw Object.assign(new Error('Use settings.patch'),{code:'invalid_parameters'});
+      fields.enabled.checked=v.enabled;setBinding(v.binding);paintSaveButton();
+    },
+    commit:async id=>{
+      const transaction=busy={generation:pageGeneration};
+      try{await save(false,id);return 'saved';}finally{if(busy===transaction)busy=undefined;}
+    }
+  });
+  listen(document.querySelector("#settings"),"close",()=>live?.invalidate());
   const key = document.querySelector("#desktop-key");
   for (const name of [..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"].map(c => "Key"+c)
     .concat([..."0123456789"].map(c => "Digit"+c),
@@ -276,20 +295,22 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
   listen(window, "blur", () => { void endRecording(); });
   listen(document.querySelector("#settings"), "close", () => { void endRecording(); });
   listen(form, "input", () => { pending = null; recordInput.value = label(binding()); paintSaveButton(); });
-  async function saveRequest(reset = false) {
+  async function saveRequest(reset = false, editorID) {
     const generation = pageGeneration, scope = session();
     await endRecording();
     if (!isCurrent(generation, scope)) return;
     settleTheme();
     const expectedRevision = formBaseline ? formBaseline.revision : current.desired.revision;
-    pending ||= {operation_id:crypto.randomUUID(), expected_revision:expectedRevision, enabled:fields.enabled.checked, binding:binding(), theme_id:fields.theme.value, reset};
+    pending ||= {operation_id:editorID || crypto.randomUUID(), expected_revision:expectedRevision, enabled:fields.enabled.checked, binding:binding(), theme_id:fields.theme.value, reset};
     try {
-      const result = await post("/api/desktop/settings", pending);
+      const {operation_id, ...fields} = pending;
+      const result = editorID ? await editorOperation(post,'settings.patch',editorID,{settings:'desktop',...fields}) :
+        await post("/api/desktop/settings", pending);
       if (!isCurrent(generation, scope)) return;
       pending = null; commitWriteSnapshot(result, true); paintSaveButton();
     } catch (error) {
       if (!isCurrent(generation, scope)) return;
-      const operation = pending.operation_id;
+      const operation = pending?.operation_id;
       await refresh();
       if (!isCurrent(generation, scope)) return;
       if (current.last_operation === operation) { pending = null; formBaseline = snapshotBaseline(current.desired); settleTheme(); return; }
@@ -300,10 +321,10 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
       throw error;
     }
   }
-  async function save(reset = false) {
+  async function save(reset = false, editorID) {
     const generation = pageGeneration, scope = session(), saveToken = activeSave = {};
     document.querySelector("#desktop-fields").disabled = true;
-    try { await saveRequest(reset); }
+    try { await saveRequest(reset, editorID); }
     finally {
       if (activeSave === saveToken) {
         activeSave = null;

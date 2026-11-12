@@ -11,9 +11,10 @@ export const copyGraph = graph => structuredClone(graph);
 // the same editable content. Keep invalid numeric drafts intact for comparison.
 export function graphContent(graph) {
   if (!graph) return graph;
-  return {...graph, nodes: graph.nodes.map(n => n.kind !== 'script' ? n : {
+  const number = value => typeof value === 'string' && /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) : value;
+  return {...graph, parallelism:number(graph.parallelism), nodes: graph.nodes.map(n => n.kind !== 'script' ? n : {
     ...n, script: n.script ?? '', directory: n.directory ?? '', arguments: n.arguments ?? [],
-    timeout_seconds: n.timeout_seconds ?? null, failure_policy: n.failure_policy || 'abort',
+    timeout_seconds: n.timeout_seconds === '' ? null : number(n.timeout_seconds ?? null), failure_policy: n.failure_policy || 'abort',
   })};
 }
 const issue = (key, node = '') => ({messageKey:key,messageArgs:{node}});

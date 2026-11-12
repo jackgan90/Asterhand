@@ -284,6 +284,8 @@ export function graphCanvas(intents) {
     center() { const rect = rectOf(viewport); return toGraph(rect.left + rect.width / 2, rect.top + rect.height / 2); },
     startRename,
     finishRename() { renaming?.commit(); },
+    get changingGeometry() { return Boolean(gesture || connecting); },
+    get activeRename() { return renaming && {id:renaming.id,name:renaming.input.value}; },
     // Ends any drag, connection or rename without committing it.
     cancelInteraction() { cancelGesture(); renaming?.cancel(); },
     focusNode(id) { cards.get(id)?.element.focus?.({preventScroll:true}); },

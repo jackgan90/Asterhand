@@ -14,6 +14,7 @@ import (
 	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/localcommands/wire"
 	"github.com/jackgan90/Asterhand/internal/model"
+	"github.com/jackgan90/Asterhand/internal/operations"
 )
 
 const maxCatalogBytes = 16 * 1024 * 1024
@@ -31,6 +32,7 @@ type Registry struct {
 	statuses     map[string]*fileStatus
 	probeQueue   []probeTask
 	probeWorkers int
+	journal      operations.Journal
 }
 
 // Open isolates invalid configuration to this feature and never overwrites it.
@@ -138,16 +140,23 @@ func (r *Registry) save(next Catalog) error {
 }
 
 func (r *Registry) Save(change Mutation) (SaveResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.saveLocked(change, "", nil)
+}
+
+func (r *Registry) saveLocked(change Mutation, objectRevision string, identity *operations.Identity) (SaveResult, error) {
 	command, err := normalizeWithPolicy(change.Command, r.policy)
 	if err != nil {
 		return SaveResult{}, err
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	if err := r.ready(); err != nil {
 		return SaveResult{}, err
 	}
-	if change.Revision != r.catalog.Revision {
+	if err := r.completePublication(); err != nil {
+		return SaveResult{}, err
+	}
+	if identity == nil && change.Revision != r.catalog.Revision {
 		return SaveResult{}, problem("conflict", "err.localcmd.save_conflict")
 	}
 	if r.closing {
@@ -164,6 +173,9 @@ func (r *Registry) Save(change Mutation) (SaveResult, error) {
 	if command.ID != "" && index < 0 {
 		return SaveResult{}, problem("not_found", "err.localcmd.deleted_refresh")
 	}
+	if identity != nil && index >= 0 && objectRevision != next.Commands[index].Revision {
+		return SaveResult{}, problem("conflict", "err.localcmd.save_conflict")
+	}
 	if index >= 0 {
 		next.Commands = slices.Delete(next.Commands, index, index+1)
 	}
@@ -179,8 +191,15 @@ func (r *Registry) Save(change Mutation) (SaveResult, error) {
 	}
 	command.Revision = model.ID()
 	next.Commands = append(next.Commands, command)
+	if identity != nil {
+		result, _ := json.Marshal(CommandReference{ID: command.ID, Revision: command.Revision})
+		next.Publication = &operations.Publication{Identity: *identity, Result: result}
+	}
 	if err := r.save(next); err != nil {
 		return SaveResult{}, err
+	}
+	if err := r.completePublication(); err != nil {
+		return SaveResult{ID: command.ID}, err
 	}
 	if err := r.cleanupPending(); err != nil {
 		return SaveResult{}, err
@@ -191,10 +210,17 @@ func (r *Registry) Save(change Mutation) (SaveResult, error) {
 func (r *Registry) Delete(id, revision string) (Catalog, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.deleteLocked(id, revision, nil)
+}
+
+func (r *Registry) deleteLocked(id, revision string, identity *operations.Identity) (Catalog, error) {
 	if err := r.ready(); err != nil {
 		return Catalog{}, err
 	}
-	if revision != r.catalog.Revision {
+	if err := r.completePublication(); err != nil {
+		return Catalog{}, err
+	}
+	if identity == nil && revision != r.catalog.Revision {
 		return Catalog{}, problem("conflict", "err.localcmd.delete_conflict")
 	}
 	if r.closing {
@@ -208,10 +234,20 @@ func (r *Registry) Delete(id, revision string) (Catalog, error) {
 	if i < 0 {
 		return Catalog{}, problem("not_found", "err.localcmd.deleted_refresh")
 	}
+	if identity != nil && revision != next.Commands[i].Revision {
+		return Catalog{}, problem("conflict", "err.localcmd.delete_conflict")
+	}
 	next.PendingCleanup = append(next.PendingCleanup, id)
 	next.Commands = slices.Delete(next.Commands, i, i+1)
+	if identity != nil {
+		result, _ := json.Marshal(CommandReference{ID: id, Deleted: true})
+		next.Publication = &operations.Publication{Identity: *identity, Result: result}
+	}
 	if err := r.save(next); err != nil {
 		return Catalog{}, err
+	}
+	if err := r.completePublication(); err != nil {
+		return cloneCatalog(r.catalog), err
 	}
 	if err := r.cleanupPending(); err != nil {
 		return Catalog{}, err

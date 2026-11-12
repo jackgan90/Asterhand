@@ -113,7 +113,7 @@ func TestSchemaOneUpgradePreservesJobsAndProtectsRefusalRecords(t *testing.T) {
 	}
 	defer s.Close()
 	var schema int
-	if err := s.db.QueryRow("PRAGMA user_version").Scan(&schema); err != nil || schema != 2 {
+	if err := s.db.QueryRow("PRAGMA user_version").Scan(&schema); err != nil || schema != SchemaVersion {
 		t.Fatal("old binaries would ignore refusal records", schema, err)
 	}
 	var restored model.Job
@@ -132,7 +132,7 @@ func TestNewerDatabaseRemainsUnmodified(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := db.Exec("PRAGMA user_version=3"); err != nil {
+	if _, err := db.Exec("PRAGMA user_version=999"); err != nil {
 		t.Fatal(err)
 	}
 	if s, err := Open(path); err == nil {
@@ -140,7 +140,7 @@ func TestNewerDatabaseRemainsUnmodified(t *testing.T) {
 		t.Fatal("newer database opened")
 	}
 	var schema int
-	if err := db.QueryRow("PRAGMA user_version").Scan(&schema); err != nil || schema != 3 {
+	if err := db.QueryRow("PRAGMA user_version").Scan(&schema); err != nil || schema != 999 {
 		t.Fatal("newer schema was downgraded", schema, err)
 	}
 }

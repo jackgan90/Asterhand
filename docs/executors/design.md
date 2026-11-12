@@ -2,13 +2,15 @@
 
 所有本地命令统一为[脚本图](script-graphs.md)，schema 4 只保存图、并发和超时属性，不迁移旧格式。运行管理器按命令归集多实例，各实例及其节点拥有独立身份、结果和日志；不进入任务引擎或模型会话。
 
-[执行与恢复](managed-local-commands.md)定义按接纳顺序选择最近实例、当前轮全部记录延迟到下一轮清理、逐实例/全部停止、容量和恢复。
+[执行与恢复](managed-local-commands.md)定义实例选择、停止和恢复；[自动化设计](../automation/design.md#运行日志与保留)新增有界历史，替代下一轮立即清理全部旧记录的策略。
 
 公共核心通过 CommandPolicy、ExecutionBackend 和 ExecutionClock 等[窄平台接口](managed-local-commands.md#平台边界与最小接口)注入系统能力；Windows shell、Job、令牌、句柄和路径等价规则留在首个 adapter。平台能力/当前环境检查决定是否可用，其他平台未满足受管清理等要求时明确 unsupported。公共核心不依赖快捷输入包或具体 WebView，后续平台沿用相同状态、日志、停止与恢复协议。
 
 范围：OpenClaw adapter、公共配置和目录保护；未接入具体 coding harness。验证方法见 [公共流程契约](../development/features/provider-neutral-flows/validation.md)。
 
 ## 当前契约
+
+[自动化操作](../automation/design.md#图编辑与人机并发)将命令管理、图预览/修改、启动、停止与日志接入相同领域服务。注册修改以命令修订防覆盖，全库唯一性仍串行检查；启动把业务请求与 run ID 随运行索引一起公布，窗口序号不再承担公共去重。结果/收据与大日志分别有界保留，过期拒绝重放，普通用户执行和既有图调度/恢复规则保留。`current.json` 仍是唯一执行接纳依据，`history.db` 只索引保留摘要与详情，不据其重启工作。脚本总槽位为 8，agent 同时最多占 6，人类可用全部空闲名额。
 
 `Executor.Execute(ctx, Run) (Result,error)` 是实际最小接口。Run 绑定 attempt ID、mode、callback、一次性 token 和 goal；Result 提供 ok/status/final/error。启动、查询、事件、回答和恢复由任务服务实现，不为未支持的 native resume 提供空接口。
 

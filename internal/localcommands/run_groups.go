@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackgan90/Asterhand/internal/localcommands/wire"
 	"github.com/jackgan90/Asterhand/internal/model"
+	"github.com/jackgan90/Asterhand/internal/operations"
 )
 
 type runGroup struct {
@@ -45,6 +46,10 @@ func (m *RunManager) groupBusyLocked(id string) (active int, uncertain bool) {
 }
 
 func (m *RunManager) Start(command Command) (*RunRecord, error) {
+	return m.StartOperation(command, nil)
+}
+
+func (m *RunManager) StartOperation(command Command, identity *operations.Identity) (*RunRecord, error) {
 	graph, err := normalizeGraph(command.Graph, commandPolicy)
 	if err != nil {
 		return nil, err
@@ -63,6 +68,18 @@ func (m *RunManager) Start(command Command) (*RunRecord, error) {
 	}
 	if !m.Available() {
 		return nil, problem("unsupported", "err.localcmd.managed_unavailable")
+	}
+	if err := m.reconcilePublicationsLocked(); err != nil {
+		return nil, err
+	}
+	if identity != nil && m.journal == nil {
+		return nil, operations.ErrMissing
+	}
+	if err := m.pruneHistoryLocked(); err != nil {
+		return nil, err
+	}
+	if m.diskBytes.Load()+maxRunRecordBytes > MaxNodeRunBytes {
+		return nil, operations.ErrCapacity
 	}
 	active, uncertain := m.groupBusyLocked(command.ID)
 	if uncertain || (!command.AllowConcurrent && active > 0) {
@@ -86,11 +103,11 @@ func (m *RunManager) Start(command Command) (*RunRecord, error) {
 	if active > 0 && (len(previous.index.IDs) >= MaxRoundRuns || previous.bytes.Load() >= MaxRoundLogBytes) {
 		return nil, problem("busy", "err.localcmd.round_limit")
 	}
-	return m.admitLocked(command, previous, active == 0)
+	return m.admitLocked(command, previous, active == 0, identity)
 }
 
 // All checks precede prepare/publish. Publication is the only admission point.
-func (m *RunManager) admitLocked(command Command, previous *runGroup, newRound bool) (*RunRecord, error) {
+func (m *RunManager) admitLocked(command Command, previous *runGroup, newRound bool, identity *operations.Identity) (*RunRecord, error) {
 	id := model.ID()
 	group := previous
 	sequence := uint64(1)
@@ -108,9 +125,17 @@ func (m *RunManager) admitLocked(command Command, previous *runGroup, newRound b
 	index.Latest, index.Sequence = id, sequence
 	run := &managedRun{record: RunRecord{Version: 1, ID: id, RoundID: index.RoundID, Sequence: sequence, Command: command,
 		Phase: "starting", Started: time.Now().UTC(), LogComplete: true}, busy: true, done: make(chan struct{}), group: group}
+	if identity != nil {
+		copy := *identity
+		run.record.Operation = &copy
+	}
 	initializeGraph(run)
+	if err := m.history.reserve(run.record); err != nil {
+		return nil, err
+	}
 	f, err := m.store.prepare(run.record)
 	if err != nil {
+		_, _ = m.history.db.Exec("DELETE FROM runs WHERE id=? AND admitted=0", id)
 		return nil, err
 	}
 	if err = m.store.publish(command.ID, index); err != nil {
@@ -119,8 +144,10 @@ func (m *RunManager) admitLocked(command Command, previous *runGroup, newRound b
 		// Remove its private preparation files so repeated failures stay bounded.
 		_ = os.Remove(m.store.recordPath(command.ID, id))
 		_ = os.Remove(m.store.logPath(command.ID, id))
+		_, _ = m.history.db.Exec("DELETE FROM runs WHERE id=? AND admitted=0", id)
 		return nil, err
 	}
+	m.diskBytes.Add(maxRunRecordBytes)
 	run.file = f
 	if newRound && previous != nil {
 		for _, oldID := range previous.index.IDs {
@@ -129,12 +156,22 @@ func (m *RunManager) admitLocked(command Command, previous *runGroup, newRound b
 	}
 	group.index = index
 	m.groups[command.ID], m.runs[id] = group, run
-	group.cleanup = m.store.collect(command.ID, index) != nil
+	// Record the published index before it can be replaced by another round.
+	historyErr := m.history.save(run.record)
+	if historyErr == nil {
+		historyErr = m.history.pinCurrent(command.ID, index.IDs)
+	}
+	if historyErr != nil {
+		m.historyFailed.Store(true)
+	}
 	run.mu.Lock()
 	record := m.snapshotLocked(run)
 	run.mu.Unlock()
 	go m.executeGraph(run)
-	return &record, nil
+	// A failed receipt write cannot turn a published run into a rejection. The
+	// caller receives its fixed run ID and can reconcile the publication marker.
+	err = errors.Join(historyErr, m.reconcilePublicationsLocked())
+	return &record, err
 }
 
 func (m *RunManager) Runs(id string) RunList {
@@ -192,16 +229,23 @@ func (m *RunManager) restoreGroup(id string, index runIndex) error {
 			result = errors.Join(result, err)
 			continue
 		}
+		if record == nil && m.history != nil {
+			record, err = m.archivedRun(id, runID)
+			if err != nil {
+				result = errors.Join(result, err)
+				continue
+			}
+		}
 		if record == nil || record.RoundID != index.RoundID || record.Sequence != index.Sequence-uint64(len(index.IDs)-1-i) {
 			result = errors.Join(result, problem("configuration", "err.localcmd.invalid_run"))
 			continue
 		}
 		var logBytes int64
 		info, err := os.Stat(m.store.logPath(id, runID))
-		if err != nil {
+		if err != nil && record.Phase != "finished" {
 			result = errors.Join(result, err)
 			record.LogComplete, record.StorageError = false, true
-		} else {
+		} else if err == nil {
 			logBytes = info.Size()
 		}
 		// A missing log does not invalidate a verified process identity.
@@ -224,7 +268,6 @@ func (m *RunManager) restoreGroup(id string, index runIndex) error {
 		// Partially loaded groups must never become eligible for a new round.
 		return result
 	}
-	group.cleanup = m.store.collect(id, index) != nil
 	m.groups[id] = group
 	return nil
 }
@@ -255,19 +298,10 @@ func (m *RunManager) recover() error {
 			continue
 		}
 		if index == nil {
-			if err = m.store.collect(id, runIndex{}); err != nil {
-				result = errors.Join(result, err)
-			}
 			continue
 		}
 		if err = m.restoreGroup(id, *index); err != nil {
 			result = errors.Join(result, err)
-		}
-	}
-	// Count all uncertain scopes before permitting any fresh graph scheduling.
-	for _, run := range m.runs {
-		if run.busy {
-			go m.reconcileGraph(run)
 		}
 	}
 	return result

@@ -16,6 +16,7 @@ function displayProjectName(project) {
 
 export function nodeController({api, post, session, guarded, notice, actions, listen, isSubmitting}) {
   let info, peers = [], explicitTarget = false, refreshGeneration = 0;
+  let taskTarget = '', taskTargetVersion = 0;
 
   function paint() {
     if (!info) return;
@@ -111,6 +112,11 @@ export function nodeController({api, post, session, guarded, notice, actions, li
     }
     if ([...select.options].some((o) => o.value === previous))
       select.value = previous;
+    const target = JSON.stringify([id, select.value]);
+    if (target !== taskTarget) {
+      taskTarget = target;
+      taskTargetVersion++;
+    }
     const project = selected?.projects?.find((p) => p.id === select.value);
     $("#target-hint").textContent = project
       ? t("web.node.save_to_root", {root: project.root})
@@ -163,6 +169,7 @@ export function nodeController({api, post, session, guarded, notice, actions, li
     relocalize:paint,
     updateSubmission,
     selection:() => ({info, peers}),
+    taskTargetVersion:() => taskTargetVersion,
     content:() => ({project_id:$("#project").value, goal:$("#goal").value.trim(), target:$("#target").value, target_explicit:explicitTarget}),
   };
 }

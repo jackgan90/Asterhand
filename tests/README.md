@@ -1,5 +1,22 @@
 # 测试入口
 
+## 自动化CLI/MCP
+
+常规 `go test ./...` 和前端全量测试包含公共注册、UI 覆盖登记、持久收据、历史/日志、批处理及未保存草稿接手。源码对应关系和真实产品验收边界见[自动化验证](../docs/development/features/agent-automation/validation.md)。构建脚本强制执行注册/schema 与 UI 入口覆盖守卫。
+
+Windows 下使用固定工具链构建并测试实际 CLI/MCP 应用进程（仅连接测试建立的临时节点，无在线模型调用）：
+
+```powershell
+go build -trimpath -o out/automation-validation/asterhand.exe ./cmd/asterhand
+$env:ASTERHAND_AUTOMATION_BINARY = [IO.Path]::GetFullPath('out/automation-validation/asterhand.exe')
+go test ./internal/app -run '^TestCLIAndRealMCPStdioSharePipeBusinessOperation$' -count=1
+Remove-Item Env:\ASTERHAND_AUTOMATION_BINARY
+```
+
+未设置该环境变量时，测试仍启动真实 stdio MCP 测试子进程，并直接调用同一 CLI 入口；这不能代替上面的实际应用二进制检查。普通/管理员跨用户管道权限、实体 IME、真实模型、双机和安装升级按验证说明单独验收。
+
+## 其他功能
+
 脚本图撤销重做、操作合并、保存基线与容量检查见[编辑历史计划](../docs/development/features/graph-edit-history/plan.md)。`graph-history.test.mjs` 验证快照和容量，`graph-editor.test.mjs` 与 `local-command-management.test.mjs` 验证编辑/保存；`graph-history-browser.mjs` 用实际 Edge 与内存 API 检查原生文字撤销和图快捷键，运行前配置方法见计划。
 
 统一脚本图命令的接纳竞争、同轮多实例日志、原子换轮、容量、恢复与跨实例分屏，见[统一命令验证](../docs/development/features/unified-command-runs/validation.md)。旧非托管启动和自动合并用例已由统一图执行与独立注册规则替代。

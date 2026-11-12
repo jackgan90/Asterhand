@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -10,6 +11,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/jackgan90/Asterhand/internal/app"
+	"github.com/jackgan90/Asterhand/internal/automation"
 	"github.com/jackgan90/Asterhand/internal/config"
 	"github.com/jackgan90/Asterhand/internal/environment"
 	"github.com/jackgan90/Asterhand/internal/executor"
@@ -20,6 +23,10 @@ import (
 
 func main() {
 	if err := run(); err != nil {
+		var exit *automation.ExitError
+		if errors.As(err, &exit) {
+			os.Exit(exit.Code)
+		}
 		fmt.Fprintln(os.Stderr, "Asterhand:", err)
 		os.Exit(1)
 	}
@@ -34,6 +41,12 @@ func run() error {
 	if command == "version" {
 		fmt.Println(config.Version)
 		return nil
+	}
+	if command == "automation" {
+		return automation.RunCLI(context.Background(), args, os.Stdin, os.Stdout, os.Stderr, app.AutomationDefinitions())
+	}
+	if command == "mcp" {
+		return automation.RunMCP(context.Background(), args, os.Stderr, app.AutomationDefinitions())
 	}
 	loc := i18n.Effective()
 	if command == "pick-local-script" {

@@ -86,7 +86,7 @@ func TestManagedRegressionFailedClearCannotResurrect(t *testing.T) {
 	if err = os.Remove(blocked); err != nil {
 		t.Fatal(err)
 	}
-	reopened := NewRunManager(filepath.Dir(m.store.root), b, nil)
+	reopened := testRunManager(t, filepath.Dir(m.store.root), b, nil)
 	rr := Open(filepath.Dir(m.store.root))
 	if err = rr.ConfigureRuns(reopened); err != nil {
 		t.Fatal(err)

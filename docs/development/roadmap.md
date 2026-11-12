@@ -4,6 +4,10 @@
 
 路线图区分现有能力和后续工作。具体行为以各领域 requirements/design 为准，验证方式见 [测试指南](../../tests/README.md)，平台边界见 [支持矩阵](../testing/platforms.md)。
 
+## 日常自动化、CLI 与 MCP
+
+[统一自动化计划](features/agent-automation/plan.md)的实现、工程验证、独立审核及用户验收已完成。CLI/MCP 已覆盖[日常业务操作](../automation/coverage.md)和未保存草稿，客户端与 Web 保留原有呈现和交互；验证方法及专项环境边界见[验证说明](features/agent-automation/validation.md)。
+
 ## 已实现的 Windows 助手基础
 
 脚本图编辑历史的实现、工程验证与本机用户验收已完成，包含实体中文输入法切换后的节点名称设置与重命名，见[撤销重做计划](features/graph-edit-history/plan.md)。

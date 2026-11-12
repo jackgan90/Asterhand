@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/localcommands/wire"
+	"github.com/jackgan90/Asterhand/internal/operations"
 )
 
 type Command struct {
@@ -25,10 +26,11 @@ type Command struct {
 }
 
 type Catalog struct {
-	PendingCleanup []string  `json:"pending_cleanup,omitempty"`
-	Schema         int       `json:"schema_version"`
-	Revision       string    `json:"revision"`
-	Commands       []Command `json:"commands"`
+	Publication    *operations.Publication `json:"automation_publication,omitempty"`
+	PendingCleanup []string                `json:"pending_cleanup,omitempty"`
+	Schema         int                     `json:"schema_version"`
+	Revision       string                  `json:"revision"`
+	Commands       []Command               `json:"commands"`
 }
 
 type Mutation struct {

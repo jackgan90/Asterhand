@@ -67,7 +67,7 @@ func TestRecoveryErrorsStillReconcileOtherValidInstances(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			manager := NewRunManager(home, backend, nil)
+			manager := testRunManager(t, home, backend, nil)
 			if manager.loadErr == nil || manager.Available() {
 				t.Fatal("recovery error did not disable admission")
 			}
@@ -98,7 +98,7 @@ func TestDiscardedCapturedOutputMarksEachNodeIncomplete(t *testing.T) {
 	for _, reason := range []string{"log_limit", "log_io_error"} {
 		t.Run(reason, func(t *testing.T) {
 			command := graphCommand(t)
-			manager := NewRunManager(t.TempDir(), nil, nil)
+			manager := testRunManager(t, t.TempDir(), nil, nil)
 			run := &managedRun{record: RunRecord{Version: 1, ID: model.ID(), RoundID: model.ID(),
 				Sequence: 1, Command: command, Phase: "running", LogComplete: true},
 				busy: true, group: &runGroup{}, done: make(chan struct{})}

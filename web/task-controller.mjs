@@ -1,3 +1,4 @@
+import {editorOperation} from './live-editors.mjs';
 import {t} from "./i18n.mjs";
 import {taskViews} from "./view-model.mjs";
 import {definitiveTaskRejection} from "./task-admission.mjs";
@@ -15,7 +16,7 @@ export function taskController({api, post, view, selection, session, notice, act
       view.render(taskViews(snapshot.jobs, snapshot.outbox, selection().info.node_id), selection());
     } finally { if (refreshing === scope) refreshing = undefined; }
   }
-  async function submit(content) {
+  async function submit(content, stillCurrent = () => true, editorID) {
     if (submitting || !content.goal.trim()) return;
     const scope = session();
     const localNodeID = selection().info.node_id;
@@ -23,7 +24,7 @@ export function taskController({api, post, view, selection, session, notice, act
     let request;
     try { request = JSON.parse(storage.getItem(pendingKey)); } catch { /* absent */ }
     if (!request || request.goal !== content.goal || request.target !== content.target || request.project_id !== content.project_id)
-      request = {...content, request_id:uuid(), start_before:new Date(Date.now()+3600000).toISOString(), mode:"execute"};
+      request = {...content, request_id:editorID || uuid(), start_before:new Date(Date.now()+3600000).toISOString(), mode:"execute"};
     storage.setItem(pendingKey, JSON.stringify(request));
     submitting = true;
     view.submissionChanged();
@@ -33,7 +34,7 @@ export function taskController({api, post, view, selection, session, notice, act
       // while protecting a newer draft/session from an old UI completion.
       if (storage.getItem(pendingKey) === JSON.stringify(request)) storage.removeItem(pendingKey);
       if (!scope?.active) return;
-      view.submitted(content.goal);
+      if (stillCurrent()) view.submitted(content.goal);
       await refresh(scope);
     } catch (error) {
       if (await definitiveTaskRejection(error, request, localNodeID) &&
@@ -41,13 +42,20 @@ export function taskController({api, post, view, selection, session, notice, act
       throw error;
     } finally { submitting = false; if (session()?.active) view.submissionChanged(); }
   }
-  async function answer(job, out, text) {
+  async function answer(job, out, text, editorID) {
     const scope = session(), interaction = job.interaction;
     const key = `${interaction.id}:${text}`;
-    if (!answerIDs.has(key)) answerIDs.set(key, uuid());
-    await post(out ? `/api/remote/${out.id}/answer` : `/api/jobs/${job.id}/answer`, {
-      interaction_id:interaction.id, attempt:interaction.attempt, answer_id:answerIDs.get(key), answer:text,
-    });
+    if (editorID) {
+      await editorOperation(post,'tasks.answer',editorID,{
+        task:{kind:out?'outbox':'job',id:out?.id||job.id,target_node_id:out?.peer_id||job.owner,project_id:job.request.project_id},
+        interaction_id:interaction.id, attempt:interaction.attempt, answer:text
+      });
+    } else {
+      if (!answerIDs.has(key)) answerIDs.set(key, uuid());
+      await post(out ? `/api/remote/${out.id}/answer` : `/api/jobs/${job.id}/answer`, {
+        interaction_id:interaction.id, attempt:interaction.attempt, answer_id:answerIDs.get(key), answer:text,
+      });
+    }
     if (!scope?.active) return false;
     notice(t("web.task.answer_sent"));
     return true;

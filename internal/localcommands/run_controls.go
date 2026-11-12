@@ -42,8 +42,18 @@ func (m *RunManager) appendRunLog(run *managedRun, index int, stream byte, data 
 		return m.logLimitLocked(run, index)
 	}
 	for {
+		used := m.diskBytes.Load()
+		if used+size > MaxNodeRunBytes {
+			return m.logLimitLocked(run, index)
+		}
+		if m.diskBytes.CompareAndSwap(used, used+size) {
+			break
+		}
+	}
+	for {
 		used := run.group.bytes.Load()
 		if used+size > MaxRoundLogBytes {
+			m.diskBytes.Add(-size)
 			return m.logLimitLocked(run, index)
 		}
 		if run.group.bytes.CompareAndSwap(used, used+size) {

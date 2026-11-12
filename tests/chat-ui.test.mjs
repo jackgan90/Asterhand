@@ -100,7 +100,7 @@ function harness(queued = false) {
       else queueMicrotask(()=>send());
     }};
   const panel=chatPanel(bridge,editor);
-  return {elements,requests,bridge,editor,queueState,
+  return {elements,requests,bridge,editor,queueState,panel,
     hold(action){holdActions.add(action);}, override(action,fn){overrides.set(action,fn);},
     reply(action,response={},envelope={}){const index=held.findIndex(item=>item.request.action===action);assert.ok(index>=0);held.splice(index,1)[0].send(response,envelope);},
     get confirmations(){return confirmations;},setDraft(value){draft=value;revision++;},setRunning(value){running=value;},setTotal(value){total=value;},setReset(value){reset=value;},
@@ -662,4 +662,24 @@ test('unknown delivery restores the untouched composer only after authoritative 
     assert.equal(h.editor.snapshot().text,'recover on rejection');
     assert.equal(h.requests.filter(r=>r.action==='submit').length,1);
   } finally {h.close();}
+});
+
+test('external chat commit keeps the conversation it was instructed to use', async () => {
+  const h = harness(true);
+  try {
+    await h.open();
+    h.hold('prepare');
+    await h.elements.get('chat-new').fire('click');
+    await flush();
+    h.setDraft('for conversation A');
+    const before = h.panel.liveTarget();
+    assert.equal(before.conversation_id, A);
+    await assert.rejects(h.panel.submitLive('agent-operation-000001', A), {code:'busy'});
+    h.reply('prepare', {conversation:{id:B, state:'creating'}});
+    await flush();
+    assert.equal(h.panel.liveTarget().conversation_id, B);
+    assert.notEqual(h.panel.liveTarget().selection, before.selection);
+    await assert.rejects(h.panel.submitLive('agent-operation-000002', A), {code:'conflict'});
+    assert.equal(h.requests.filter(r => r.action === 'enqueue').length, 0);
+  } finally { h.close(); }
 });

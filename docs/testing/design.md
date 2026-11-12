@@ -1,5 +1,9 @@
 # 测试框架设计
 
+## 三入口等价验证
+
+同一业务案例分别经过 UI 的 HTTP/IPC、实际 CLI 进程和 MCP 工具调用，比较归一化持久结果、副作用计数、权限拒绝与恢复状态；不只比较 schema 或直接调用服务方法。守卫检查公共操作定义、CLI/MCP 和[覆盖清单](../automation/coverage.md)，接入统一构建/验证入口。计划与故障注入窗口见[自动化验证说明](../development/features/agent-automation/validation.md)；已接入的测试和仍需真实设备验证的项目分别列明，不能用隔离测试替代产品验收。
+
 ## 托管本地命令测试层
 
 [托管命令计划](../development/features/managed-local-commands/plan.md)的 MC-01—25 定义验收矩阵。状态与存储层用可控时钟/进程替身确定性覆盖完成、中断、超时、节点退出、日志故障、迟到请求与恢复；只把进程树退出且收尾完成视为可再次启动。

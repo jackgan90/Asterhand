@@ -50,6 +50,10 @@ func (e *Engine) Notify() {
 	}
 }
 func (e *Engine) Accept(origin string, r model.Request) (model.Job, error) {
+	return e.AcceptAs(origin, r, "")
+}
+
+func (e *Engine) AcceptAs(origin string, r model.Request, actor string) (model.Job, error) {
 	if len(r.RequestID) < 8 || len(r.RequestID) > 100 || len(r.Goal) == 0 || len(r.Goal) > 16000 {
 		return model.Job{}, i18n.Err("err.tasks.invalid_request_bounds")
 	}
@@ -68,7 +72,7 @@ func (e *Engine) Accept(origin string, r model.Request) (model.Job, error) {
 	if e.stopping {
 		return model.Job{}, i18n.Err("err.tasks.stopping_no_accept")
 	}
-	j, err := e.Store.AcceptChecked(e.Config.Get().NodeID, origin, r, func() error {
+	j, err := e.Store.AcceptAttributed(e.Config.Get().NodeID, origin, r, actor, func() error {
 		if err := executor.RequireTaskConfiguration(e.Config, e.Config.Get()); err != nil {
 			msg, key, args := i18n.LocalizeError(i18n.Effective(), err)
 			return &model.TaskRejection{
@@ -327,6 +331,10 @@ func (e *Engine) finishErr(id, state string, reasonErr error, result string) err
 	return err
 }
 func (e *Engine) Cancel(id string) (model.Job, error) {
+	return e.CancelAs(id, "")
+}
+
+func (e *Engine) CancelAs(id, actor string) (model.Job, error) {
 	j, err := e.Store.ChangeControl(id, "cancel_requested", func(j *model.Job) (any, error) {
 		if j.State == "cancel_requested" || j.State == "cancelled" {
 			return nil, store.ErrUnchanged
@@ -343,6 +351,9 @@ func (e *Engine) Cancel(id string) (model.Job, error) {
 		} else {
 			j.State = "cancel_requested"
 		}
+		if actor != "" {
+			return map[string]string{"state": j.State, "actor": actor}, nil
+		}
 		return j.State, nil
 	})
 	if err == nil {
@@ -357,19 +368,27 @@ func (e *Engine) Cancel(id string) (model.Job, error) {
 	return j, err
 }
 func (e *Engine) Resolve(id, reason string) (model.Job, error) {
+	return e.ResolveAs(id, "", reason, "")
+}
+
+// All entry points close the unknown outcome with the same rule. Attribution
+// is event data and never turns the disposition into a successful execution.
+func (e *Engine) ResolveAs(id, attempt, reason, actor string) (model.Job, error) {
 	if len(reason) < 5 {
 		return model.Job{}, i18n.Err("err.tasks.resolve_reason_short")
 	}
 	return e.Store.ChangeControl(id, "manually_resolved", func(j *model.Job) (any, error) {
+		if attempt != "" && j.Attempt != attempt {
+			return nil, store.ErrConflict
+		}
 		if j.State != "reconciliation_required" {
 			return nil, i18n.Err("err.tasks.not_reconciling")
 		}
-		j.State = "failed"
-		j.Error = reason
-		j.ErrorKey = ""
-		j.ErrorArgs = nil
-		j.Execution = "unknown_manually_closed"
+		j.State, j.Error, j.ErrorKey, j.ErrorArgs, j.Execution = "failed", reason, "", nil, "unknown_manually_closed"
 		e.Notify()
+		if actor != "" {
+			return map[string]string{"actor": actor, "reason": reason}, nil
+		}
 		return reason, nil
 	})
 }

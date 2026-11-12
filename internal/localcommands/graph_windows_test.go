@@ -41,7 +41,7 @@ func TestWindowsGraphDependencyAndFailureCleanup(t *testing.T) {
 				c.Graph.Nodes[i].Arguments = nil
 			}
 			backend := NewPlatformBackend()
-			manager := NewRunManager(t.TempDir(), backend, nil)
+			manager := testRunManager(t, t.TempDir(), backend, nil)
 			t.Cleanup(func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()

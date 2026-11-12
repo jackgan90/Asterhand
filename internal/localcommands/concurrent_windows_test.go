@@ -48,7 +48,7 @@ func TestWindowsConcurrentRunsStopAndRetainIndependently(t *testing.T) {
 	command.Graph.Nodes[1].Script = script
 	home := t.TempDir()
 	backend := NewPlatformBackend()
-	manager := NewRunManager(home, backend, nil)
+	manager := testRunManager(t, home, backend, nil)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -95,7 +95,7 @@ func TestWindowsConcurrentRunsStopAndRetainIndependently(t *testing.T) {
 	if err = manager.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	manager = NewRunManager(home, backend, nil)
+	manager = testRunManager(t, home, backend, nil)
 	if manager.loadErr != nil || len(manager.Runs(command.ID).Runs) != 2 || manager.Current(command.ID).ID != second.ID {
 		t.Fatal("reopen lost retained round", manager.loadErr, manager.Runs(command.ID))
 	}
@@ -108,8 +108,8 @@ func TestWindowsConcurrentRunsStopAndRetainIndependently(t *testing.T) {
 	if err != nil || third.RoundID == first.RoundID {
 		t.Fatal("next round did not start", third, err)
 	}
-	if _, err = manager.Read(command.ID, first.ID, 0); err == nil {
-		t.Fatal("previous round still readable after new admission")
+	if _, err = manager.Read(command.ID, first.ID, 0); err != nil {
+		t.Fatal("previous round history unreadable", err)
 	}
 	if result := finishedInstance(t, manager, command.ID, third.ID); result.Result != "succeeded" {
 		t.Fatal(result)

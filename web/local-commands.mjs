@@ -1,3 +1,4 @@
+import {editorOperation} from './live-editors.mjs';
 import {localizeError, t} from './i18n.mjs';
 import {runKey, runBusy, runStoppable, runTone, timeoutSeconds, summaryParts} from './command-run.mjs';
 import {$, node, dialog} from './ui.mjs';
@@ -34,7 +35,7 @@ function commandContent(command) {
     allow_concurrent:command.allow_concurrent === true, timeout_seconds:command.timeout_seconds ?? null, graph:graphContent(command.graph)};
 }
 
-export function localCommands({api, post, session, listen, guarded, actions}) {
+export function localCommands({api, post, session, listen, guarded, actions, editors}) {
   const panel = $('#local-commands');
   if (!panel) return {open: async () => {}, relocalize() {}, stop() {}};
   const form = $('#command-form'), list = $('#registered-commands'), status = $('#commands-status');
@@ -44,6 +45,20 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
   let baseline = null;
   const field = name => form.elements.namedItem(name);
   const editor = graphEditor({container:$('#command-graph-editor'),onChange:updateDirty,browse});
+  const live=editors?.register({
+    ownsInput:el=>form.contains(el),
+    target:()=>panel.open && catalog.revision?{kind:'command',node_id:editors.nodeID,command_id:selected,
+      baseline_revision:catalog.commands.find(c=>c.id===selected)?.revision||''}:null,
+    busy:()=>busy||editor.changingGeometry||runBusy(runStates[selected]),
+    read:()=>({name:field('name').value,aliases:field('aliases').value,description:field('description').value,
+      allow_concurrent:field('allow_concurrent').checked,timeout:field('timeout').value,timeout_unit:field('timeout_unit').value,graph:editor.rawSnapshot()}),
+    apply:value=>{
+      for(const name of ['name','aliases','description','timeout','timeout_unit'])field(name).value=value[name]??'';
+      field('allow_concurrent').checked=Boolean(value.allow_concurrent);
+      editor.replaceLiveGraph(value.graph);updateDirty();
+    },
+    commit:id=>mutate(false,id),
+  });
 
   function paintStatus(next = statusState) {
     statusState = next;
@@ -86,6 +101,7 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
     $('#command-form-title').textContent = selected ? t('web.commands.form_edit') : t('web.commands.form_new');
   }
   function populate(command = {}) {
+    live?.invalidate();
     selected = command.id ?? '';
     for (const name of ['name', 'description']) field(name).value = command[name] ?? '';
     field('aliases').value = (command.aliases ?? []).join('\n');
@@ -182,15 +198,23 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
     for (const control of panel.querySelectorAll('button,input,textarea,select')) control.disabled = value;
     lockForm();
   }
-  async function mutate(remove = false) {
-    if (busy || !catalog.revision || runBusy(runStates[selected])) return;
+  async function mutate(remove = false, external = '') {
+    if (busy || !catalog.revision || runBusy(runStates[selected])) {if(external)throw Object.assign(new Error('busy'),{code:'busy'});return;}
     if (remove && !actions.confirm(t('web.commands.delete_confirm'))) return;
     const scope = session(), version = generation;
-    let command;try{if(!remove)command=readForm();}catch(error){paintStatus({kind:'error',error});return;}
+    let command;try{if(!remove)command=readForm();}catch(error){paintStatus({kind:'error',error});if(external)throw Object.assign(error,{code:'invalid_parameters'});return;}
     setBusy(true); paintStatus({kind: 'saving'});
     try {
-      const result = await post(remove ? '/api/local-commands/delete' : '/api/local-commands', remove ?
-        {id:selected, revision:catalog.revision} : {revision:catalog.revision, command});
+      let result;
+      if (external) {
+        const {id, revision, ...fields} = command;
+        const saved = await editorOperation(post, id ? 'commands.patch' : 'commands.create', external,
+          id ? {...fields,command_id:id,expected_revision:revision} : fields);
+        result = {id:saved.command_id, catalog:await api('/api/local-commands')};
+      } else {
+        result = await post(remove ? '/api/local-commands/delete' : '/api/local-commands', remove ?
+          {id:selected, revision:catalog.revision} : {revision:catalog.revision, command});
+      }
       if (!scope?.active || version !== generation) return;
       catalog = remove ? result : result.catalog;
       if (remove) populate();
@@ -200,8 +224,10 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
         markSaved(catalog.commands.find(value => value.id === result.id), command); paintFormTitle(); paint();
       }
       paintStatus(remove ? {kind: 'deleted_done'} : {kind: 'saved_done'});
+      return 'saved';
     } catch (error) {
       if (scope?.active && version === generation) paintStatus({kind: 'error', error, conflict: error.status === 409});
+      if(external)throw Object.assign(error,{code:error.code || (error.status===409?'conflict':error.status===400?'invalid_parameters':'result_unknown')});
     } finally { if (version === generation) setBusy(false); }
   }
   async function browse(apply) {
@@ -237,7 +263,7 @@ export function localCommands({api, post, session, listen, guarded, actions}) {
   listen($('#commands-close'), 'click', () => {if (!busy && canDiscard()) panel.close();});
   listen(panel, 'cancel', event => {if (busy || !canDiscard()) event.preventDefault();});
   // Unfinished canvas gestures never outlive the dialog or the page session.
-  listen(panel, 'close', () => editor.cancelInteraction());
+  listen(panel, 'close', () => {live?.invalidate();editor.cancelInteraction();});
   function stop() { clearTimeout(stateTimer);generation++; picker?.abort(); picker = null; editor.cancelInteraction(); setBusy(false); }
   return {open, relocalize, stop};
 }

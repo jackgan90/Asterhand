@@ -4,6 +4,8 @@
 
 ## 持续会话路径
 
+自动化客户端通过同一 `conversation.Service` 访问本机默认助手，复用原操作身份、队列和原生收据。快捷聊天草稿通过[编辑器接口](../automation/draft-handoff.md)续改并使用当前窗口的发送动作。
+
 [持续会话设计](conversations.md)是本机快捷聊天的数据、运行时与恢复契约权威，关联 [ADR-AST-005](adr/005-conversation-runtime-and-transport-boundaries.md)。当前源码已接入，产品验收边界见验证说明；下文 route/execute/probe 和一次性 `agent exec` 仍描述已交付任务路径。
 
 独立会话服务位于 `internal/conversation`，运行时适配器位于 `internal/executor/conversation*.go`。首个实现使用受管 OpenClaw Gateway，正文和上下文保存在其独立持久目录，agentd 只保存会话绑定及请求恢复元数据。首版当前节点/默认角色、文本多轮、流式回复、历史分页和停止；工具与管理命令关闭。模型就绪与任务工具 probe 分开，纯聊天不要求文件授权目录。

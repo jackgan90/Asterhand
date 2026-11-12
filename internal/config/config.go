@@ -12,6 +12,7 @@ import (
 	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/llm"
 	"github.com/jackgan90/Asterhand/internal/model"
+	"github.com/jackgan90/Asterhand/internal/operations"
 )
 
 const Version = "0.1.0-alpha.1"
@@ -33,6 +34,8 @@ func DefaultWorkspaceProject(root string) Project {
 }
 
 type Config struct {
+	Revision               string                     `json:"revision,omitempty"`
+	Publication            *operations.Publication    `json:"automation_publication,omitempty"`
 	NodeID                 string                     `json:"node_id"`
 	Name                   string                     `json:"name"`
 	NameDefault            bool                       `json:"name_default,omitempty"`
@@ -54,9 +57,11 @@ type Config struct {
 	AcceptanceDelay        int                        `json:"acceptance_delay_seconds,omitempty"`
 }
 type Manager struct {
-	mu   sync.RWMutex
-	Home string
-	cfg  Config
+	writeMu sync.Mutex
+	mu      sync.RWMutex
+	Home    string
+	cfg     Config
+	journal operations.Journal
 }
 
 func DefaultHome() string {
@@ -133,11 +138,29 @@ func (m *Manager) Get() Config {
 	return c
 }
 func (m *Manager) Save(c Config) error {
+	return m.save(c, nil)
+}
+
+func (m *Manager) save(c Config, identity *operations.Identity) error {
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
 	c = normalize(c)
 	c.RuntimeOptions = cloneOptions(c.RuntimeOptions)
 	c.RuntimeOptionsExplicit = maps.Clone(c.RuntimeOptionsExplicit)
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	if m.journal != nil {
+		if err := m.completePublication(); err != nil {
+			return err
+		}
+	}
+	c.Publication = m.Get().Publication
+	c.Revision = model.ID()
+	if identity != nil {
+		if m.journal == nil {
+			return operations.ErrMissing
+		}
+		result, _ := json.Marshal(map[string]string{"revision": c.Revision})
+		c.Publication = &operations.Publication{Identity: *identity, Result: result}
+	}
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
@@ -145,7 +168,12 @@ func (m *Manager) Save(c Config) error {
 	if err = AtomicFile(filepath.Join(m.Home, "config.json"), b, 0600); err != nil {
 		return err
 	}
+	m.mu.Lock()
 	m.cfg = c
+	m.mu.Unlock()
+	if identity != nil {
+		return m.completePublication()
+	}
 	return nil
 }
 func AtomicFile(path string, b []byte, mode os.FileMode) error {

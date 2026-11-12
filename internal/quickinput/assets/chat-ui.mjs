@@ -206,27 +206,34 @@ export function chatPanel(bridge, editor) {
     }
   }
 
-  async function create() {
+  async function create(expectedSelection) {
     if (creatingRequest) return creatingRequest;
-    creatingRequest = createOnce().finally(() => { creatingRequest = null; });
+    creatingRequest = createOnce(expectedSelection).finally(() => { creatingRequest = null; });
     return creatingRequest;
   }
 
-  async function createOnce() {
+  async function createOnce(expectedSelection) {
     createOperation ||= crypto.randomUUID();
     const response = await client.call(queue.enabled ? 'prepare' : 'create', {operation_id: createOperation});
     if (!queue.enabled && response.conversation?.state !== 'ready') {
       throw Object.assign(new Error(t('quickinput.ui.creating_check')), {messageKey: 'quickinput.ui.creating_check'});
     }
     createOperation = '';
+    if (typeof expectedSelection === 'number' && selection !== expectedSelection) throw editorConflict();
     await select(response.conversation.id);
+    return response.conversation.id;
   }
 
-  async function submit() {
-    if (editor.commandSubmit?.()) return;
+  const editorConflict = () => Object.assign(new Error('Conversation changed'), {code:'conflict'});
+  async function submit(externalID, expectedConversation) {
+    const external = typeof externalID === 'string';
+    const expectedSelection = selection;
+    if (external && creatingRequest) throw Object.assign(new Error('Creating conversation'), {code:'busy'});
+    if (external && expectedConversation !== selected) throw editorConflict();
+    if (!external && editor.commandSubmit?.()) return;
     const snapshot = editor.snapshot();
     if (!snapshot || !snapshot.text.trim() || sending || (!queue.enabled && (nodeBusy || unsettled(turn) || outbox.pending(selected))) || draftDecision) return;
-    const operation = crypto.randomUUID();
+    const operation = external ? externalID : crypto.randomUUID();
     if (!editor.stageSubmission(operation, snapshot)) return;
     sendingOperation = operation;
     sending = true;
@@ -245,8 +252,17 @@ export function chatPanel(bridge, editor) {
     sayTurn();
     try {
       if (!ready) await connect();
-      if (creatingRequest) await creatingRequest;
-      if (!selected) await create();
+      if (external) {
+        if (selection !== expectedSelection || selected !== expectedConversation) throw editorConflict();
+        if (creatingRequest) throw Object.assign(new Error('Creating conversation'), {code:'busy'});
+        if (!selected) {
+          const created = await create(expectedSelection);
+          if (selected !== created || selection !== expectedSelection + 1) throw editorConflict();
+        }
+      } else {
+        if (creatingRequest) await creatingRequest;
+        if (!selected) await create();
+      }
       const id = selected, version = selection;
       outbox.bind(operation, id);
       pending = {operation_id: operation, conversation_id: id};
@@ -261,12 +277,18 @@ export function chatPanel(bridge, editor) {
         paint();
         if (!queue.enabled) await history();
       }
+      return response.turn?.delivery==='accepted'?'accepted':'queued';
     } catch (error) {
       outbox.observe(error.response?.turn);
-      if (outbox.fail(operation, dispatched, error) === 'rejected') editor.restoreSubmission(operation);
+      const rejected=outbox.fail(operation, dispatched, error)==='rejected';
+      if (rejected) editor.restoreSubmission(operation);
       if (error.response?.turn?.conversation_id === selected) turn = newerTurn(turn, error.response.turn);
       sayError(error);
       paint();
+      if (external) {
+        if (!dispatched && (error.code === 'busy' || error.code === 'conflict')) throw error;
+        throw Object.assign(error, {code:rejected ? 'operation_failed' : 'result_unknown'});
+      }
     } finally { sendingOperation = ''; sending = false; updateButtons(); schedule(); }
   }
 
@@ -471,5 +493,8 @@ export function chatPanel(bridge, editor) {
   updateButtons();
   function dispose() { clearTimeout(timer); unsubscribeLocale(); connection.dispose(); statusView.dispose(); render.dispose(); unsubscribe(); client.dispose(); cleanup.forEach(remove => remove()); }
   listen(window, 'pagehide', dispose);
-  return {relocalize, dispose};
+  return {relocalize, dispose,
+    liveTarget:()=>({conversation_id:selected,selection,ready:ready&&!sending&&!creatingRequest&&!draftDecision&&!outbox.pending(selected)}),
+    submitLive:async (id, conversation)=>{const state=await submit(id,conversation);if(!state)throw Object.assign(new Error('busy'),{code:'busy'});return state;},
+  };
 }

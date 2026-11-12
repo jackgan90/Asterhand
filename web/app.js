@@ -10,6 +10,7 @@ import {nodeSettings} from "./node-settings.mjs";
 import {taskController} from "./task-controller.mjs";
 import {taskView} from "./task-view.mjs";
 import {localCommands} from "./local-commands.mjs";
+import {liveEditors} from "./live-editors.mjs";
 
 export function mountApp() {
   restoreTheme();
@@ -27,16 +28,26 @@ export function mountApp() {
     if (!scope?.active) return;
     try { await fn(); } catch (error) { if (scope.active) notice(localizeError(error)); }
   }
-  const desktop = desktopSettings(client.api, client.post, {listen, session});
-  const commands = localCommands({...client, listen, session, guarded, actions});
+  const editors = liveEditors();
+  const desktop = desktopSettings(client.api, client.post, {listen, session, editors});
+  const commands = localCommands({...client, listen, session, guarded, actions, editors});
   let commandTarget = new URLSearchParams(location.hash.slice(1)).get("commands");
   const nodes = nodeController({...client, session, guarded, notice, actions, listen, isSubmitting:() => tasks?.submitting() || false});
-  const settings = nodeSettings({...client, session, desktop, guarded, notice, listen, refreshPeers:nodes.refresh});
-  const view = taskView({guarded, submissionChanged:nodes.updateSubmission, callbacks:{
+  const settings = nodeSettings({...client, session, desktop, guarded, notice, listen, editors, refreshPeers:nodes.refresh});
+  const view = taskView({guarded, editors, submissionChanged:nodes.updateSubmission, callbacks:{
     answer:(...args) => tasks.answer(...args), cancel:(...args) => tasks.cancel(...args),
     resolve:job => tasks.resolve(job), detail:(...args) => tasks.detail(...args), refresh:() => tasks.refresh(),
   }});
   tasks = taskController({...client, view, selection:nodes.selection, session, notice, actions});
+  editors.register({
+    ownsInput:el=>el===$("#goal")||el===$("#task-form"),
+    targetVersion:nodes.taskTargetVersion,
+    target:()=>$("#workspace").hidden||!$("#project").value?null:{kind:'task_goal',node_id:$("#target").value,project_id:$("#project").value},
+    busy:()=>tasks.submitting()||Boolean(sessionStorage.getItem('asterhand-pending')),
+    read:()=>({text:$("#goal").value}),
+    apply:value=>{$("#goal").value=value.text;nodes.updateSubmission();},
+    commit:async(id,_snapshot,stillCurrent)=>{if($("#submit-task").disabled)throw Object.assign(new Error('busy'),{code:'busy'});await tasks.submit(nodes.content(),stillCurrent,id);return 'accepted';}
+  });
   settingsTabs($("#settings"), listen);
   const paintConnection = () => {
     if (onlineState === "unauthenticated") {
@@ -102,6 +113,7 @@ export function mountApp() {
       await tasks.refresh(scope);
       if (!scope.active) return;
       await settings.resume();
+      if(scope.active && typeof window.fetch==='function')editors.attach();
       if (scope.active && commandTarget !== null) {
         const id = commandTarget; commandTarget = null;
         try { await commands.open(id); } catch (error) { notice(localizeError(error)); }
@@ -120,13 +132,15 @@ export function mountApp() {
   lifecycle = appLifecycle({
     client,
     initialize,
+    editorPage:typeof window.fetch==='function'?editors.page:undefined,
+    editorRequest:event=>editors.receive(JSON.parse(event.data),data=>client.post('/api/automation/editor',data)),
     refreshPeers:nodes.refresh,
     refreshTasks:async scope => {
       void syncDesktopStream(scope);
       await tasks.refresh(scope);
     },
     connection,
-    stopped:() => { settings.stop(); desktop.stop(); commands.stop(); notices.stop(); },
+    stopped:() => { editors.stop(); settings.stop(); desktop.stop(); commands.stop(); notices.stop(); },
     failed:error => {
       if (error?.messageKey === "err.http.login_link_required") return;
       notice(localizeError(error));

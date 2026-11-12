@@ -26,6 +26,20 @@ function setup(tcase, {locked = false} = {}) {
   return {dom, container, editor, graph, all, nodeEl, port, menuItems, viewport, changes: () => changes, browsed: () => browsed};
 }
 
+test('live graph edits are undoable without losing human history',tcase=>{
+  const h=setup(tcase);
+  const compile=h.nodeEl('compile');emit(compile,'dblclick');
+  const rename=compile.children.find(el=>el.className==='graph-rename');rename.value='human edit';
+  const before=h.editor.rawSnapshot();
+  assert.equal(before.nodes[1].name,'human edit');
+  const edited=structuredClone(before);edited.parallelism='-';edited.nodes[1].x=-50;edited.nodes[1].arguments=['','unchanged whitespace '];
+  h.editor.replaceLiveGraph(edited);
+  assert.deepEqual(h.editor.rawSnapshot(),edited);
+  const key=()=>emit(h.container,'keydown',{key:'z',ctrlKey:true});
+  key();assert.deepEqual(h.editor.rawSnapshot(),before);
+  key();assert.equal(h.editor.rawSnapshot().nodes[1].name,'compile');
+});
+
 test('canvas context menus add, rename, choose a script for and delete steps', tcase => {
   const h = setup(tcase);
   emit(h.viewport, 'contextmenu', {clientX: 300, clientY: 200});

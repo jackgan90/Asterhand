@@ -46,6 +46,7 @@ func cloneNodeRecords(nodes []NodeRecord) []NodeRecord {
 
 // Configuration is durable privately; IPC carries only the bounded UI summary.
 func publicRun(record RunRecord) RunRecord {
+	record.Operation = nil
 	record.Command = Command{ID: record.Command.ID, Name: record.Command.Name,
 		Revision: record.Command.Revision, TimeoutSeconds: record.Command.TimeoutSeconds, AllowConcurrent: record.Command.AllowConcurrent}
 	return record

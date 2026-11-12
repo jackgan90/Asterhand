@@ -61,7 +61,7 @@ func graphCommand(t *testing.T) Command {
 func graphFixture(t *testing.T) (*RunManager, *graphBackend, Command) {
 	b := &graphBackend{created: make(chan graphStarted, 128)}
 	b.empty.Store(true)
-	m := NewRunManager(t.TempDir(), b, nil)
+	m := testRunManager(t, t.TempDir(), b, nil)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -182,7 +182,7 @@ func TestGraphDiamondJoinsAndKeepsNodeLogs(t *testing.T) {
 	if !strings.Contains(logs[c.Graph.Nodes[2].ID], "left 中文") || !strings.Contains(logs[c.Graph.Nodes[3].ID], "right diagnostic") {
 		t.Fatal(logs)
 	}
-	reopened := NewRunManager(filepath.Dir(m.store.root), b, nil)
+	reopened := testRunManager(t, filepath.Dir(m.store.root), b, nil)
 	if reopened.loadErr != nil || reopened.Current(c.ID).Result != "succeeded" {
 		t.Fatal(reopened.loadErr)
 	}
@@ -321,7 +321,7 @@ func TestGraphRecoveryChecksEveryExecutionAndNeverRestarts(t *testing.T) {
 	if err = m.store.publish(c.ID, runIndex{Version: 1, RoundID: id, Sequence: 1, Latest: id, IDs: []string{id}}); err != nil {
 		t.Fatal(err)
 	}
-	reopened := NewRunManager(filepath.Dir(m.store.root), b, nil)
+	reopened := testRunManager(t, filepath.Dir(m.store.root), b, nil)
 	if reopened.loadErr != nil {
 		t.Fatal(reopened.loadErr)
 	}

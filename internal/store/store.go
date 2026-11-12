@@ -19,7 +19,7 @@ var ErrUnchanged = i18n.Err("err.store.unchanged")
 
 const EventLimit = 4096
 const ControlEventReserve = 16
-const SchemaVersion = 2 // Adds durable task-rejection receipts; older binaries must not ignore them.
+const SchemaVersion = 3 // Automation receipts must survive retries and binary rollback.
 
 type Store struct {
 	mu sync.Mutex
@@ -45,7 +45,9 @@ func Open(path string) (*Store, error) {
 	CREATE TABLE IF NOT EXISTS records(kind TEXT NOT NULL, id TEXT NOT NULL, body BLOB NOT NULL, PRIMARY KEY(kind,id));
 	CREATE TABLE IF NOT EXISTS events(job TEXT NOT NULL, seq INTEGER NOT NULL, body BLOB NOT NULL, PRIMARY KEY(job,seq));
 	CREATE TABLE IF NOT EXISTS dedup(origin TEXT NOT NULL, request TEXT NOT NULL, digest TEXT NOT NULL, job TEXT NOT NULL, PRIMARY KEY(origin,request));
-	PRAGMA user_version=2;`)
+	CREATE TABLE IF NOT EXISTS operations(identity TEXT PRIMARY KEY, body BLOB NOT NULL, updated INTEGER NOT NULL, terminal INTEGER NOT NULL, reserved INTEGER NOT NULL);
+	CREATE INDEX IF NOT EXISTS operations_retention ON operations(terminal,updated);
+	PRAGMA user_version=3;`)
 	if err != nil {
 		db.Close()
 		return nil, err
@@ -155,6 +157,10 @@ func (s *Store) Accept(owner, origin string, r model.Request) (model.Job, error)
 // AcceptChecked runs admit only for a new, non-cancelled request, inside the
 // acceptance transaction. admit must not re-enter Store or acquire outer locks.
 func (s *Store) AcceptChecked(owner, origin string, r model.Request, admit func() error) (model.Job, error) {
+	return s.AcceptAttributed(owner, origin, r, "", admit)
+}
+
+func (s *Store) AcceptAttributed(owner, origin string, r model.Request, actor string, admit func() error) (model.Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	tx, err := s.db.Begin()
@@ -185,7 +191,7 @@ func (s *Store) AcceptChecked(owner, origin string, r model.Request, admit func(
 	} else if !errors.Is(err, ErrNotFound) {
 		return model.Job{}, err
 	}
-	j := model.Job{ID: model.ID(), Origin: origin, Owner: owner, Request: r, Digest: model.Hash(r), State: "queued", Created: model.Now(), Execution: "not_run", Verification: "not_run", Acceptance: "pending"}
+	j := model.Job{ID: model.ID(), SubmittedBy: actor, Origin: origin, Owner: owner, Request: r, Digest: model.Hash(r), State: "queued", Created: model.Now(), Execution: "not_run", Verification: "not_run", Acceptance: "pending"}
 	var tomb bool
 	if err = get(tx, "cancel", model.Hash([]string{origin, r.RequestID}), &tomb); err != nil && !errors.Is(err, ErrNotFound) {
 		return j, err
@@ -202,7 +208,7 @@ func (s *Store) AcceptChecked(owner, origin string, r model.Request, admit func(
 	if err != nil {
 		return j, err
 	}
-	if err = event(tx, &j, "accepted", map[string]string{"state": j.State}); err != nil {
+	if err = event(tx, &j, "accepted", map[string]string{"state": j.State, "actor": actor}); err != nil {
 		return j, err
 	}
 	return j, tx.Commit()
@@ -262,10 +268,14 @@ func (s *Store) Cancel(origin, request string) error {
 	return put(s.db, "cancel", model.Hash([]string{origin, request}), true)
 }
 func (s *Store) Events(id string, after int64) ([]model.Event, error) {
-	if after < 0 {
+	return s.EventsLimit(id, after, 200)
+}
+
+func (s *Store) EventsLimit(id string, after int64, limit int) ([]model.Event, error) {
+	if after < 0 || limit < 1 || limit > 200 {
 		return nil, i18n.Err("err.store.invalid_cursor")
 	}
-	rows, err := s.db.Query("SELECT body FROM events WHERE job=? AND seq>? ORDER BY seq LIMIT 200", id, after)
+	rows, err := s.db.Query("SELECT body FROM events WHERE job=? AND seq>? ORDER BY seq LIMIT ?", id, after, limit)
 	if err != nil {
 		return nil, err
 	}

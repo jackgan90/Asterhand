@@ -7,19 +7,24 @@ import (
 
 	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/model"
+	"github.com/jackgan90/Asterhand/internal/operations"
 )
 
 // LocaleChange updates only the persisted locale preference without touching
 // hotkey registration, WebView2 surface initialization, or active recording leases.
 type LocaleChange struct {
-	Operation string `json:"operation_id"`
-	Revision  string `json:"expected_revision"`
-	Locale    string `json:"locale"`
+	publication *operations.Identity
+	Operation   string `json:"operation_id"`
+	Revision    string `json:"expected_revision"`
+	Locale      string `json:"locale"`
 }
 
 func (c *Controller) SetLocale(ctx context.Context, change LocaleChange) (Status, error) {
 	c.op.Lock()
 	defer c.op.Unlock()
+	if err := c.completePublication(); err != nil {
+		return c.Status(), err
+	}
 	if len(change.Operation) < 8 || len(change.Operation) > 100 {
 		return c.Status(), statusError(400, "err.quickinput.invalid_op_id")
 	}
@@ -56,6 +61,10 @@ func (c *Controller) setLocale(ctx context.Context, change LocaleChange) (Status
 	next := before.Desired
 	next.Locale = change.Locale
 	next.Revision = model.ID()
+	if change.publication != nil {
+		result, _ := json.Marshal(map[string]string{"revision": next.Revision})
+		next.Publication = &operations.Publication{Identity: *change.publication, Result: result}
+	}
 	if err := c.store.Save(next); err != nil {
 		return c.Status(), i18n.Wrap("err.quickinput.not_committed", map[string]string{"err": err.Error()}, err)
 	}
@@ -75,5 +84,5 @@ func (c *Controller) setLocale(ctx context.Context, change LocaleChange) (Status
 			c.Failed(err)
 		}
 	}
-	return c.Status(), nil
+	return c.Status(), c.completePublication()
 }

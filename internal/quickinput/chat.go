@@ -13,18 +13,19 @@ import (
 // chatController outlives UI host generations. It keeps only RAM delivery intent
 // and a draft digest; message bodies belong to the node's runtime.
 type chatController struct {
-	mu               sync.Mutex
-	client           wire.Transport
-	ctx              context.Context
-	cancel           context.CancelFunc
-	wg               sync.WaitGroup
-	closing          bool
-	inflight         int
-	reads            int
-	pending          map[string]*chatSubmission
-	order            uint64
-	selected         string
-	selectionRequest string
+	mu                sync.Mutex
+	client            wire.Transport
+	ctx               context.Context
+	cancel            context.CancelFunc
+	wg                sync.WaitGroup
+	closing           bool
+	inflight          int
+	reads             int
+	pending           map[string]*chatSubmission
+	order             uint64
+	selected          string
+	selectionRequest  string
+	selectionInFlight int
 }
 
 type chatSubmission struct {
@@ -69,6 +70,10 @@ func (c *chatController) dispatch(surface *remoteSurface, message hostipc.Messag
 		c.reads++
 	}
 	c.wg.Add(1)
+	changesSelection := request.Action == "select" || request.Action == "create" || request.Action == "prepare"
+	if changesSelection {
+		c.selectionInFlight++
+	}
 	if request.Action == "select" || request.Action == "create" || request.Action == "prepare" || request.Action == "history" {
 		c.selectionRequest = message.ChatID
 	}
@@ -80,6 +85,9 @@ func (c *chatController) dispatch(surface *remoteSurface, message hostipc.Messag
 		}
 		if len(c.pending) >= 16 {
 			c.inflight--
+			if changesSelection {
+				c.selectionInFlight--
+			}
 			c.wg.Done()
 			c.mu.Unlock()
 			_ = surface.send(hostipc.Message{Kind: hostipc.ChatResult, ChatID: message.ChatID,
@@ -95,6 +103,9 @@ func (c *chatController) dispatch(surface *remoteSurface, message hostipc.Messag
 		defer func() {
 			c.mu.Lock()
 			c.inflight--
+			if changesSelection {
+				c.selectionInFlight--
+			}
 			if read {
 				c.reads--
 			}

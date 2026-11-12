@@ -7,11 +7,15 @@ import (
 
 	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/model"
+	"github.com/jackgan90/Asterhand/internal/operations"
 )
 
 func (c *Controller) Apply(ctx context.Context, change Change) (Status, error) {
 	c.op.Lock()
 	defer c.op.Unlock()
+	if err := c.completePublication(); err != nil {
+		return c.Status(), err
+	}
 	if len(change.Operation) < 8 || len(change.Operation) > 100 {
 		return c.Status(), statusError(400, "err.quickinput.invalid_op_id")
 	}
@@ -71,6 +75,11 @@ func (c *Controller) apply(ctx context.Context, change Change) (Status, error) {
 	next := Preferences{Schema: 1, Revision: model.ID(), Enabled: change.Enabled, Binding: change.Binding, Theme: change.Theme, Locale: locale}
 	if change.Reset {
 		next = Defaults()
+	}
+	next.Publication = before.Desired.Publication
+	if change.publication != nil {
+		result, _ := json.Marshal(map[string]string{"revision": next.Revision})
+		next.Publication = &operations.Publication{Identity: *change.publication, Result: result}
 	}
 	next, err := next.validated()
 	if err != nil {
@@ -138,6 +147,9 @@ func (c *Controller) persist(ctx context.Context, change Change, next Preference
 	// No context cancellation after this persistent commit point.
 	c.invalid = false
 	c.publish(change, next, candidate)
+	if err = c.completePublication(); err != nil {
+		return c.Status(), err
+	}
 	return c.Status(), nil
 }
 

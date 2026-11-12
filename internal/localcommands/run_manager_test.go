@@ -125,7 +125,7 @@ func managedFixture(t *testing.T) (*Registry, *RunManager, *fakeBackend, *fakeCl
 	b := &fakeBackend{created: make(chan *fakeExecution, 16)}
 	b.empty.Store(true)
 	clock := &fakeClock{wake: make(chan time.Time, 4)}
-	m := NewRunManager(home, b, clock)
+	m := testRunManager(t, home, b, clock)
 	r := Open(home)
 	if err := r.ConfigureRuns(m); err != nil {
 		t.Fatal(err)
@@ -174,10 +174,18 @@ func TestManagedSingleInstanceDrainLogAndRestart(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	if accepted.Load() != 1 || b.count.Load() != 1 {
+	if accepted.Load() != 1 {
 		t.Fatalf("accepted=%d starts=%d", accepted.Load(), b.count.Load())
 	}
-	e := <-b.created
+	var e *fakeExecution
+	select {
+	case e = <-b.created:
+	case <-time.After(3 * time.Second):
+		t.Fatal("accepted run did not start")
+	}
+	if b.count.Load() != 1 {
+		t.Fatalf("starts=%d", b.count.Load())
+	}
 	if _, err := r.Delete(c.ID, mustSnapshot(t, r).Revision); err == nil {
 		t.Fatal("deleted running command")
 	}
@@ -217,7 +225,7 @@ func TestManagedSingleInstanceDrainLogAndRestart(t *testing.T) {
 	if err != nil || tail.Start == 0 {
 		t.Fatal("tail", tail.Start, err)
 	}
-	reopened := NewRunManager(filepath.Dir(m.store.root), b, nil)
+	reopened := testRunManager(t, filepath.Dir(m.store.root), b, nil)
 	if reopened.loadErr != nil {
 		t.Fatal(reopened.loadErr)
 	}
@@ -264,8 +272,8 @@ func TestManagedStopTimeoutGenerationAndConfigurationCleanup(t *testing.T) {
 	if _, err = m.Stop(c.ID, first.ID, "user_stop"); err == nil {
 		t.Fatal("old stop accepted")
 	}
-	if _, err = m.Read(c.ID, first.ID, 0); err == nil {
-		t.Fatal("old read accepted")
+	if _, err = m.Read(c.ID, first.ID, 0); err != nil {
+		t.Fatal("retained history unreadable", err)
 	}
 	clock.now.Store(int64(3 * time.Second))
 	clock.wake <- time.Now()
@@ -285,7 +293,7 @@ func TestManagedStopTimeoutGenerationAndConfigurationCleanup(t *testing.T) {
 func TestManagedRecoveryBlocksUntilScopeConfirmed(t *testing.T) {
 	home := t.TempDir()
 	b := &fakeBackend{created: make(chan *fakeExecution, 1)}
-	m := NewRunManager(home, b, nil)
+	m := testRunManager(t, home, b, nil)
 	c := testCommand(t, "recover")
 	c.ID = "command1234567890"
 	record := RunRecord{Version: 1, ID: "execution123456789", RoundID: "execution123456789", Sequence: 1, Command: c, Phase: "stopping", Reason: "timeout", LogComplete: true}
@@ -303,7 +311,7 @@ func TestManagedRecoveryBlocksUntilScopeConfirmed(t *testing.T) {
 	if err := m.store.publish(c.ID, runIndex{Version: 1, RoundID: record.RoundID, Sequence: 1, Latest: record.ID, IDs: []string{record.ID}}); err != nil {
 		t.Fatal(err)
 	}
-	recovered := NewRunManager(home, b, nil)
+	recovered := testRunManager(t, home, b, nil)
 	if !recovered.Busy(c.ID) {
 		t.Fatal("unconfirmed scope released")
 	}

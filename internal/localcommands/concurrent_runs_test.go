@@ -71,7 +71,7 @@ func TestConcurrentRunsRetainAcceptanceOrderAndAllLogsUntilNextRound(t *testing.
 	if first.RoundID != second.RoundID || second.Sequence != first.Sequence+1 {
 		t.Fatal("round or sequence changed within live round")
 	}
-	reopened := NewRunManager(filepath.Dir(m.store.root), b, nil)
+	reopened := testRunManager(t, filepath.Dir(m.store.root), b, nil)
 	if reopened.loadErr != nil {
 		t.Fatal(reopened.loadErr)
 	}
@@ -94,11 +94,11 @@ func TestConcurrentRunsRetainAcceptanceOrderAndAllLogsUntilNextRound(t *testing.
 		t.Fatal("old round retained in visible list")
 	}
 	for _, id := range []string{first.ID, second.ID} {
-		if _, err := reopened.Read(c.ID, id, 0); err == nil {
-			t.Fatal("old read accepted")
+		if _, err := reopened.Read(c.ID, id, 0); err != nil {
+			t.Fatal("retained history unreadable", err)
 		}
-		if _, err := os.Stat(reopened.store.logPath(c.ID, id)); !os.IsNotExist(err) {
-			t.Fatal("old log was not collected", err)
+		if _, err := os.Stat(reopened.store.logPath(c.ID, id)); err != nil {
+			t.Fatal("history was collected before retention expired", err)
 		}
 	}
 	e.complete()
@@ -363,7 +363,7 @@ func TestRecoveryRetainsAllPublishedInstancesAndBlocksNewNodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	m := NewRunManager(home, b, nil)
+	m := testRunManager(t, home, b, nil)
 	t.Cleanup(func() {
 		b.empty.Store(true)
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

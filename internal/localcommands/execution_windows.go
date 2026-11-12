@@ -63,12 +63,7 @@ func (e *windowsExecution) Close() error {
 }
 
 func jobProcessCount(job windows.Handle) (uint32, error) {
-	var info struct {
-		User, Kernel, PeriodUser, PeriodKernel int64
-		Faults, Total, Active, Terminated      uint32
-	}
-	err := windows.QueryInformationJobObject(job, windows.JobObjectBasicAccountingInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info)), nil)
-	return info.Active, err
+	return userprocess.JobProcessCount(job)
 }
 
 func (e *windowsExecution) Wait(ctx context.Context) (ExitEvidence, error) {
@@ -100,22 +95,7 @@ func jobName(run string) *uint16 {
 }
 
 func (windowsBackend) Reconcile(run string) (bool, error) {
-	// The unpredictable name is durable before creation. Never act on a PID.
-	raw, _, callErr := windows.NewLazySystemDLL("kernel32.dll").NewProc("OpenJobObjectW").Call(4, 0, uintptr(unsafe.Pointer(jobName(run))))
-	job := windows.Handle(raw)
-	var err error
-	if job == 0 {
-		err = callErr
-	}
-	if err == windows.ERROR_FILE_NOT_FOUND {
-		return true, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	defer windows.CloseHandle(job)
-	count, err := jobProcessCount(job)
-	return count == 0, err
+	return userprocess.JobStopped("Local\\Asterhand.Command." + run)
 }
 
 func (windowsBackend) Start(c ScriptSpec, run string) (Execution, error) {

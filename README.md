@@ -4,6 +4,8 @@
 
 A personal agent system across your devices.
 
+[统一自动化、CLI 与 MCP](docs/automation/usage.md)已实现并通过用户验收，覆盖命令图、运行日志、聊天、现有任务、普通设置及未保存草稿。用户在外部客户端指定操作，Asterhand 保留原有界面；密钥、认证等管理继续使用人工入口。交付范围与验证说明见[功能计划](docs/development/features/agent-automation/plan.md)。
+
 Asterhand 让自己的设备通过自然语言协作。A 提交任务，B 用自己的 OpenClaw、DeepSeek 凭据和授权目录执行；任务与结果保存在 B，A 下线后 B 已接收的任务继续运行。
 
 ## 能力与支持范围
@@ -16,7 +18,7 @@ Asterhand 让自己的设备通过自然语言协作。A 提交任务，B 用自
 - [本地快捷命令](docs/executors/local-commands.md)：在 Web 注册 bat/cmd/ps1，在快捷输入中用 `/` 按英文名或别名搜索并启动；统一脚本图与可选多实例、独立日志窗口、强制停止与可选超时，无需模型配置。
 - [本地脚本图](docs/executors/script-graphs.md)：命令可关联可编辑 DAG，按依赖串行/并行运行本机脚本；任一步骤失败停止整图，日志窗口支持合并输出、运行节点自动分屏和固定多选，每屏可独立翻页。
 - 每个节点使用自己的凭据和授权目录；Windows 使用当前用户 DPAPI 保护秘密，节点间使用 TLS 与固定证书。
-- 首版文件任务每节点一个执行槽、一个授权目录，文件最大 64 KiB；文件任务删除、模型或远程节点调用任意 shell、具体 coding harness 尚未提供。本地快捷命令由用户手动触发；所有执行随节点退出停止。
+- 首版文件任务每节点一个执行槽、一个授权目录，文件最大 64 KiB；文件任务删除、模型或远程节点调用任意 shell、具体 coding harness 尚未提供。本地快捷命令可由人类或已授权的本机 agent 显式触发；所有执行随节点退出停止。
 
 版本与支持边界见 [平台矩阵](docs/testing/platforms.md)。当前只发布 Windows 完整包；Linux/macOS 保留扩展接口，手机远程访问尚未验证。Web 默认只绑定本机 loopback，在各自设备打开。
 

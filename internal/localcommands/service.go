@@ -135,37 +135,7 @@ func (r *Registry) List(request wire.Request) wire.Response {
 }
 
 func (r *Registry) Launch(ctx context.Context, id, revision string) wire.Response {
-	catalog, err := r.Snapshot()
-	if err != nil {
-		return Failure(err)
-	}
-	i := slices.IndexFunc(catalog.Commands, func(c Command) bool { return c.ID == id })
-	if i < 0 {
-		return Failure(problem("not_found", "err.localcmd.deleted_refresh_list"))
-	}
-	command := catalog.Commands[i]
-	if command.Revision != revision {
-		return Failure(problem("conflict", "err.localcmd.changed_reselect"))
-	}
-	if err := r.check(ctx, command); err != nil {
-		return Failure(err)
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	// Do not launch a new configuration after a slow filesystem check.
-	if !slices.ContainsFunc(r.catalog.Commands, func(c Command) bool { return c.ID == id && c.Revision == revision }) {
-		return Failure(problem("conflict", "err.localcmd.changed_reselect"))
-	}
-	if ctx.Err() != nil {
-		return Failure(problem("unavailable", "err.localcmd.precheck_timeout"))
-	}
-	if r.closing {
-		return Failure(problem("unavailable", "err.app.node_stopping"))
-	}
-	if r.managed == nil {
-		return Failure(problem("unsupported", "err.localcmd.managed_unavailable"))
-	}
-	if _, err := r.managed.Start(command); err != nil {
+	if _, err := r.LaunchOperation(ctx, id, revision, nil, nil); err != nil {
 		return Failure(err)
 	}
 	return wire.Response{Started: true}

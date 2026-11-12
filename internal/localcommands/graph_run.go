@@ -147,14 +147,12 @@ func (m *RunManager) scheduleGraphLocked(run *managedRun) bool {
 		if run.graph.active >= run.record.Command.Graph.Parallelism {
 			continue
 		}
-		select {
-		case m.graphSlots <- struct{}{}:
-		default:
+		if !m.reserveGraphSlot(run) {
 			return false
 		}
 		n.RunID, n.Phase = model.ID(), "starting"
 		if !m.saveGraphLocked(run) {
-			<-m.graphSlots
+			m.releaseGraphSlot(run)
 			finishStructuralNode(n, "failed")
 			n.Reason = "log_io_error"
 			return true

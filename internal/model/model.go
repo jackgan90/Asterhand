@@ -24,6 +24,7 @@ type Request struct {
 }
 
 type Job struct {
+	SubmittedBy  string            `json:"submitted_by,omitempty"`
 	ID           string            `json:"id"`
 	Origin       string            `json:"origin"`
 	Owner        string            `json:"owner"`
@@ -98,14 +99,15 @@ type Peer struct {
 	Revoked       bool     `json:"revoked"`
 }
 type Outbox struct {
-	ID        string            `json:"id"`
-	PeerID    string            `json:"peer_id"`
-	Request   Request           `json:"request"`
-	State     string            `json:"state"`
-	Job       *Job              `json:"job,omitempty"`
-	Error     string            `json:"error,omitempty"`
-	ErrorKey  string            `json:"error_key,omitempty"`
-	ErrorArgs map[string]string `json:"error_args,omitempty"`
-	Updated   string            `json:"updated"`
-	Cancel    bool              `json:"cancel"`
+	CancelledBy string            `json:"cancelled_by,omitempty"`
+	ID          string            `json:"id"`
+	PeerID      string            `json:"peer_id"`
+	Request     Request           `json:"request"`
+	State       string            `json:"state"`
+	Job         *Job              `json:"job,omitempty"`
+	Error       string            `json:"error,omitempty"`
+	ErrorKey    string            `json:"error_key,omitempty"`
+	ErrorArgs   map[string]string `json:"error_args,omitempty"`
+	Updated     string            `json:"updated"`
+	Cancel      bool              `json:"cancel"`
 }

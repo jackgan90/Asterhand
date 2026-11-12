@@ -21,8 +21,11 @@
 | 安装与环境 | [requirements](installation/requirements.md) | [design](installation/design.md) | [ADR](installation/adr/README.md) |
 | 测试与验收 | [requirements](testing/requirements.md) | [design](testing/design.md) | [ADR](testing/adr/README.md) |
 | 开发治理 | [requirements](development/requirements.md) | [design](development/design.md) | [ADR](development/adr/README.md) |
+| 自动化、CLI 与 MCP | [requirements](automation/requirements.md) | [design](automation/design.md) | [ADR](automation/adr/README.md) |
 
 ## 其他入口
+
+- [统一自动化、CLI 与 MCP 计划](development/features/agent-automation/plan.md)、[日常操作覆盖清单](automation/coverage.md)、[验证方法](development/features/agent-automation/validation.md)：统一人类与 agent 的日常业务规则、可靠调用、批处理与未保存草稿接手；操作方法见[使用指南](automation/usage.md)，认证和授权管理保留人工。
 
 - [脚本图编辑历史与撤销重做](development/features/graph-edit-history/plan.md)：操作快照、Ctrl+Z / Ctrl+Y、输入与拖动合并、保存后保留历史及脏状态比较；工程验证及本机用户验收通过，包含实体中文输入法设置节点名称与重命名。
 

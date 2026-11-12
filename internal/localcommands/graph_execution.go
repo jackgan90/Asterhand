@@ -110,7 +110,7 @@ func (m *RunManager) finishGraphNodeLocked(run *managedRun, index int, evidence 
 	}
 	finishStructuralNode(n, n.Result)
 	run.graph.active--
-	<-m.graphSlots
+	m.releaseGraphSlot(run)
 	if abortsGraph(run.record.Command.Graph.Nodes[index].FailurePolicy, n.Result) {
 		m.failGraphNodeLocked(run, index, n.Reason)
 	}

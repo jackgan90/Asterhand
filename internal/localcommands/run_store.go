@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackgan90/Asterhand/internal/config"
 	"github.com/jackgan90/Asterhand/internal/localcommands/wire"
+	"github.com/jackgan90/Asterhand/internal/operations"
 )
 
 const logBlockSize = 16 * 1024
@@ -20,27 +21,30 @@ const logBlockSize = 16 * 1024
 const maxRunRecordBytes = 4 * 1024 * 1024
 
 type RunRecord struct {
-	Version        int          `json:"schema_version"`
-	RoundID        string       `json:"round_id"`
-	Sequence       uint64       `json:"sequence"`
-	Nodes          []NodeRecord `json:"nodes,omitempty"`
-	FailedNodeID   string       `json:"failed_node_id,omitempty"`
-	LogFormat      int          `json:"log_format,omitempty"`
-	ID             string       `json:"run_id"`
-	Command        Command      `json:"command"`
-	Phase          string       `json:"phase"`
-	Result         string       `json:"result,omitempty"`
-	Reason         string       `json:"reason,omitempty"`
-	Started        time.Time    `json:"started_at"`
-	Ended          *time.Time   `json:"ended_at,omitempty"`
-	Elapsed        float64      `json:"elapsed_seconds"`
-	Exit           ExitEvidence `json:"exit"`
-	LogComplete    bool         `json:"log_complete"`
-	StorageError   bool         `json:"storage_error,omitempty"`
-	CleanupPending bool         `json:"cleanup_pending,omitempty"`
+	Operation      *operations.Identity `json:"automation_operation,omitempty"`
+	Version        int                  `json:"schema_version"`
+	RoundID        string               `json:"round_id"`
+	Sequence       uint64               `json:"sequence"`
+	Nodes          []NodeRecord         `json:"nodes,omitempty"`
+	FailedNodeID   string               `json:"failed_node_id,omitempty"`
+	LogFormat      int                  `json:"log_format,omitempty"`
+	ID             string               `json:"run_id"`
+	Command        Command              `json:"command"`
+	Phase          string               `json:"phase"`
+	Result         string               `json:"result,omitempty"`
+	Reason         string               `json:"reason,omitempty"`
+	Started        time.Time            `json:"started_at"`
+	Ended          *time.Time           `json:"ended_at,omitempty"`
+	Elapsed        float64              `json:"elapsed_seconds"`
+	Exit           ExitEvidence         `json:"exit"`
+	LogComplete    bool                 `json:"log_complete"`
+	StorageError   bool                 `json:"storage_error,omitempty"`
+	CleanupPending bool                 `json:"cleanup_pending,omitempty"`
 }
 
 type LogChunk struct {
+	Start     int64     `json:"-"`
+	End       int64     `json:"-"`
 	NodeID    string    `json:"node_id,omitempty"`
 	IgnoreBOM bool      `json:"ignore_bom,omitempty"`
 	Stream    string    `json:"stream"`
@@ -205,7 +209,7 @@ func (s runStore) read(r RunRecord, cursor int64) (LogPage, error) {
 		if streamByte == 1 {
 			stream = "stderr"
 		}
-		chunk := LogChunk{NodeID: nodeID, Stream: stream, Data: b, Time: time.Unix(0, int64(binary.LittleEndian.Uint64(header[1:9]))).UTC()}
+		chunk := LogChunk{Start: page.Next, End: page.Next + int64(logFrameOverhead) + int64(n), NodeID: nodeID, Stream: stream, Data: b, Time: time.Unix(0, int64(binary.LittleEndian.Uint64(header[1:9]))).UTC()}
 		encoded, err := json.Marshal(chunk)
 		if err != nil {
 			return page, err

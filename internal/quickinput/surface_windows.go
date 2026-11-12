@@ -89,6 +89,8 @@ type nativeSurface struct {
 	icons                         [2]uintptr
 	chatSend                      func(hostipc.Message) error
 	commandSend                   func(hostipc.Message) error
+	editorSend                    func(hostipc.Message) error
+	activeEditor                  *surfaceEditorRequest
 	onMessage                     func(string)
 	onFailure                     func(error)
 }

@@ -51,6 +51,7 @@ export function graphInspector({text, button, label, onEdit, onBrowse, onFinish 
   }
   return {
     element,
+    get rawTimeout(){return current && {id:current,value:timeout.value};},
     // Refills inputs only when a different step is selected.
     show(step, refill = false) {
       const isScript = step?.kind === 'script';

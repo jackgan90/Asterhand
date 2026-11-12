@@ -158,7 +158,7 @@ func readNodeLogFrame(f *os.File, record RunRecord, nodeID string, cursor, end i
 		if stream == 1 {
 			streamName = "stderr"
 		}
-		frame.chunk = LogChunk{NodeID: source, Stream: streamName, Data: data, Time: time.Unix(0, int64(binary.LittleEndian.Uint64(frame.header[1:9]))).UTC()}
+		frame.chunk = LogChunk{Start: frame.start, End: frame.end, NodeID: source, Stream: streamName, Data: data, Time: time.Unix(0, int64(binary.LittleEndian.Uint64(frame.header[1:9]))).UTC()}
 	}
 	return frame, nil
 }

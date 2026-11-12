@@ -1,5 +1,7 @@
 # 任务需求
 
+自动化要求（已接入公共操作）：TASK-AUTO-01 将已有任务提交、查询、普通问答、取消及核对接入共享操作，保留 owner/outbox/attempt 与去重；TASK-AUTO-02 记录真实代理主体和处置依据，不将代理回答或核对声明当成人工批准、机器验证或执行成功。见[自动化需求](../automation/requirements.md)和[覆盖清单](../automation/coverage.md)。
+
 状态：已确认设计要求，实现契约见本领域 design.md，平台边界见测试文档。关联 R05、R08、R09、C03。
 
 | ID | 要求 |

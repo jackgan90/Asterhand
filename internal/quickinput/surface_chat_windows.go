@@ -24,22 +24,23 @@ func (s *nativeSurface) chatRequest(message bridgeMessage) {
 		return
 	}
 	request := *message.Chat
+	sendsText := request.Action == "submit" || request.Action == "enqueue"
 	send := s.chatSend
 	relay := s.remoteDraft
 	deliver := func() {
 		epoch, sequence, revision := relay.state()
-		if request.Action == "submit" && sequence != request.DraftRevision {
+		if sendsText && sequence != request.DraftRevision {
 			// A newer coalesced edit won. The original snapshot may still be sent,
 			// but it is no longer eligible to clear a restored parent draft.
 			revision = 0
 		}
-		if request.Action == "submit" {
+		if sendsText {
 			sequence = request.DraftRevision
 		}
 		_ = send(hostipc.Message{Kind: hostipc.ChatCall, ChatID: message.ID, Chat: &request,
 			Epoch: epoch, Sequence: sequence, Revision: revision})
 	}
-	if request.Action == "submit" {
+	if sendsText {
 		if request.DraftRevision != message.Revision {
 			return
 		}

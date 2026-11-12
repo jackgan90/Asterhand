@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackgan90/Asterhand/internal/conversation/wire"
+	"github.com/jackgan90/Asterhand/internal/editors"
 	"github.com/jackgan90/Asterhand/internal/i18n"
 	commandswire "github.com/jackgan90/Asterhand/internal/localcommands/wire"
 )
@@ -41,6 +42,8 @@ const (
 	CommandResult  Kind = "command_result"
 	OpenLog        Kind = "open_log"
 	LogProgress    Kind = "log_progress"
+	EditorCall     Kind = "editor_call"
+	EditorResult   Kind = "editor_result"
 )
 
 // Message contains only input-surface capabilities. Request is a command ID;
@@ -73,6 +76,8 @@ type Message struct {
 	WindowID     string                 `json:"window_id,omitempty"`
 	Anchor       *WindowAnchor          `json:"window_anchor,omitempty"`
 	LogEvent     *LogWindowEvent        `json:"log_event,omitempty"`
+	Editor       *EditorRequest         `json:"editor,omitempty"`
+	EditorReply  *editors.Reply         `json:"editor_reply,omitempty"`
 }
 
 var ErrProtocol = errors.New("invalid input host protocol")
@@ -101,6 +106,8 @@ func (m Message) Validate(fromHost bool) error {
 			allowed = commandswire.ValidID(m.CommandID) && m.Command != nil && m.Command.Validate() == nil && m.Epoch != 0
 		case LogProgress:
 			allowed = m.LogEvent != nil && m.LogEvent.Valid()
+		case EditorResult:
+			allowed = m.Request != 0 && m.EditorReply != nil && m.EditorReply.ID != ""
 		}
 	} else {
 		switch m.Kind {
@@ -122,9 +129,14 @@ func (m Message) Validate(fromHost bool) error {
 			allowed = wire.ValidID(m.ChatID) && m.ChatReply != nil
 		case CommandResult:
 			allowed = commandswire.ValidID(m.CommandID) && m.CommandReply != nil
+		case EditorCall:
+			allowed = m.Request != 0 && m.Editor != nil && m.Editor.Valid()
 		}
 	}
 	if !allowed {
+		return ErrProtocol
+	}
+	if m.Kind != EditorCall && m.Editor != nil || m.Kind != EditorResult && m.EditorReply != nil {
 		return ErrProtocol
 	}
 	if m.Kind != OpenLog && m.WindowID != "" {

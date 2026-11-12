@@ -31,17 +31,20 @@ func TestInputModuleClosureIsEmbeddedAndAllowed(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	shared, err := web.Files.ReadFile("command-run.mjs")
-	if err != nil {
-		t.Fatal(err)
+	aliases := map[string]string{}
+	for _, name := range []string{"command-run.mjs", "live-editors.mjs"} {
+		shared, err := web.Files.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		closureFiles["shared/"+name] = &fstest.MapFile{Data: shared}
+		aliases["../../../web/"+name] = "shared/" + name
 	}
-	closureFiles["shared/command-run.mjs"] = &fstest.MapFile{Data: shared}
-	aliases := map[string]string{"../../../web/command-run.mjs": "shared/command-run.mjs"}
 	for _, entry := range []string{"index.html", "command-log.html"} {
 		for _, module := range webmodules.ClosureWithAliases(t, closureFiles, entry, aliases) {
 			uri := surfaceOrigin + "/quick-input/" + module
-			if module == "shared/command-run.mjs" {
-				uri = surfaceOrigin + "/web/command-run.mjs"
+			if strings.HasPrefix(module, "shared/") {
+				uri = surfaceOrigin + "/web/" + strings.TrimPrefix(module, "shared/")
 			}
 			body, mime, status := inputResource("GET", uri)
 			if status != 200 || mime != "application/javascript; charset=utf-8" || len(body) == 0 {

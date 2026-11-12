@@ -1,9 +1,10 @@
 // Each stream has its own decoder: stdout and stderr may split characters at
 // unrelated boundaries. Raw bytes remain authoritative on disk.
+import {createLogTextDecoder} from './legacy-log-decoder.mjs';
 export function logDecoder(encoding = 'utf-8') {
   const decoders = new Map();
   const key = chunk => `${chunk.node_id || ''}:${chunk.stream}`;
-  const create = (chunk, options) => {const entry={node_id:chunk.node_id,stream:chunk.stream,decoder:new TextDecoder(encoding,options)};decoders.set(key(chunk),entry);return entry;};
+  const create = (chunk, options) => {const entry={node_id:chunk.node_id,stream:chunk.stream,decoder:createLogTextDecoder(encoding,options)};decoders.set(key(chunk),entry);return entry;};
   return {
     seed(chunks, onlyMissing = false) {
       for (const chunk of chunks) {

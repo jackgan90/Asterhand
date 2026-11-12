@@ -236,10 +236,28 @@ export function graphEditor({container, onChange, browse}) {
       if (!keepView) globalThis.requestAnimationFrame?.(() => canvas.fit());
     },
     finishEditing,
+    // Raw snapshots preserve incomplete numeric text and negative coordinates.
+    get changingGeometry() { return canvas.changingGeometry; },
+    rawSnapshot() {
+      const value=copyGraph(graph);
+      if(typeof value.parallelism!=='string' && String(value.parallelism)!==String(parallel.value))value.parallelism=parallel.value;
+      const rename=canvas.activeRename, timeout=inspector.rawTimeout;
+      for(const step of value.nodes){
+        if(rename?.id===step.id)step.name=rename.name;
+        if(timeout?.id===step.id && typeof step.timeout_seconds!=='string' && String(step.timeout_seconds??'')!==String(timeout.value))step.timeout_seconds=timeout.value;
+      }
+      return value;
+    },
+    replaceLiveGraph(value) {
+      finishEditing(); history.begin(snapshot(), 'common.draft.agent_changes');
+      const next = {graph:copyGraph(value), selection};
+      history.commit(next); restore(next); paintHistory();
+    },
     // Export normalization never mutates the draft or its editing history.
     read() {
       finishEditing();
       const candidate = copyGraph(graph);
+      candidate.parallelism = Number(candidate.parallelism);
       for (const n of candidate.nodes) if (n.kind === 'script' && n.timeout_seconds != null) n.timeout_seconds = timeoutSeconds(n.timeout_seconds, 1);
       const shift = layoutShift(candidate);
       if (shift.issue) { error = shift.issue; paint(); throw error; }

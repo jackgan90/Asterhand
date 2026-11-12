@@ -1,6 +1,6 @@
 // A session is an immutable identity with a revocable active flag. Reads and
 // callbacks check it after awaits; stopping subscriptions never cancels a job.
-export function appLifecycle({client, initialize, refreshPeers, refreshTasks, connection, stopped, failed, clock = globalThis}) {
+export function appLifecycle({client, initialize, refreshPeers, refreshTasks, connection, stopped, failed, editorPage, editorRequest, clock = globalThis}) {
   let current, source, peerTimer;
   function stop() {
     if (current) current.active = false;
@@ -21,7 +21,8 @@ export function appLifecycle({client, initialize, refreshPeers, refreshTasks, co
     await run(session, async () => {
       await initialize(session, token);
       if (!session.active) return;
-      source = client.stream();
+      source = client.stream(editorPage);
+      if(editorPage)source.addEventListener('editor',event=>{if(session.active)void editorRequest(event).catch(()=>{});});
       source.addEventListener("refresh", () => run(session, refreshTasks));
       source.onerror = () => { if (session.active) connection(false); };
       source.onopen = () => { if (session.active) connection(true); };

@@ -10,6 +10,8 @@
 
 ## 系统边界
 
+[自动化公共操作](../automation/design.md)在现有领域服务之上提供 CLI/MCP，命令图、会话、任务和设置与人类入口共享业务规则。节点拥有执行与持久数据；客户端只通过已授权的本机连接调用。按[统一操作 ADR](../automation/adr/001-shared-operations.md)扩展本机脚本入口，现有 peer 任务能力不随之扩大。
+
 ```text
 浏览器 → Asterhand A Web/API → OpenClaw A（DeepSeek）
                                ↓ 提交工具

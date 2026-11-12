@@ -69,7 +69,7 @@ func TestRegistryIndependentRenameDeleteAndRestart(t *testing.T) {
 	if again.Commands[1].Aliases[0] != "归档" || again.Commands[1].Graph.Nodes[1].Script == "mutated" {
 		t.Fatal("shared snapshot")
 	}
-	if err = reopened.ConfigureRuns(NewRunManager(home, &fakeBackend{}, nil)); err != nil {
+	if err = reopened.ConfigureRuns(testRunManager(t, home, &fakeBackend{}, nil)); err != nil {
 		t.Fatal(err)
 	}
 	deleted, err := reopened.Delete(first.ID, updated.Catalog.Revision)

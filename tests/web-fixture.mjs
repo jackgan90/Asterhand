@@ -15,6 +15,8 @@ export class Element extends EventTarget {
     this.classList = {add:(...names)=>{this.className=[this.className||'',...names].join(' ').trim();}};
   }
   get options() { return this.children; }
+  get lastChild() { return this.children.at(-1); }
+  after(...elements) { if(!this.parentElement)return;const parent=this.parentElement,next=parent.children[parent.children.indexOf(this)+1];for(const element of elements)parent.insertBefore(element,next); }
   append(...elements) {
     for(const element of elements){element.parentElement=this;this.children.push(element);}
     if (this.tagName === "SELECT" && !this.value) this.value = elements[0]?.value || "";
@@ -47,6 +49,7 @@ export function domFixture() {
   document.compatMode = 'CSS1Compat';
   const select = id => {
     if (!elements.has(id)) elements.set(id, new Element("div", document));
+    if(id==='#local-commands'&&!elements.get(id).children.length)elements.get(id).append(select('#command-form'));
     return elements.get(id);
   };
   // Optional feature panels are absent in the base fixture. Dedicated tests

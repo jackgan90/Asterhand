@@ -1,3 +1,4 @@
+import {editorOperation} from './live-editors.mjs';
 import {localizeMessage, t} from "./i18n.mjs";
 import {$, node, dialog} from "./ui.mjs";
 
@@ -9,16 +10,41 @@ const probeKeys = {
   stale: "web.settings.probe.stale",
 };
 
-export function nodeSettings({api, post, session, desktop, guarded, notice, refreshPeers, listen}) {
+export function nodeSettings({api, post, session, desktop, guarded, notice, refreshPeers, listen, editors}) {
   let probeTimer, probeGeneration = 0, openGeneration = 0;
   let loadedData = null, lastProbe = null, lastNetwork = null, statusState = null;
   let nameDirty = false, renderedDefaultName = "";
   const form = $("#settings-form");
   // The form spans several panes; tell the user that saving submits all of them.
   const markDirty = dirty => { $("#settings-dirty").hidden = !dirty; };
+  let otherDirty=false, humanSaves=0, ordinarySave=null;
+  const ordinary=()=>({name:loadedData?.config.name_default && !nameDirty && form.elements.name.value===renderedDefaultName?
+    loadedData.config.name:form.elements.name.value, model:form.elements.model.value});
+  const live=editors?.register({
+    ownsInput:el=>el===form||el===form.elements.name||el===form.elements.model,
+    target:()=>$("#settings").open && loadedData?.revision?{kind:'settings',settings:'node',node_id:loadedData.config.node_id,baseline_revision:loadedData.revision}:null,
+    busy:()=>humanSaves>0||Boolean(ordinarySave),
+    read:ordinary,
+    apply:v=>{form.elements.name.value=v.name;form.elements.model.value=v.model;nameDirty=v.name!==loadedData.config.name;markDirty(true);},
+    commit:(id,{content,target})=>{
+      const data=loadedData;
+      const args={settings:'node',expected_revision:target.baseline_revision};
+      if(content.name!==data.config.name)args.name=content.name;
+      if(content.model!==data.config.llm.model)args.model=content.model;
+      if(args.model===undefined && args.name===undefined)return 'saved';
+      ordinarySave=editorOperation(post,'settings.patch',id,args).then(result=>{
+        if(loadedData===data){data.revision=result.revision;if(args.name!==undefined){data.config.name=args.name;data.config.name_default=false;}
+          data.config.llm.model=content.model;const current=ordinary();markDirty(otherDirty||current.name!==content.name||current.model!==content.model);}
+        return 'saved';
+      }).finally(()=>{ordinarySave=null;});
+      return ordinarySave;
+    }
+  });
+  listen($("#settings"),"close",()=>live?.invalidate());
   // Language and theme apply immediately through the desktop settings API; they
   // sit inside this form's DOM but are not submitted with it.
   const edited = event => {
+    if(event.target?.id!=="settings-locale"&&!["ui-theme","model","name"].includes(event.target?.name))otherDirty=true;
     if (event.target?.id !== "settings-locale" && event.target?.name !== "ui-theme") markDirty(true);
   };
   listen(form, "input", edited);
@@ -89,6 +115,7 @@ export function nodeSettings({api, post, session, desktop, guarded, notice, refr
       c = data.config;
     if (!scope?.active || generation !== openGeneration) return;
     loadedData = data;
+    otherDirty=false;live?.invalidate();
     lastNetwork = null;
     statusState = null;
     nameDirty = false;
@@ -170,6 +197,9 @@ export function nodeSettings({api, post, session, desktop, guarded, notice, refr
   listen(form, "submit", (event) => {
     event.preventDefault();
     guarded(async () => {
+      if(ordinarySave){await ordinarySave.catch(()=>{});if(!otherDirty && $("#settings-dirty").hidden)return;}
+      humanSaves++;
+      try {
       const scope = session(), generation = openGeneration;
       const f = new FormData(event.target);
       const rawInputName = f.get("name");
@@ -196,12 +226,15 @@ export function nodeSettings({api, post, session, desktop, guarded, notice, refr
         loadedData.config.name_default = false;
       }
       if (loadedData) {
+        loadedData.revision=result.revision||loadedData.revision;
+        loadedData.config.llm.model=f.get("model");
         if (f.get("delete_key") === "on") loadedData.has_key = false;
         else if (f.get("key")) loadedData.has_key = true;
         paintKeyAndRuntime();
       }
       event.target.elements.key.value = "";
       markDirty(false);
+      otherDirty=false;
       statusState = {
         kind: "saved",
         chatAvailable: Boolean(result.capabilities?.chat?.available),
@@ -212,6 +245,7 @@ export function nodeSettings({api, post, session, desktop, guarded, notice, refr
       notice(message);
       await updateProbe();
       if (scope.active) await refreshPeers();
+      }finally{humanSaves--;}
     });
   });
   async function updateProbe() {

@@ -2,12 +2,14 @@ package localcommands
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/jackgan90/Asterhand/internal/localcommands/wire"
+	"github.com/jackgan90/Asterhand/internal/operations"
 )
 
 type managedRun struct {
@@ -30,13 +32,18 @@ type RunManager struct {
 	groups     map[string]*runGroup
 	recovering atomic.Int32
 	graphSlots chan struct{}
-	mu         sync.Mutex
-	store      runStore
-	backend    ExecutionBackend
-	clock      ExecutionClock
-	runs       map[string]*managedRun
-	closed     bool
-	loadErr    error
+
+	mu            sync.Mutex
+	store         runStore
+	backend       ExecutionBackend
+	clock         ExecutionClock
+	runs          map[string]*managedRun
+	closed        bool
+	loadErr       error
+	journal       operations.Journal
+	history       *runHistory
+	diskBytes     atomic.Int64
+	historyFailed atomic.Bool
 }
 
 func NewRunManager(home string, backend ExecutionBackend, clock ExecutionClock) *RunManager {
@@ -44,12 +51,23 @@ func NewRunManager(home string, backend ExecutionBackend, clock ExecutionClock) 
 	if clock == nil {
 		m.clock = platformClock{}
 	}
-	m.loadErr = m.recover()
+	m.history, m.loadErr = openRunHistory(m.store.root)
+	if m.loadErr == nil {
+		m.loadErr = m.recover()
+	}
+	if m.loadErr == nil {
+		m.loadErr = m.restoreHistory()
+	}
+	for _, run := range m.runs {
+		if run.busy {
+			go m.reconcileGraph(run)
+		}
+	}
 	return m
 }
 
 func (m *RunManager) Available() bool {
-	return m != nil && m.backend != nil && m.backend.Available() && m.loadErr == nil
+	return m != nil && m.backend != nil && m.backend.Available() && m.loadErr == nil && !m.historyFailed.Load()
 }
 
 func cloneRecord(record RunRecord) RunRecord {
@@ -89,6 +107,14 @@ func (m *RunManager) Run(id, runID string) *RunRecord {
 		}
 	}
 	run := m.runs[runID]
+	if run == nil && runID != "" && wire.ValidID(id) && wire.ValidID(runID) && m.history != nil {
+		record, err := m.archivedRun(id, runID)
+		if err == nil && record != nil {
+			v := publicRun(*record)
+			return &v
+		}
+		return nil
+	}
 	if run == nil || run.record.Command.ID != id {
 		return nil
 	}
@@ -207,6 +233,11 @@ func (m *RunManager) persistFinalLocked(run *managedRun) bool {
 		}
 		return false
 	}
+	if err := m.history.save(run.record); err != nil {
+		run.record.StorageError, run.record.CleanupPending = true, true
+		run.record.Phase = "draining"
+		return false
+	}
 	run.busy = false
 	close(run.done)
 	return true
@@ -240,7 +271,20 @@ func (m *RunManager) readLog(id, runID, nodeID string, cursor int64, before bool
 		return LogPage{}, problem("invalid", "err.localcmd.invalid_log_cursor")
 	}
 	m.mu.Lock()
+	if m.history != nil {
+		s, err := m.history.get(runID)
+		if err == nil && s.CommandID == id && s.Details != "retained" {
+			m.mu.Unlock()
+			return LogPage{}, problem("record_expired", "err.localcmd.run_changed")
+		}
+	}
 	run := m.runs[runID]
+	if run == nil && m.history != nil {
+		record, err := m.archivedRun(id, runID)
+		if err == nil && record != nil && record.Phase == "finished" {
+			run = &managedRun{record: *record}
+		}
+	}
 	if run == nil || run.record.Command.ID != id {
 		m.mu.Unlock()
 		return LogPage{}, problem("conflict", "err.localcmd.run_changed")
@@ -253,6 +297,17 @@ func (m *RunManager) readLog(id, runID, nodeID string, cursor int64, before bool
 	}
 	if nodeID != "" {
 		return m.store.readNode(m.snapshotLocked(run), nodeID, cursor, before)
+	}
+	if before && cursor >= 0 {
+		f, err := os.Open(m.store.logPath(id, runID))
+		if err != nil {
+			return LogPage{}, err
+		}
+		cursor, err = previousLogPage(f, cursor)
+		f.Close()
+		if err != nil {
+			return LogPage{}, err
+		}
 	}
 	if cursor == -1 {
 		var err error
@@ -274,6 +329,45 @@ func (m *RunManager) Clear(id string) error {
 	if active > 0 {
 		return problem("busy", "err.localcmd.running")
 	}
+	if err := m.reconcilePublicationsLocked(); err != nil {
+		return err
+	}
+	if m.history != nil {
+		for _, run := range m.runs {
+			if run.record.Command.ID == id {
+				run.mu.Lock()
+				err := m.history.save(run.record)
+				run.mu.Unlock()
+				if err != nil {
+					return err
+				}
+			}
+		}
+		rows, err := m.history.db.Query("SELECT id,round,ended FROM runs WHERE command=? AND admitted=1 AND details='retained'", id)
+		if err != nil {
+			return err
+		}
+		var items []retainedRun
+		for rows.Next() {
+			v := retainedRun{command: id}
+			if err = rows.Scan(&v.id, &v.round, &v.ended); err != nil {
+				rows.Close()
+				return err
+			}
+			v.bytes = m.detailCharge(id, v.id)
+			items = append(items, v)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		for _, v := range items {
+			if err = m.dropDetails(v, "command_deleted"); err != nil {
+				return err
+			}
+		}
+	}
 	group := m.groups[id]
 	// Hide records even on partial deletion; registry retains the cleanup intent.
 	if group != nil {
@@ -282,7 +376,10 @@ func (m *RunManager) Clear(id string) error {
 		}
 	}
 	delete(m.groups, id)
-	return m.store.clear(id)
+	if err := m.store.clear(id); err != nil {
+		return err
+	}
+	return m.history.pinCurrent(id, nil)
 }
 
 func (m *RunManager) Close(ctx context.Context) error {
@@ -305,6 +402,9 @@ func (m *RunManager) Close(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+	}
+	if m.history != nil {
+		return m.history.db.Close()
 	}
 	return nil
 }

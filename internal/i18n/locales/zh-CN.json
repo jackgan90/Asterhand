@@ -66,7 +66,6 @@
   "common.default_node_name": "我的节点",
   "common.default_workspace_name": "工作目录",
   "common.unconfirmed": "未确认",
-
   "brand.primary": "Asterhand",
   "brand.subtitle": "星伴",
   "brand.page_title": "Asterhand · 星伴",
@@ -77,7 +76,6 @@
   "brand.theme.star.desc": "深空霓光",
   "brand.theme.frost.name": "霜蓝",
   "brand.theme.frost.desc": "明亮清透",
-
   "web.topbar.connecting": "连接中…",
   "web.topbar.not_logged_in": "未登录",
   "web.topbar.node_offline": "{name} · 连接中断",
@@ -86,29 +84,23 @@
   "web.topbar.commands": "命令",
   "web.topbar.settings": "设置",
   "web.common.close": "关闭",
-
   "web.login.title": "欢迎回来",
   "web.login.lead": "输入启动时显示的登录码，或直接使用登录链接打开。",
   "web.login.token_label": "登录码",
   "web.login.submit": "登录",
-
   "web.sidebar.my_devices": "我的设备",
   "web.sidebar.pair_open": "＋ 配对新设备",
-
   "web.hero.eyebrow": "你的设备，协同工作",
   "web.hero.title": "今天想完成什么？",
-
   "web.composer.placeholder": "描述你想完成的事…",
   "web.composer.goal_aria": "任务内容",
   "web.composer.device_label": "设备",
   "web.composer.project_label": "目录",
   "web.composer.submit": "发送",
   "web.composer.submitting": "正在发送…",
-
   "web.tasks.heading": "任务",
   "web.tasks.empty_initial": "还没有任务",
   "web.tasks.empty_hint": "还没有任务，在上方描述你想完成的事",
-
   "web.node.online": "在线",
   "web.node.offline": "离线",
   "web.node.last_state_prefix": "上次状态：",
@@ -121,20 +113,17 @@
   "web.node.offline_queued_hint": " · 设备离线，恢复连接后自动送达",
   "web.node.invite_copied": "已复制，请在 10 分钟内粘贴到另一台设备。",
   "web.node.pair_success": "配对成功",
-
   "web.vm.local_reason": "本机：{detail}",
   "web.vm.target_reason": "所选设备：{detail}",
   "web.vm.missing_project": "所选设备还没有工作目录，请先在设置中添加。",
   "web.vm.missing_model_status": "未获取到模型配置，请在该设备的设置中检查。",
   "web.vm.legacy_node": "该设备版本较旧（旧版验证规则），请升级后使用。",
-
   "web.settings.title": "设置",
   "web.settings.tabs_aria": "设置分类",
   "web.settings.tab.general": "通用",
   "web.settings.tab.model": "助手",
   "web.settings.tab.hotkey": "快捷输入",
   "web.settings.tab.network": "设备协作",
-
   "web.settings.general.lead": "设备名称、界面语言和外观。",
   "web.settings.general.language_label": "界面语言",
   "web.settings.general.language_hint": "跟随系统语言或固定为指定语言，立即生效。",
@@ -143,7 +132,6 @@
   "web.settings.general.root_label": "工作目录",
   "web.settings.general.root_placeholder": "例如 D:\\AsterhandWorkspace",
   "web.settings.general.root_hint": "文件任务只在此目录内读写；仅聊天可留空。",
-
   "web.settings.model.lead": "选择模型服务，并指定助手可以读写的文件夹。密钥加密保存在本机，不会上传。",
   "web.settings.model.provider_label": "模型服务",
   "web.settings.model.model_label": "模型",
@@ -161,7 +149,6 @@
   "web.settings.probe.passed": "连接正常",
   "web.settings.probe.failed": "测试未通过",
   "web.settings.probe.stale": "配置已变化，可重新测试",
-
   "web.settings.network.lead": "让你的其他设备找到这台电脑。",
   "web.settings.network.detecting": "正在检测网络…",
   "web.settings.network.use_tailnet": "使用 Tailscale 地址",
@@ -175,13 +162,11 @@
   "web.settings.network.stop_button": "停止",
   "web.settings.network.stop_confirm": "停止本机服务？\n\n执行中的任务会停止，下次启动时自动核对；尚未发出的消息将丢弃。其他设备已接收的任务不受影响。",
   "web.settings.network.stopping_notice": "服务正在停止，可从启动入口重新打开。",
-
   "web.settings.save_button": "保存设置",
   "web.settings.saved_prefix": "设置已保存。",
   "web.settings.saved_chat_ready": "模型已就绪，可以直接聊天。",
   "web.settings.saved_chat_optional": "需要模型功能时再填写 API Key 即可，无需提前测试。",
   "web.settings.saved_restart_required": "监听地址已修改，请停止本机服务后重新启动。",
-
   "web.desktop.lead": "随时按下快捷键，呼出星伴对话面板。",
   "web.desktop.loading": "正在读取…",
   "web.desktop.enable_label": "启用快捷输入",
@@ -219,7 +204,6 @@
   "web.desktop.reg.unsupported": "当前系统暂不支持",
   "web.desktop.reg.config_invalid": "配置无效，请恢复默认",
   "web.desktop.reg.pending": "尚未生效",
-
   "web.pair.eyebrow": "设备协作",
   "web.pair.title": "配对新设备",
   "web.pair.step1_title": "邀请其他设备",
@@ -233,7 +217,6 @@
   "web.pair.peer_code_aria": "对方的配对码",
   "web.pair.peer_code_placeholder": "粘贴配对码",
   "web.pair.submit": "添加设备",
-
   "web.commands.title": "本地命令",
   "web.commands.lead": "在快捷面板中输入 / 即可选择并运行命令。脚本在后台运行，不接受交互输入。",
   "web.commands.sidebar_aria": "已添加的命令",
@@ -267,7 +250,6 @@
   "web.commands.deleted_done": "已删除（脚本文件保留）。",
   "web.commands.saved_done": "已保存，快捷面板中立即可用。",
   "web.commands.conflict_suffix": " 请复制需要保留的内容后点击刷新。",
-
   "web.detail.title": "任务详情",
   "web.task.state.queued": "排队中",
   "web.task.state.running": "执行中",
@@ -309,10 +291,8 @@
   "web.task.detail.acceptance": "你的确认",
   "web.task.detail.tech_summary": "技术记录",
   "web.task.detail.tech_meta": "任务 ID {id} · 第 {attempt} 次尝试 · 创建于 {created}",
-
   "web.api.same_origin_only": "请求必须使用本机同源 API",
   "web.api.request_failed": "请求失败 ({status})",
-
   "quickinput.nav_aria": "会话操作",
   "quickinput.history": "历史",
   "quickinput.new_chat": "新对话",
@@ -402,7 +382,6 @@
   "quickinput.ui.sending_wait_switch": "消息正在发送，请稍后切换会话",
   "quickinput.ui.ime_wait_switch": "请先完成当前输入法组合，再切换会话",
   "quickinput.ui.draft_changed_reselect": "草稿已变化，请重新选择要切换的会话",
-
   "desktop.state.stopping": "正在退出",
   "desktop.state.running": "节点运行中",
   "desktop.tray.title_with_name": "Asterhand · {name}",
@@ -438,7 +417,6 @@
   "desktop.cli.flag.locale": "界面语言标识",
   "desktop.launcher.flag.no_browser": "启动节点但不打开浏览器",
   "desktop.launcher.flag.quiet": "失败只返回非零状态，不弹出对话框",
-
   "status.availability.invalid_config": "模型或运行时配置无效，请检查本机节点设置",
   "status.availability.credential_missing": "请在本机节点设置中配置模型 API key",
   "status.availability.credential_unreadable": "模型凭据无法读取，请在本机节点设置中重新保存 API key",
@@ -464,12 +442,10 @@
   "status.quickinput.host_recovering": "输入界面中断，正在恢复",
   "status.quickinput.recovery_host": "输入界面曾中断，已恢复主进程最后接收的草稿；尚未送达的输入或未确认候选可能丢失。",
   "status.quickinput.recovery_banner": "输入界面曾中断，已恢复主进程最后接收的草稿；请检查未完成的输入。",
-
   "err.cli.picker_no_args": "脚本选择不接受参数",
   "err.cli.available_commands": "可用命令: setup, start, open, status, doctor, repair, version",
   "err.cli.acceptance_delay_range": "验收延迟必须为 0—60 秒",
   "err.cli.locale_invalid": "不支持的语言标识",
-
   "err.http.invalid_host": "无效的本机 Web Host",
   "err.http.login_link_required": "请使用节点启动时的登录链接",
   "err.http.origin_failed": "请求来源校验失败",
@@ -482,7 +458,6 @@
   "err.http.invalid_cursor_resync": "游标无效，请重新获取任务快照",
   "err.http.node_stopping_restart": "节点正在退出，请稍后重新启动",
   "err.http.extra_body": "请求包含多余内容",
-
   "err.app.listen_pending_restart": "节点监听配置尚未生效，请重启本机节点后再配对",
   "err.app.name_required": "请填写节点名称",
   "err.app.root_must_be_abs": "授权目录必须为绝对路径",
@@ -509,15 +484,12 @@
   "err.app.remote_peer_revoked": "peer 已撤销",
   "err.app.remote_invalid_answer": "回答无效",
   "err.app.remote_answer_conflict": "同一回答 ID 内容不同",
-
   "err.config.dedicated_dir_required": "节点数据目录必须是独立的应用目录",
   "err.config.dir_not_empty": "此目录已有其他内容，请选择空目录或已有 Asterhand 数据目录",
   "err.config.credential_corrupt": "凭据格式无效，请重新配对",
   "err.config.service_locked": "此节点数据目录已由另一个服务持有，或目录不可写",
   "err.config.invalid_credential_ref": "凭据引用格式无效",
-
   "err.network.listen_format": "节点监听地址格式为 IP:端口，端口范围 1—65535",
-
   "err.peer.address_changed_during_verify": "节点地址在校验期间变化，请稍后重试",
   "err.peer.identity_changed": "配对身份或授权已变化，请重新检查节点",
   "err.peer.metadata_mismatch": "节点元数据与已配对身份不符",
@@ -537,14 +509,11 @@
   "err.peer.connect_failed": "连接 {endpoint} 失败: {err}",
   "err.peer.response_oversized": "节点响应超过大小限制",
   "err.peer.token_invalid_or_revoked": "peer 凭据无效或已撤销",
-
   "err.llm.model_unsupported": "DeepSeek 模型未支持: {model}",
   "err.llm.custom_endpoint_unsupported": "当前 DeepSeek adapter 尚未支持自定义 endpoint",
   "err.llm.provider_missing": "模型 provider 未安装: {id}",
-
   "err.env.manifest_mismatch": "安装包依赖清单与程序内嵌清单不符",
   "err.env.bundle_target": "安装包目标 {id}: {err}",
-
   "err.store.rejection_mismatch": "任务拒绝记录与请求不匹配",
   "err.store.invalid_operation_evidence": "无效的文件完成证据",
   "err.store.evidence_wrong_attempt": "文件证据不属于当前 attempt",
@@ -555,7 +524,6 @@
   "err.store.schema_newer": "数据库版本 {schema} 高于当前支持版本 {supported}，请使用较新的 Asterhand",
   "err.store.event_oversized": "事件超过 64 KiB 上限",
   "err.store.invalid_cursor": "无效游标",
-
   "err.tasks.invalid_request_bounds": "请求 ID 或任务长度无效",
   "err.tasks.unsupported_mode": "不支持的任务模式",
   "err.tasks.invalid_start_before": "启动截止时间无效",
@@ -593,7 +561,6 @@
   "err.tasks.approval_local_only": "审批必须在执行节点本机处理",
   "err.tasks.answer_already_answered": "问题已经回答",
   "err.tasks.attempt_state_changed": "当前 attempt 状态已改变",
-
   "err.executor.missing_credential": "请在本机设置中配置所选模型的凭据",
   "err.executor.openclaw_missing": "OpenClaw 运行环境未安装，请运行 repair",
   "err.executor.openclaw_invalid_output": "OpenClaw 未返回有效结果: {err}; {detail}",
@@ -617,7 +584,6 @@
   "err.executor.protected_dir_invalid": "运行时保护目录无效: {err}",
   "err.executor.workspace_overlap": "授权目录必须与节点数据和运行时保护目录分离",
   "err.executor.abs_dir_required": "需要绝对目录路径",
-
   "err.conv.not_found": "会话不存在",
   "err.conv.catalog_mismatch": "会话目录版本或目标不匹配",
   "err.conv.turn_mismatch": "轮次目录版本或目标不匹配",
@@ -670,7 +636,6 @@
   "err.conv.runtime.starting_draft_kept": "聊天运行时仍在启动，草稿已保留，请稍后重试",
   "err.conv.runtime.closed": "会话运行时已关闭",
   "err.conv.runtime.binding_unavailable": "原会话的运行时绑定不可用，请恢复原配置",
-
   "err.chatbridge.not_dispatched_conn": "发送前连接未就绪，草稿已保留，请刷新后重新发送",
   "err.chatbridge.not_dispatched_session": "发送前会话已变化，草稿已保留，请刷新后重新发送",
   "err.chatbridge.invalid_wait": "运行时启动等待参数无效",
@@ -698,7 +663,6 @@
   "err.chatbridge.page_oversized": "会话结果超过分页限制",
   "err.chatbridge.runtime_unavailable": "会话运行时暂不可用，请核对状态",
   "err.chatbridge.invalid_fragment_offset": "消息片段位置无效",
-
   "err.localcmd.invalid_name": "英文名须以字母开头，只包含字母、数字、连字符或下划线，最多 64 字符",
   "err.localcmd.invalid_aliases_desc": "最多 16 个别名，描述最多 512 UTF-8 字节且不包含控制字符",
   "err.localcmd.invalid_alias": "别名不能为空、以 / 开头或包含控制字符，最多 128 UTF-8 字节",
@@ -730,7 +694,6 @@
   "err.localcmd.precheck_timeout": "启动前检查超时，请重试",
   "err.localcmd.stat_timeout": "文件检查超时，请检查磁盘状态后重试",
   "err.localcmd.invalid_wire_req": "本地命令请求无效",
-
   "err.quickinput.modifiers_only": "快捷键只支持 Ctrl、Alt 和 Shift 修饰键",
   "err.quickinput.ctrl_or_alt_required": "快捷键至少包含 Ctrl 或 Alt",
   "err.quickinput.unsupported_key": "不支持该按键，请选择字母、数字或命名键（F12/Win/Fn 除外）",
@@ -831,7 +794,6 @@
   "err.quickinput.browser_cleaning": "WebView2 浏览器仍在清理，保留 profile",
   "err.quickinput.host_privilege_error": "输入宿主权限异常：必须使用非提权令牌",
   "err.quickinput.focus_denied_taskbar": "系统拒绝激活输入框，请从任务栏重试",
-
   "err.desktop.queue_full": "桌面操作队列已满",
   "err.desktop.tray_closed": "托盘已关闭",
   "err.desktop.hotkey_ids_exhausted": "快捷键注册 ID 已耗尽，请重新启动节点",
@@ -849,7 +811,6 @@
   "err.desktop.create_window_failed": "创建托盘窗口失败: {err}",
   "err.desktop.register_taskbar_msg": "注册任务栏恢复消息失败: {err}",
   "err.desktop.create_timer_failed": "创建托盘状态定时器失败: {err}",
-
   "err.launch.log_regular_file": "启动器日志必须是普通文件",
   "err.launch.read_install_failed": "读取安装记录失败，请重新运行安装器：{err}",
   "err.launch.unsupported_install_schema": "安装记录版本不受支持，请重新运行安装器",
@@ -968,5 +929,6 @@
   "web.graph.no_script": "未选择脚本",
   "web.graph.more": "更多设置",
   "web.graph.empty_selection": "选中一个步骤后在这里编辑它的脚本。右键画布或双击空白处添加步骤，从步骤右侧的圆点拖到另一个步骤即可连线。",
-  "err.graph.layout_too_large": "步骤分布范围过大：横向或纵向跨度不能超过 8000，请把步骤移近一些后再保存。"
+  "err.graph.layout_too_large": "步骤分布范围过大：横向或纵向跨度不能超过 8000，请把步骤移近一些后再保存。",
+  "common.draft.agent_changes": "Agent 编辑"
 }

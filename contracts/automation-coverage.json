@@ -1,0 +1,226 @@
+{
+  "api_version": 1,
+  "groups": [
+    {
+      "id": "commands",
+      "ui": "命令与脚本图管理、搜索、保存和运行",
+      "tests": [
+        "internal/localcommands/registry_test.go",
+        "tests/graph-editor.test.mjs",
+        "tests/local-command-management.test.mjs"
+      ],
+      "operations": [
+        "commands.clone",
+        "commands.create",
+        "commands.delete",
+        "commands.get",
+        "commands.list",
+        "commands.patch",
+        "commands.run",
+        "commands.search",
+        "commands.validate"
+      ]
+    },
+    {
+      "id": "runs",
+      "ui": "当前与保留实例、结果、停止和日志",
+      "tests": [
+        "internal/localcommands/run_history_test.go",
+        "internal/localcommands/log_text_test.go",
+        "internal/localcommands/concurrent_runs_test.go",
+        "internal/app/automation_logs_windows_test.go"
+      ],
+      "operations": [
+        "logs.read",
+        "logs.tail",
+        "logs.wait",
+        "runs.get",
+        "runs.list",
+        "runs.stop",
+        "runs.wait"
+      ]
+    },
+    {
+      "id": "chat",
+      "ui": "会话、消息、普通发送、连接与指定回复停止",
+      "tests": [
+        "internal/conversation/queue_test.go",
+        "internal/app/automation_conversations_test.go"
+      ],
+      "operations": [
+        "conversations.connect",
+        "conversations.connection",
+        "conversations.create",
+        "conversations.get",
+        "conversations.list",
+        "conversations.send",
+        "messages.get",
+        "messages.list",
+        "turns.get",
+        "turns.stop",
+        "turns.wait"
+      ]
+    },
+    {
+      "id": "tasks",
+      "ui": "现有本地及远端任务、普通回答、取消与核对关闭",
+      "tests": [
+        "internal/tasks/automation_test.go",
+        "internal/tasks/tools_test.go",
+        "internal/app/integration_test.go",
+        "internal/app/interaction_test.go",
+        "internal/app/automation_tasks_test.go"
+      ],
+      "operations": [
+        "tasks.answer",
+        "tasks.cancel",
+        "tasks.events",
+        "tasks.get",
+        "tasks.list",
+        "tasks.reconcile",
+        "tasks.resolve",
+        "tasks.submit"
+      ]
+    },
+    {
+      "id": "settings",
+      "ui": "普通设置、现有模型选择、热键检查和桌面恢复",
+      "tests": [
+        "tests/desktop-settings.test.mjs",
+        "tests/web-interactions.test.mjs"
+      ],
+      "operations": [
+        "desktop.open",
+        "desktop.retry",
+        "models.list",
+        "models.select",
+        "settings.check_hotkey",
+        "settings.get",
+        "settings.patch"
+      ]
+    },
+    {
+      "id": "node",
+      "ui": "已授权节点信息、诊断和显式启动停止",
+      "tests": [
+        "internal/launch/automation_windows_test.go",
+        "internal/app/automation_composition_test.go"
+      ],
+      "operations": [
+        "diagnostics.inspect",
+        "diagnostics.run",
+        "node.start",
+        "node.status",
+        "node.stop",
+        "node.version",
+        "nodes.capabilities",
+        "nodes.get",
+        "nodes.list"
+      ]
+    },
+    {
+      "id": "drafts",
+      "ui": "直接读取、修改和提交打开编辑器中的普通未保存内容",
+      "tests": [
+        "internal/app/automation_live_editors_test.go",
+        "tests/live-editors.test.mjs"
+      ],
+      "operations": [
+        "drafts.list",
+        "drafts.get",
+        "drafts.update",
+        "drafts.commit"
+      ]
+    },
+    {
+      "id": "composition",
+      "ui": "代理扩展：批量读写、发现和原操作收据",
+      "tests": [
+        "internal/app/automation_composition_test.go",
+        "internal/automation/registry_test.go",
+        "internal/app/automation_transport_windows_test.go"
+      ],
+      "operations": [
+        "batches.get",
+        "batches.submit",
+        "capabilities",
+        "operations.get",
+        "operations.new_id",
+        "read.many"
+      ]
+    }
+  ],
+  "web_endpoints": {
+    "/api/automation/human-call": "composition",
+    "/api/desktop/check": "settings",
+    "/api/desktop/locale": "settings",
+    "/api/desktop/recording/cancel": "display",
+    "/api/desktop/recording/poll": "display",
+    "/api/desktop/recording/start": "display",
+    "/api/desktop/retry": "settings",
+    "/api/desktop/settings": "settings",
+    "/api/info": "node",
+    "/api/invite": "human",
+    "/api/jobs": "tasks",
+    "/api/jobs/": "tasks",
+    "/api/local-commands": "commands",
+    "/api/local-commands/": "commands",
+    "/api/local-commands/browse": "known-path",
+    "/api/local-commands/state": "runs",
+    "/api/login": "human",
+    "/api/network": "node",
+    "/api/outbox": "tasks",
+    "/api/pair": "human",
+    "/api/peers": "node",
+    "/api/probe": "node",
+    "/api/remote/": "tasks",
+    "/api/session": "human",
+    "/api/settings": "settings",
+    "/api/stop": "node",
+    "/api/stream": "tasks",
+    "/api/automation/editor": "drafts",
+    "/api/local-commands/delete": "commands"
+  },
+  "native_actions": {
+    "internal/localcommands/wire/protocol.go": {
+      "launch": "commands",
+      "list": "commands",
+      "logs": "commands",
+      "read_log": "commands",
+      "runs": "commands",
+      "settings": "commands",
+      "status": "commands",
+      "stop": "commands",
+      "stop_all": "commands",
+      "tail_log": "commands"
+    },
+    "internal/conversation/wire/protocol.go": {
+      "cancel": "chat",
+      "connect": "chat",
+      "connection": "chat",
+      "create": "chat",
+      "enqueue": "chat",
+      "hello": "chat",
+      "history": "chat",
+      "list": "chat",
+      "message": "chat",
+      "prepare": "chat",
+      "queue": "chat",
+      "queue_item": "chat",
+      "reconcile": "chat",
+      "select": "chat",
+      "submit": "chat"
+    },
+    "internal/quickinput/hostipc/editor.go": {
+      "list": "drafts",
+      "get": "drafts",
+      "commit": "drafts",
+      "update": "drafts"
+    }
+  },
+  "exceptions": {
+    "human": "认证、秘密、配对及授权须人类操作；混合入口逐字段按 coverage.md 分类。",
+    "display": "纯展示操作以结构化读取或显式设置等价替代；实体按键录制不需要模拟。",
+    "known-path": "脚本选择器以设置已知本地绝对路径等价替代，不增加任意目录浏览。"
+  }
+}

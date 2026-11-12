@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackgan90/Asterhand/internal/config"
+
 	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/model"
 	"github.com/jackgan90/Asterhand/internal/quickinput/hostipc"
@@ -163,7 +164,7 @@ func (s *remoteSurface) receive(m hostipc.Message) error {
 		}
 		chat.dispatch(s, m)
 		return nil
-	case hostipc.SnapshotDone, hostipc.State:
+	case hostipc.SnapshotDone, hostipc.State, hostipc.EditorResult:
 		s.mu.Lock()
 		waiter := s.waiters[m.Request]
 		if m.Kind == hostipc.SnapshotDone && (m.Sequence > s.lastSequence || m.Epoch != s.epoch || m.Revision > s.acceptedRevision) {
@@ -247,10 +248,15 @@ func (s *remoteSurface) Toggle() {
 }
 
 func (s *remoteSurface) call(ctx context.Context, m hostipc.Message, expected hostipc.Kind) error {
+	_, err := s.exchange(ctx, m, expected)
+	return err
+}
+
+func (s *remoteSurface) exchange(ctx context.Context, m hostipc.Message, expected hostipc.Kind) (hostipc.Message, error) {
 	s.mu.Lock()
 	if s.closing || len(s.waiters) >= 8 {
 		s.mu.Unlock()
-		return i18n.Err("err.quickinput.surface_busy")
+		return hostipc.Message{}, i18n.Err("err.quickinput.surface_busy")
 	}
 	s.request++
 	m.Request = s.request
@@ -259,21 +265,21 @@ func (s *remoteSurface) call(ctx context.Context, m hostipc.Message, expected ho
 	s.mu.Unlock()
 	defer func() { s.mu.Lock(); delete(s.waiters, m.Request); s.mu.Unlock() }()
 	if err := s.send(m); err != nil {
-		return err
+		return hostipc.Message{}, err
 	}
 	select {
 	case result := <-waiter:
 		if result.Kind != expected {
-			return hostFailure("host_protocol_invalid")
+			return hostipc.Message{}, hostFailure("host_protocol_invalid")
 		}
 		if result.Code != "" {
-			return hostFailure(result.Code)
+			return hostipc.Message{}, hostFailure(result.Code)
 		}
-		return nil
+		return result, nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return hostipc.Message{}, ctx.Err()
 	case <-s.done:
-		return s.failure()
+		return hostipc.Message{}, s.failure()
 	}
 }
 

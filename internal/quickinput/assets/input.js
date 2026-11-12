@@ -4,6 +4,7 @@ import {chatPanel} from "./chat-ui.mjs";
 import {ComposerLayout} from "./composer-layout.mjs";
 import {commandPanel} from "./command-ui.mjs";
 import {quotedCommand} from "./command-model.mjs";
+import {connectLiveInput} from './live-input.mjs';
 import {applyI18n, localizeMessage, onLocaleChange, setLocale, t} from "./i18n.mjs";
 export function inputEditor(bridge) {
   const cleanup = [];
@@ -137,6 +138,11 @@ export function inputEditor(bridge) {
   return {
     dispose,
     post: send,
+    liveState() {return generation && !composing && !staged ? {text:input.value,revision} : null;},
+    replaceLive(text) {
+      if(!generation||composing||staged||!validDraft(text))throw Object.assign(new Error('busy'),{code:'busy'});
+      input.value=text;commit(true);
+    },
     onSubmit(callback) { submit = callback; },
     snapshot() { if (!generation || composing) return null; commit(); return {text: staged ? "" : previous, revision}; },
     stageSubmission(operation, snapshot) {
@@ -169,3 +175,4 @@ export function inputEditor(bridge) {
 const bridge = webview2Bridge();
 export const editor = inputEditor(bridge);
 export const chat = chatPanel(bridge, editor);
+connectLiveInput(bridge,editor,chat);

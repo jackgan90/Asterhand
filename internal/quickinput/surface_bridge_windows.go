@@ -24,8 +24,10 @@ func NativeFactory(c *Controller) SurfaceFactory {
 			s.commands = c.commands
 			s.mu.Unlock()
 			c.mu.Lock()
+			handler := c.liveEditors
 			c.status.RuntimeVersion = s.runtime
 			c.mu.Unlock()
+			s.serveEditors(handler)
 		}
 		return s, err
 	}
@@ -101,6 +103,8 @@ func (s *nativeSurface) bridgeMessage(raw string) {
 		s.chatRequest(m)
 	case "command":
 		s.commandRequest(m)
+	case "editor_reply":
+		s.finishEditorRequest(m.EditorReply)
 	}
 }
 

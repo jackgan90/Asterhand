@@ -6,7 +6,7 @@
 
 ## 日常自动化、CLI 与 MCP
 
-[统一自动化计划](features/agent-automation/plan.md)的实现、工程验证、独立审核及用户验收已完成。CLI/MCP 已覆盖[日常业务操作](../automation/coverage.md)和未保存草稿，客户端与 Web 保留原有呈现和交互；验证方法及专项环境边界见[验证说明](features/agent-automation/validation.md)。
+[统一自动化计划](features/agent-automation/plan.md)的实现、工程验证、独立审核及用户验收已完成。CLI/MCP 已覆盖[日常业务操作](../automation/coverage.md)和未保存草稿，客户端与 Web 保留原有呈现和交互；验证方法及专项环境边界见[验证说明](features/agent-automation/validation.md)。后续补充了[命令与脚本图 Schema 自描述增强](features/command-schema-self-description/plan.md)（工程验证及本机用户验收通过）。
 
 ## 已实现的 Windows 助手基础
 

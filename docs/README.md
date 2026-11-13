@@ -25,7 +25,7 @@
 
 ## 其他入口
 
-- [统一自动化、CLI 与 MCP 计划](development/features/agent-automation/plan.md)、[日常操作覆盖清单](automation/coverage.md)、[验证方法](development/features/agent-automation/validation.md)：统一人类与 agent 的日常业务规则、可靠调用、批处理与未保存草稿接手；操作方法见[使用指南](automation/usage.md)，认证和授权管理保留人工。
+- [统一自动化、CLI 与 MCP 计划](development/features/agent-automation/plan.md)、[命令与脚本图 Schema 自描述增强](development/features/command-schema-self-description/plan.md)、[日常操作覆盖清单](automation/coverage.md)、[验证方法](development/features/agent-automation/validation.md)：统一人类与 agent 的日常业务规则、可靠调用、批处理、未保存草稿接手与命令/图 Schema 自描述（自描述增强工程验证及本机用户验收通过）；操作方法见[使用指南](automation/usage.md)，认证和授权管理保留人工。
 
 - [脚本图编辑历史与撤销重做](development/features/graph-edit-history/plan.md)：操作快照、Ctrl+Z / Ctrl+Y、输入与拖动合并、保存后保留历史及脏状态比较；工程验证及本机用户验收通过，包含实体中文输入法设置节点名称与重命名。
 

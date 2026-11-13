@@ -4,7 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/jackgan90/Asterhand/internal/automation"
+	"github.com/jackgan90/Asterhand/internal/localcommands"
 )
 
 func TestAutomationCoverage(t *testing.T) {
@@ -56,5 +60,61 @@ func TestAutomationCoverage(t *testing.T) {
 	}
 	for name := range names {
 		t.Errorf("coverage advertises missing operation %s", name)
+	}
+}
+
+func TestCommandAndGraphSchemasAreSelfDescribing(t *testing.T) {
+	defs := AutomationDefinitions()
+	if server := automation.NewMCPServer(nil, automation.Principal{Roles: []string{"read", "edit", "execute"}}, defs); server == nil {
+		t.Fatal("failed to construct MCP server with enriched schemas")
+	}
+	byName := map[string]automation.Definition{}
+	for _, d := range defs {
+		byName[d.Name] = d
+	}
+	for _, op := range []string{"commands.create", "commands.patch", "commands.validate", "commands.run", "logs.read"} {
+		if _, ok := byName[op]; !ok {
+			t.Fatalf("missing definition %s", op)
+		}
+	}
+	createText := string(compactResult(byName["commands.create"].Schema))
+	for _, want := range []string{
+		"^[A-Za-z][A-Za-z0-9_-]{0,63}$",
+		"^[a-zA-Z0-9_-]{16,64}$",
+		"0..16 aliases",
+		"max 8 active instances per command, 32 node-wide",
+		"0..8000",
+		"1..16",
+		".bat, .cmd, or .ps1",
+		"non-breakaway Job object",
+		"only 'abort'",
+	} {
+		if !strings.Contains(createText, want) {
+			t.Fatalf("commands.create schema missing %q", want)
+		}
+	}
+	validateOut := string(compactResult(byName["commands.validate"].OutputSchema))
+	if !strings.Contains(validateOut, "empty string on unsaved commands.validate output") {
+		t.Fatalf("commands.validate output schema missing empty id/revision note")
+	}
+	n := newNode(t, &fakeExecutor{})
+	a := n.app
+	_, token := grantTestAutomation(t, a, []string{"read", "edit"}, map[string][]string{"commands": {"*"}})
+	valid := automation.CommandValidate{Candidate: automation.CommandInput{Name: "valid_cmd", Graph: apiTestGraph(filepath.Join(t.TempDir(), "missing.ps1"))}}
+	reply := testAutomationCall(a, token, "commands.validate", "", valid)
+	if reply.Error != nil {
+		t.Fatalf("expected valid candidate, got %v", reply.Error)
+	}
+	shortID := localcommands.Command{Name: "short_id", Graph: apiTestGraph(filepath.Join(t.TempDir(), "missing.ps1"))}
+	shortID.Graph.Nodes[1].ID = "short"
+	badIDReply := testAutomationCall(a, token, "commands.validate", "", automation.CommandValidate{Candidate: automation.CommandInput{Name: shortID.Name, Graph: shortID.Graph}})
+	if badIDReply.Error == nil || badIDReply.Error.MessageKey != "err.graph.identity" || !strings.Contains(badIDReply.Error.Message, "16") {
+		t.Fatalf("unexpected identity validation error: %+v", badIDReply.Error)
+	}
+	badStart := apiTestGraph(filepath.Join(t.TempDir(), "missing.ps1"))
+	badStart.Nodes[0].Script = filepath.Join(t.TempDir(), "x.ps1")
+	badStartReply := testAutomationCall(a, token, "commands.validate", "", automation.CommandValidate{Candidate: automation.CommandInput{Name: "bad_start", Graph: badStart}})
+	if badStartReply.Error == nil || badStartReply.Error.MessageKey != "err.graph.node" || !strings.Contains(badStartReply.Error.Message, "start/script/end") {
+		t.Fatalf("unexpected node validation error: %+v", badStartReply.Error)
 	}
 }

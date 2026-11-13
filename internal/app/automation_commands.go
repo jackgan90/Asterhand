@@ -31,16 +31,16 @@ func (a *App) registerAutomationCommands(r *automation.Registry) {
 			}
 			return automationObject(c, v.Format, v.Cursor, []any{"command", call.Principal.ID, v.ID, c.Revision})
 		})
-	automation.Register(r, automation.Definition{Name: "commands.validate", Description: "Normalize and validate a candidate without saving or executing it", Role: "read", Large: true}, nil, func(p automation.Principal, v automation.CommandValidate) error { return p.Require("commands", v.ID) },
+	automation.Register(r, automation.Definition{Name: "commands.validate", Description: "Normalize and validate a candidate command and DAG without saving or executing it (missing script files on disk are allowed at save time; returns empty id/revision)", Role: "read", Large: true}, nil, func(p automation.Principal, v automation.CommandValidate) error { return p.Require("commands", v.ID) },
 		func(ctx context.Context, call automation.Call, v automation.CommandValidate) (automation.Outcome, error) {
 			c, err := a.Commands.Validate(v.Candidate.Command())
 			return automation.Outcome{Data: c}, commandError(err)
 		})
-	automation.Register(r, automation.Definition{Name: "commands.create", Description: "Atomically create a command with a complete graph", Role: "edit", Write: true, Batch: true, Large: true}, nil, func(p automation.Principal, v automation.CommandInput) error { return p.Require("commands", "") },
+	automation.Register(r, automation.Definition{Name: "commands.create", Description: "Atomically create a command with a complete DAG; script file availability transitions asynchronously from checking to ready", Role: "edit", Write: true, Batch: true, Large: true}, nil, func(p automation.Principal, v automation.CommandInput) error { return p.Require("commands", "") },
 		func(ctx context.Context, call automation.Call, v automation.CommandInput) (automation.Outcome, error) {
 			return a.saveAutomationCommand(call, v.Command(), "")
 		})
-	automation.Register(r, automation.Definition{Name: "commands.patch", Description: "Apply all graph and command edits atomically against the expected object revision", Role: "edit", Write: true, Batch: true}, func(v automation.CommandPatch) string { return v.ID }, func(p automation.Principal, v automation.CommandPatch) error { return p.Require("commands", v.ID) }, a.automationCommandPatch)
+	automation.Register(r, automation.Definition{Name: "commands.patch", Description: "Atomically apply command metadata and full-graph or step-level edits against expected_revision (rejected while any instance is running)", Role: "edit", Write: true, Batch: true}, func(v automation.CommandPatch) string { return v.ID }, func(p automation.Principal, v automation.CommandPatch) error { return p.Require("commands", v.ID) }, a.automationCommandPatch)
 	automation.Register(r, automation.Definition{Name: "commands.clone", Description: "Copy configuration with new command and step identities", Role: "edit", Write: true, Batch: true}, func(v automation.CommandClone) string { return v.ID }, func(p automation.Principal, v automation.CommandClone) error {
 		if err := p.Require("commands", v.ID); err != nil {
 			return err
@@ -55,7 +55,7 @@ func (a *App) registerAutomationCommands(r *automation.Registry) {
 			ref, err := a.Commands.DeleteOperation(v.ID, v.Revision, call.Identity)
 			return automation.Outcome{Data: ref, Summary: ref, Accepted: ref.ID != "", Unknown: ref.ID != "" && err != nil}, commandError(err)
 		})
-	automation.Register(r, automation.Definition{Name: "commands.run", Description: "Start exactly one graph instance at the expected revision; return its fixed run ID", Role: "execute", Write: true, Batch: true}, func(v automation.CommandVersion) string { return v.ID }, func(p automation.Principal, v automation.CommandVersion) error { return p.Require("commands", v.ID) },
+	automation.Register(r, automation.Definition{Name: "commands.run", Description: "Start one graph instance at expected_revision and return its run_id; Windows runs each script step non-interactively in a non-breakaway Job object (holds 1 of 8 node slots until all child processes exit)", Role: "execute", Write: true, Batch: true}, func(v automation.CommandVersion) string { return v.ID }, func(p automation.Principal, v automation.CommandVersion) error { return p.Require("commands", v.ID) },
 		func(ctx context.Context, call automation.Call, v automation.CommandVersion) (automation.Outcome, error) {
 			record, err := a.Commands.LaunchOperation(ctx, v.ID, v.Revision, &call.Identity, call.Check)
 			if record == nil {

@@ -21,27 +21,27 @@ const AbortGraph FailurePolicy = "abort"
 
 // ScriptGraph belongs to one command. Edges express control dependencies only.
 type ScriptGraph struct {
-	Nodes       []GraphNode `json:"nodes"`
-	Edges       []GraphEdge `json:"edges"`
-	Parallelism int         `json:"parallelism"`
+	Nodes       []GraphNode `json:"nodes" description:"3..64 nodes: exactly one kind=start (no incoming edges), one kind=end (no outgoing edges), and >=1 kind=script; every node must lie on a directed path from start to end"`
+	Edges       []GraphEdge `json:"edges" description:"0..512 directed control-dependency edges (acyclic, no self-loops or duplicates, no incoming edges to start, no outgoing edges from end; edges do not pass env or stdout)"`
+	Parallelism int         `json:"parallelism" description:"Max concurrent script steps per graph run (integer 1..16; 0 defaults to 4; bounded by 8 node-wide script execution slots)"`
 }
 
 type GraphNode struct {
-	ID             string        `json:"id"`
-	Kind           string        `json:"kind"`
-	Name           string        `json:"name"`
-	Script         string        `json:"script,omitempty"`
-	Arguments      []string      `json:"arguments,omitempty"`
-	Directory      string        `json:"directory,omitempty"`
-	TimeoutSeconds *int64        `json:"timeout_seconds,omitempty"`
-	FailurePolicy  FailurePolicy `json:"failure_policy,omitempty"`
-	X              int           `json:"x"`
-	Y              int           `json:"y"`
+	ID             string        `json:"id" description:"Unique step ID within the graph matching ^[a-zA-Z0-9_-]{16,64}$ (16..64 ASCII letters, digits, '_' or '-')"`
+	Kind           string        `json:"kind" description:"Node kind: 'start', 'script', or 'end'. start and end nodes must omit script, arguments, directory, timeout_seconds, and failure_policy"`
+	Name           string        `json:"name" description:"Step display name (max 128 UTF-8 bytes, no control chars): required non-empty for kind=script; empty string '' recommended for start and end"`
+	Script         string        `json:"script,omitempty" description:"Required for kind=script (omit for start/end): local absolute path (max 2048 UTF-8 bytes, no UNC \\\\ or NTFS stream ':') with extension .bat, .cmd, or .ps1. Windows runs .ps1 via WindowsPowerShell\\v1.0\\powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -NonInteractive -File and .bat/.cmd via cmd.exe /d /s /v:off /c with closed stdin, CREATE_NO_WINDOW, and a non-breakaway Job object (step remains running and holds 1 of 8 node slots until all child processes exit)"`
+	Arguments      []string      `json:"arguments,omitempty" description:"Optional fixed arguments for kind=script (max 128 items, <=4096 UTF-8 bytes each, <=8192 JSON-encoded bytes total, no control chars). Literal double quotes are allowed for .ps1 and rejected for .bat/.cmd; spaces do not require manual quoting"`
+	Directory      string        `json:"directory,omitempty" description:"Optional local absolute working directory for kind=script (defaults to script parent directory; max 2048 UTF-8 bytes, no UNC or NTFS stream)"`
+	TimeoutSeconds *int64        `json:"timeout_seconds,omitempty" description:"Optional per-step timeout in seconds (integer 1..9223372036, or null for no timeout; starts when the step process launches)"`
+	FailurePolicy  FailurePolicy `json:"failure_policy,omitempty" description:"Failure policy for kind=script: only 'abort' (default when omitted) is supported; any step failure stops active steps and skips unstarted steps"`
+	X              int           `json:"x" description:"Canvas X coordinate in 0..8000 (typical horizontal layout: 80 + column*280)"`
+	Y              int           `json:"y" description:"Canvas Y coordinate in 0..8000 (typical vertical layout: 120 + row*110)"`
 }
 
 type GraphEdge struct {
-	From string `json:"from"`
-	To   string `json:"to"`
+	From string `json:"from" description:"Predecessor step ID (cannot reference the end node)"`
+	To   string `json:"to" description:"Successor step ID (cannot reference the start node)"`
 }
 
 func graphProblem(key string, node string) error {

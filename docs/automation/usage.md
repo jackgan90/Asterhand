@@ -4,7 +4,7 @@
 
 ## CLI
 
-以下路径为占位值。使用默认节点目录时可以省略 --home。帮助、schema 和生成操作 ID 不要求节点在线。
+以下路径为占位值。使用默认节点目录时可以省略 --home。帮助、schema 和生成操作 ID 不要求节点在线。已安装节点或本地构建安装的当前 `asterhand.exe` 与默认节点目录可从 `%LOCALAPPDATA%\Programs\Asterhand\installation.json` 的 `executable` 和 `data` 字段读取；命令、脚本图、运行与日志的完整字段正则、取值范围、节点约束及 Windows Job 语义均由 `automation schema <操作>` 直接给出。
 
 ```powershell
 & '<安装目录>\versions\<版本>\asterhand.exe' automation help
@@ -13,7 +13,7 @@
 & '<安装目录>\versions\<版本>\asterhand.exe' automation commands.list --home '<节点数据目录>'
 ```
 
-业务参数用 UTF-8 JSON 文件传给 `--input <文件>`，或者用 `--input -` 从 stdin 读取。stdout 是单个 JSON 响应；stderr 是诊断及首次写入前生成的 `operation_id`。自动调用方应先生成并保存操作 ID，再显式传 `--operation-id`，以便进程或连接中断后核对原请求。
+业务参数用 UTF-8（无 BOM）JSON 文件传给 `--input <文件>`，或者用 `--input -` 从 stdin 读取；包含非 ASCII 字符或复杂参数时优先使用 UTF-8 无 BOM 文件。stdout 是单个 JSON 响应；stderr 是诊断及首次写入前生成的 `{"operation_id":...}`（在 PowerShell 中调用时注意避免因 `stderr` 输出触发 `NativeCommandError`）。自动调用方应先生成并保存操作 ID，再显式传 `--operation-id`，以便进程或连接中断后核对原请求。
 
 例如先用 `commands.get` 读取目标的 `id` 和 `revision`，再提交如下 `commands.patch` 参数；图的步骤、边和属性也可在同次 patch 内修改，所有修改通过验证后一次保存。
 

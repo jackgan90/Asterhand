@@ -5,6 +5,7 @@ import {t} from "./i18n.mjs";
 import {localeController} from "./locale-controller.mjs";
 import {$, localizeError, noticeView, applyTheme, restoreTheme, settingsTabs} from "./ui.mjs";
 import {desktopSettings} from "./desktop-settings.mjs";
+import {desktopShortcut} from "./desktop-shortcut.mjs";
 import {displayNodeName, nodeController} from "./node-controller.mjs";
 import {nodeSettings} from "./node-settings.mjs";
 import {taskController} from "./task-controller.mjs";
@@ -30,10 +31,11 @@ export function mountApp() {
   }
   const editors = liveEditors();
   const desktop = desktopSettings(client.api, client.post, {listen, session, editors});
+  const shortcut = desktopShortcut(client.api, client.post, {listen, session});
   const commands = localCommands({...client, listen, session, guarded, actions, editors});
   let commandTarget = new URLSearchParams(location.hash.slice(1)).get("commands");
   const nodes = nodeController({...client, session, guarded, notice, actions, listen, isSubmitting:() => tasks?.submitting() || false});
-  const settings = nodeSettings({...client, session, desktop, guarded, notice, listen, editors, refreshPeers:nodes.refresh});
+  const settings = nodeSettings({...client, session, desktop, shortcut, guarded, notice, listen, editors, refreshPeers:nodes.refresh});
   const view = taskView({guarded, editors, submissionChanged:nodes.updateSubmission, callbacks:{
     answer:(...args) => tasks.answer(...args), cancel:(...args) => tasks.cancel(...args),
     resolve:job => tasks.resolve(job), detail:(...args) => tasks.detail(...args), refresh:() => tasks.refresh(),
@@ -73,6 +75,7 @@ export function mountApp() {
     nodes.relocalize();
     view.relocalize();
     desktop.relocalize();
+    shortcut.relocalize();
     settings.relocalize();
     commands.relocalize();
   };
@@ -140,7 +143,7 @@ export function mountApp() {
       await tasks.refresh(scope);
     },
     connection,
-    stopped:() => { editors.stop(); settings.stop(); desktop.stop(); commands.stop(); notices.stop(); },
+    stopped:() => { editors.stop(); settings.stop(); desktop.stop(); shortcut.stop(); commands.stop(); notices.stop(); },
     failed:error => {
       if (error?.messageKey === "err.http.login_link_required") return;
       notice(localizeError(error));

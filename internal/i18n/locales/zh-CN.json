@@ -930,5 +930,12 @@
   "web.graph.more": "更多设置",
   "web.graph.empty_selection": "选中一个步骤后在这里编辑它的脚本。右键画布或双击空白处添加步骤，从步骤右侧的圆点拖到另一个步骤即可连线。",
   "err.graph.layout_too_large": "步骤分布范围过大：横向或纵向跨度不能超过 8000，请把步骤移近一些后再保存。",
-  "common.draft.agent_changes": "Agent 编辑"
+  "common.draft.agent_changes": "Agent 编辑",
+  "web.desktop.shortcut_label": "显示桌面图标",
+  "web.desktop.shortcut_hint": "在当前用户桌面创建或移除快捷方式。",
+  "status.desktop.shortcut_not_installed": "仅正式安装版本可管理桌面图标。",
+  "err.launch.shortcut_unsupported": "当前系统不支持管理桌面图标",
+  "err.launch.shortcut_conflict": "桌面已存在非本安装的同名快捷方式，为安全起见未覆盖",
+  "err.launch.shortcut_desktop_unavailable": "当前用户的桌面文件夹不可用",
+  "err.launch.shortcut_update_failed": "更新桌面图标失败：{err}"
 }

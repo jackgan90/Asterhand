@@ -20,6 +20,7 @@ import (
 	"github.com/jackgan90/Asterhand/internal/editors"
 	"github.com/jackgan90/Asterhand/internal/executor"
 	"github.com/jackgan90/Asterhand/internal/i18n"
+	"github.com/jackgan90/Asterhand/internal/launch"
 	"github.com/jackgan90/Asterhand/internal/localcommands"
 	"github.com/jackgan90/Asterhand/internal/model"
 	"github.com/jackgan90/Asterhand/internal/peer"
@@ -41,6 +42,7 @@ type App struct {
 	Peers           *peer.Manager
 	Engine          *tasks.Engine
 	Input           *quickinput.Controller
+	Shortcut        *launch.ShortcutManager
 	Chat            *conversation.Service
 	Commands        *localcommands.Registry
 	CommandLogs     quickinput.LogWindowHost
@@ -108,6 +110,7 @@ func New(c *config.Manager, x executor.Executor) (*App, error) {
 	}
 	a.loginToken = string(b)
 	a.Input = quickinput.New(c.Home)
+	a.Shortcut = launch.NewShortcutManager(c.Home)
 	a.Commands = localcommands.Open(c.Home)
 	if err = a.Commands.ConfigureRuns(localcommands.NewRunManager(c.Home, localcommands.NewPlatformBackend(), nil)); err != nil {
 		log.Printf("%s", i18n.T(i18n.Effective(), "err.localcmd.managed_unavailable"))
@@ -215,6 +218,13 @@ func (a *App) Close() error {
 func (a *App) Address() string       { return a.webAddress }
 func (a *App) PeerAddress() string   { return a.peerAddress }
 func (a *App) Done() <-chan struct{} { return a.done }
+
+func (a *App) shortcutStatus() launch.ShortcutStatus {
+	if a == nil || a.Shortcut == nil {
+		return launch.ShortcutStatus{}
+	}
+	return a.Shortcut.Status()
+}
 
 func (a *App) notifyRefresh() {
 	a.refreshMu.Lock()

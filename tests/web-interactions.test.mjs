@@ -200,18 +200,20 @@ test("runtime text created before the locale is restored shows the restored lang
   assert.equal(labels.includes("Add step"), false);
 });
 
-test("theme and language choices do not mark node settings unsaved, and never clear real edits", async t => {
+test("theme, language, and desktop shortcut choices do not mark node settings unsaved, and never clear real edits", async t => {
   const ui = await page(t);
   const form = ui.select("#settings-form"), dirty = ui.select("#settings-dirty");
-  // Theme and language controls live inside the form's DOM, so their events bubble to it.
+  // Theme, language, and desktop shortcut controls live inside the form's DOM, so their events bubble to it.
   const bubble = (type, target) => { const event = new Event(type); Object.defineProperty(event, "target", {value:target}); form.dispatchEvent(event); };
   const theme = Object.assign(ui.document.createElement("input"), {name:"ui-theme", value:"frost"});
   const locale = Object.assign(ui.document.createElement("select"), {id:"settings-locale"});
+  const shortcut = Object.assign(ui.document.createElement("input"), {id:"desktop-shortcut", type:"checkbox", checked:true});
   dirty.hidden = true;
-  for (const type of ["input", "change"]) { bubble(type, theme); bubble(type, locale); }
-  assert.equal(dirty.hidden, true, "choosing a theme or language alone is not an unsaved node setting");
+  for (const type of ["input", "change"]) { bubble(type, theme); bubble(type, locale); bubble(type, shortcut); }
+  assert.equal(dirty.hidden, true, "choosing a theme, language, or desktop shortcut alone is not an unsaved node setting");
   bubble("input", form.elements.name);
   assert.equal(dirty.hidden, false);
   bubble("change", theme);
-  assert.equal(dirty.hidden, false, "a later theme choice keeps the real unsaved edit visible");
+  bubble("change", shortcut);
+  assert.equal(dirty.hidden, false, "a later immediate toggle keeps the real unsaved edit visible");
 });

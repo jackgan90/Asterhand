@@ -49,6 +49,7 @@
 | 日志窗口快速显示与关闭复用、初始化失败恢复和同屏定位（工程验证、独立审计修复复审及本机日志体验与双屏用户验收通过） | [日志窗口响应与定位](features/log-window-responsiveness-and-placement/plan.md)、[验证说明](features/log-window-responsiveness-and-placement/validation.md) |
 | 前端信息精简第一阶段：状态图标化、日志窗口与设置页重组、首次显示语言、日志窗口前台、面板圆角与合并日志按行标注（工程验证、本机用户验收及独立评审复审通过） | [前端信息精简与显示修复](features/frontend-cognitive-simplification/plan.md) |
 | 前端信息精简第二阶段：脚本图编辑器节点式交互，画布平移缩放与全屏、右键菜单、端口拖线、原地改名、属性面板，负坐标编辑与保存前布局平移（工程验证、本机用户验收及独立评审复审通过） | [前端信息精简与显示修复](features/frontend-cognitive-simplification/plan.md) |
+| Windows 正式安装节点运行期桌面图标开关：Web「设置 → 通用」即时切换与 CLI/MCP `settings.desktop_shortcut` 等价操作，外部同名快捷方式冲突保护与升级保留（工程验证及本机用户验收通过） | [运行期桌面图标开关](features/runtime-desktop-shortcut/plan.md) |
 
 ## 后续验证与功能
 

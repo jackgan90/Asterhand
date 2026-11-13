@@ -21,3 +21,6 @@ type ModelSelect struct {
 type HotkeyCheck struct {
 	Binding quickinput.Binding `json:"binding"`
 }
+type DesktopShortcut struct {
+	Enabled bool `json:"enabled" description:"Show (true) or remove (false) this node's desktop icon"`
+}

@@ -10,7 +10,7 @@ const probeKeys = {
   stale: "web.settings.probe.stale",
 };
 
-export function nodeSettings({api, post, session, desktop, guarded, notice, refreshPeers, listen, editors}) {
+export function nodeSettings({api, post, session, desktop, shortcut, guarded, notice, refreshPeers, listen, editors}) {
   let probeTimer, probeGeneration = 0, openGeneration = 0;
   let loadedData = null, lastProbe = null, lastNetwork = null, statusState = null;
   let nameDirty = false, renderedDefaultName = "";
@@ -41,11 +41,13 @@ export function nodeSettings({api, post, session, desktop, guarded, notice, refr
     }
   });
   listen($("#settings"),"close",()=>live?.invalidate());
-  // Language and theme apply immediately through the desktop settings API; they
-  // sit inside this form's DOM but are not submitted with it.
+  // Language, theme, and desktop shortcut apply immediately through the desktop
+  // settings API; they sit inside this form's DOM but are not submitted with it.
   const edited = event => {
-    if(event.target?.id!=="settings-locale"&&!["ui-theme","model","name"].includes(event.target?.name))otherDirty=true;
-    if (event.target?.id !== "settings-locale" && event.target?.name !== "ui-theme") markDirty(true);
+    const id = event.target?.id;
+    const immediate = id === "settings-locale" || id === "desktop-shortcut" || event.target?.name === "ui-theme";
+    if (!immediate && !["model", "name"].includes(event.target?.name)) otherDirty = true;
+    if (!immediate) markDirty(true);
   };
   listen(form, "input", edited);
   listen(form, "change", edited);
@@ -111,6 +113,7 @@ export function nodeSettings({api, post, session, desktop, guarded, notice, refr
     probeGeneration++;
     const scope = session(), generation = ++openGeneration;
     void desktop.open();
+    void shortcut?.open?.();
     const data = await api("/api/settings"),
       c = data.config;
     if (!scope?.active || generation !== openGeneration) return;

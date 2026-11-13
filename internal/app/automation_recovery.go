@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -52,6 +53,24 @@ func (a *App) reconcileAutomationOperation(receipt operations.Receipt) (operatio
 			summary = map[string]string{"operation_id": receipt.ID, "state": "running"}
 		} else {
 			summary = map[string]string{"batch_id": state.ID}
+		}
+	case "settings.desktop_shortcut":
+		state, err := a.Store.AutomationState(receipt.Identity)
+		if errors.Is(err, store.ErrNotFound) {
+			return receipt, nil
+		}
+		if err != nil {
+			return receipt, err
+		}
+		var desired struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err = json.Unmarshal(state.Data, &desired); err != nil {
+			return receipt, nil
+		}
+		st := a.shortcutStatus()
+		if st.Supported && st.Available && !st.Conflict && st.Enabled == desired.Enabled {
+			summary = map[string]bool{"enabled": st.Enabled, "conflict": false}
 		}
 	}
 	if summary == nil {

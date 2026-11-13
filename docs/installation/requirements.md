@@ -53,6 +53,8 @@ INST-30：本地应用缓存按完整实际输入内容识别，包括内嵌提�
 
 INST-31：本地安装长步骤提供持续可见的阶段、耗时、缓存原因与失败信息，重定向日志仍可观察。依赖热命中不复制运行时、不压缩或解压 ZIP；源码校验与基本运行检查保留。详见[快速本地安装计划](../development/features/fast-local-install/plan.md)。
 
+INST-32：正式安装的 Windows 节点支持在运行期查询、创建或移除当前用户桌面快捷方式，以实际快捷方式归属为唯一事实源；同名外部文件拒绝覆盖和删除，未安装运行态明确不可用，后续升级自动保留运行期变更结果。详见[运行期桌面图标计划](../development/features/runtime-desktop-shortcut/plan.md)。
+
 必须通过 [V01 干净环境安装](../testing/acceptance.md)；在开发机直接运行不替代安装验收。
 
 提供 Windows x64 自带运行时的完整包、本地包/固定 Release 安装、摘要校验、独立数据目录、可选登录后启动、doctor/repair 和 Tailscale 引导。Linux 基础入口仍为实验交叉编译产物；干净设备安装按人工验收规程独立验证。

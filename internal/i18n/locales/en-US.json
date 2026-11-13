@@ -930,5 +930,12 @@
   "web.graph.more": "More settings",
   "web.graph.empty_selection": "Select a step to edit its script here. Right-click or double-click the canvas to add a step, and drag from a step's right-hand dot to another step to connect them.",
   "err.graph.layout_too_large": "The steps are spread too far apart: the horizontal or vertical span cannot exceed 8000. Move them closer together and save again.",
-  "common.draft.agent_changes": "Agent edits"
+  "common.draft.agent_changes": "Agent edits",
+  "web.desktop.shortcut_label": "Show desktop icon",
+  "web.desktop.shortcut_hint": "Create or remove the shortcut on your current user desktop.",
+  "status.desktop.shortcut_not_installed": "Desktop icon management is available only in installed builds.",
+  "err.launch.shortcut_unsupported": "Desktop icon management is not supported on this platform",
+  "err.launch.shortcut_conflict": "Another Asterhand shortcut already exists on the desktop and will not be overwritten",
+  "err.launch.shortcut_desktop_unavailable": "Current user desktop folder is unavailable",
+  "err.launch.shortcut_update_failed": "Failed to update desktop icon: {err}"
 }

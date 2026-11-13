@@ -84,9 +84,11 @@
     },
     {
       "id": "settings",
-      "ui": "普通设置、现有模型选择、热键检查和桌面恢复",
+      "ui": "普通设置、桌面图标开关、现有模型选择、热键检查和桌面恢复",
       "tests": [
+        "internal/app/desktop_shortcut_test.go",
         "tests/desktop-settings.test.mjs",
+        "tests/desktop-shortcut.test.mjs",
         "tests/web-interactions.test.mjs"
       ],
       "operations": [
@@ -95,6 +97,7 @@
         "models.list",
         "models.select",
         "settings.check_hotkey",
+        "settings.desktop_shortcut",
         "settings.get",
         "settings.patch"
       ]
@@ -159,6 +162,7 @@
     "/api/desktop/recording/start": "display",
     "/api/desktop/retry": "settings",
     "/api/desktop/settings": "settings",
+    "/api/desktop/shortcut": "settings",
     "/api/info": "node",
     "/api/invite": "human",
     "/api/jobs": "tasks",

@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/jackgan90/Asterhand/internal/i18n"
+	"github.com/jackgan90/Asterhand/internal/launch"
 	"github.com/jackgan90/Asterhand/internal/quickinput"
 )
 
@@ -27,6 +28,10 @@ func (a *App) desktopAPI(w http.ResponseWriter, r *http.Request) {
 		defer func() { <-a.desktopRequests }()
 	default:
 		a.fail(w, r, 429, i18n.Err("err.app.desktop_rate_limited"))
+		return
+	}
+	if r.URL.Path == "/api/desktop/shortcut" {
+		a.desktopShortcutAPI(w, r, reqLocale)
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -83,27 +88,8 @@ func (a *App) desktopAPI(w http.ResponseWriter, r *http.Request) {
 				result = st.Localize(reqLocale)
 			}
 		}
-	case "/api/desktop/recording/start":
-		var input struct {
-			Page string `json:"page_id"`
-		}
-		if err = readDesktop(w, r, &input); err == nil {
-			s, _ := a.authorize(r)
-			if len(input.Page) < 8 || len(input.Page) > 100 {
-				err = desktopErr(400, "err.app.invalid_page_id")
-			} else {
-				result, err = a.Input.StartRecording(s.csrf+":"+input.Page, s.expires)
-			}
-		}
-	case "/api/desktop/recording/poll", "/api/desktop/recording/cancel":
-		var input struct {
-			Page string `json:"page_id"`
-			ID   string `json:"recording_id"`
-		}
-		if err = readDesktop(w, r, &input); err == nil {
-			s, _ := a.authorize(r)
-			result, err = a.Input.Recording(input.ID, s.csrf+":"+input.Page, r.URL.Path == "/api/desktop/recording/cancel")
-		}
+	case "/api/desktop/recording/start", "/api/desktop/recording/poll", "/api/desktop/recording/cancel":
+		result, err = a.desktopRecordingAPI(w, r)
 	default:
 		w.WriteHeader(404)
 		return
@@ -113,6 +99,71 @@ func (a *App) desktopAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	send(w, 200, result)
+}
+
+func (a *App) desktopRecordingAPI(w http.ResponseWriter, r *http.Request) (any, error) {
+	if r.URL.Path == "/api/desktop/recording/start" {
+		var input struct {
+			Page string `json:"page_id"`
+		}
+		if err := readDesktop(w, r, &input); err != nil {
+			return nil, err
+		}
+		s, _ := a.authorize(r)
+		if len(input.Page) < 8 || len(input.Page) > 100 {
+			return nil, desktopErr(400, "err.app.invalid_page_id")
+		}
+		return a.Input.StartRecording(s.csrf+":"+input.Page, s.expires)
+	}
+	var input struct {
+		Page string `json:"page_id"`
+		ID   string `json:"recording_id"`
+	}
+	if err := readDesktop(w, r, &input); err != nil {
+		return nil, err
+	}
+	s, _ := a.authorize(r)
+	return a.Input.Recording(input.ID, s.csrf+":"+input.Page, r.URL.Path == "/api/desktop/recording/cancel")
+}
+
+func (a *App) desktopShortcutAPI(w http.ResponseWriter, r *http.Request, reqLocale string) {
+	if r.Method == http.MethodGet {
+		send(w, 200, a.shortcutStatus().Localize(reqLocale))
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.WriteHeader(405)
+		return
+	}
+	if a.Stopping() || a.Shortcut == nil {
+		a.sendShortcutError(w, reqLocale, launch.NewShortcutError(503, "node_stopping", "err.app.node_stopping", nil))
+		return
+	}
+	var change launch.ShortcutChange
+	if err := readDesktop(w, r, &change); err != nil {
+		a.sendShortcutError(w, reqLocale, err)
+		return
+	}
+	st, err := a.Shortcut.Set(r.Context(), change)
+	if err != nil {
+		a.sendShortcutError(w, reqLocale, err)
+		return
+	}
+	send(w, 200, st.Localize(reqLocale))
+}
+
+func (a *App) sendShortcutError(w http.ResponseWriter, reqLocale string, err error) {
+	status := 503
+	var shortcutErr *launch.ShortcutError
+	var inputError *quickinput.Error
+	if errors.As(err, &shortcutErr) {
+		status = shortcutErr.Status
+	} else if errors.As(err, &inputError) {
+		status = inputError.Status
+	}
+	payload := errorPayload(reqLocale, err)
+	payload["shortcut"] = a.shortcutStatus().Localize(reqLocale)
+	send(w, status, payload)
 }
 
 func (a *App) sendDesktopError(w http.ResponseWriter, reqLocale string, err error) {

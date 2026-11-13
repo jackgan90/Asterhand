@@ -5,6 +5,7 @@ import (
 
 	"github.com/jackgan90/Asterhand/internal/automation"
 	"github.com/jackgan90/Asterhand/internal/conversation"
+	"github.com/jackgan90/Asterhand/internal/launch"
 	"github.com/jackgan90/Asterhand/internal/localcommands"
 	"github.com/jackgan90/Asterhand/internal/operations"
 	"github.com/jackgan90/Asterhand/internal/quickinput"
@@ -57,9 +58,10 @@ func describeAutomationResults(r *automation.Registry) {
 	})
 	set("conversations.connection conversations.connect conversations.get conversations.create conversations.send turns.get turns.wait turns.stop messages.list messages.get", chat)
 	set("conversations.list", resultObject("next", "", "", map[string]any{"items": arrayOf(automation.Schema[conversation.Conversation]())}))
-	set("settings.get", resultObject("", "", "", map[string]any{"node": resultObject("revision name provider model", "name_default", "", nil), "desktop": automation.Schema[quickinput.Status]()}))
+	set("settings.get", resultObject("", "", "", map[string]any{"node": resultObject("revision name provider model", "name_default", "", nil), "desktop": automation.Schema[quickinput.Status](), "desktop_shortcut": automation.Schema[launch.ShortcutStatus]()}))
 	set("settings.patch models.select", map[string]any{"anyOf": []any{resultObject("revision name provider model", "name_default", "", nil), automation.Schema[quickinput.Status]()}})
 	set("settings.check_hotkey desktop.retry", automation.Schema[quickinput.Status]())
+	set("settings.desktop_shortcut", automation.Schema[launch.ShortcutStatus]())
 	set("models.list", resultObject("selected revision", "configured", "", map[string]any{"provider": object}))
 	set("diagnostics.inspect diagnostics.run", resultObject("state operation_id message_key outcome", "", "", nil))
 	set("desktop.open", resultObject("view command_id", "", "", nil))

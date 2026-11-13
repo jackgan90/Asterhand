@@ -7,6 +7,8 @@ import (
 	"github.com/jackgan90/Asterhand/internal/automation"
 	"github.com/jackgan90/Asterhand/internal/config"
 	"github.com/jackgan90/Asterhand/internal/executor"
+	"github.com/jackgan90/Asterhand/internal/i18n"
+	"github.com/jackgan90/Asterhand/internal/launch"
 	"github.com/jackgan90/Asterhand/internal/llm"
 	"github.com/jackgan90/Asterhand/internal/operations"
 	"github.com/jackgan90/Asterhand/internal/quickinput"
@@ -48,11 +50,19 @@ func desktopError(err error) error {
 
 func (a *App) registerAutomationSettings(r *automation.Registry) {
 	nodeAccess := func(p automation.Principal, v automation.Empty) error { return p.Require("node", r.Node) }
-	automation.Register(r, automation.Definition{Name: "settings.get", Description: "Read ordinary node and desktop settings with separate revisions; no credentials or trust settings", Role: "read"}, nil, nodeAccess,
+	automation.Register(r, automation.Definition{Name: "settings.get", Description: "Read ordinary node, desktop input, and desktop icon settings; no credentials or trust settings", Role: "read"}, nil, nodeAccess,
 		func(ctx context.Context, call automation.Call, v automation.Empty) (automation.Outcome, error) {
-			return automation.Outcome{Data: map[string]any{"node": nodeSettingsView(a.Config.Get()), "desktop": desktopView(a.Input.Status())}}, nil
+			return automation.Outcome{Data: map[string]any{
+				"node":             nodeSettingsView(a.Config.Get()),
+				"desktop":          desktopView(a.Input.Status()),
+				"desktop_shortcut": a.shortcutStatus().Localize(i18n.Effective()),
+			}}, nil
 		})
 	automation.Register(r, automation.Definition{Name: "settings.patch", Description: "Atomically update one ordinary settings object against its expected revision", Role: "edit", Write: true, Batch: true}, func(v automation.SettingsPatch) string { return r.Node }, func(p automation.Principal, v automation.SettingsPatch) error { return p.Require("node", r.Node) }, a.automationSettingsPatch)
+	automation.Register(r, automation.Definition{Name: "settings.desktop_shortcut", Description: "Create or remove this installed node's desktop shortcut icon on the current user's desktop", Role: "edit", Write: true, Batch: true}, func(v automation.DesktopShortcut) string { return r.Node }, func(p automation.Principal, v automation.DesktopShortcut) error { return p.Require("node", r.Node) },
+		func(ctx context.Context, call automation.Call, v automation.DesktopShortcut) (automation.Outcome, error) {
+			return a.automationDesktopShortcut(ctx, r, call, v)
+		})
 	automation.Register(r, automation.Definition{Name: "settings.check_hotkey", Description: "Check a normalized hotkey using the existing registration controller", Role: "edit", Write: true}, func(v automation.HotkeyCheck) string { return r.Node }, func(p automation.Principal, v automation.HotkeyCheck) error { return p.Require("node", r.Node) },
 		func(ctx context.Context, call automation.Call, v automation.HotkeyCheck) (automation.Outcome, error) {
 			err := a.Input.Check(v.Binding)
@@ -172,4 +182,59 @@ func (a *App) automationDesktopPatch(ctx context.Context, call automation.Call, 
 		}
 	}
 	return automation.Outcome{Data: desktopView(st), Summary: map[string]string{"revision": st.Desired.Revision}, Accepted: published || err == nil, Unknown: published && err != nil}, desktopError(err)
+}
+
+func (a *App) automationDesktopShortcut(ctx context.Context, r *automation.Registry, call automation.Call, v automation.DesktopShortcut) (automation.Outcome, error) {
+	if a.Stopping() || a.Shortcut == nil {
+		return automation.Outcome{}, shortcutAutomationError(launch.NewShortcutError(503, "desktop_unavailable", "err.app.node_stopping", nil))
+	}
+	if err := call.Check(); err != nil {
+		return automation.Outcome{}, err
+	}
+	state := operations.State{
+		Identity: call.Identity,
+		Instance: r.Instance,
+		Updated:  r.Now().UnixMilli(),
+		Data:     compactResult(map[string]bool{"enabled": v.Enabled}),
+	}
+	if err := a.Store.SaveAutomationState(state); err != nil {
+		return automation.Outcome{}, err
+	}
+	st, err := a.Shortcut.Set(ctx, launch.ShortcutChange{Operation: call.Identity.NativeID(), Enabled: v.Enabled})
+	if err == nil || isDefinitiveShortcutRejection(err) {
+		state.Complete = true
+		state.Updated = r.Now().UnixMilli()
+		_ = a.Store.SaveAutomationState(state)
+	}
+	st = st.Localize(i18n.Effective())
+	return automation.Outcome{
+		Data:     st,
+		Summary:  map[string]bool{"enabled": st.Enabled, "conflict": st.Conflict},
+		Accepted: err == nil,
+	}, shortcutAutomationError(err)
+}
+
+func isDefinitiveShortcutRejection(err error) bool {
+	var se *launch.ShortcutError
+	if !errors.As(err, &se) {
+		return false
+	}
+	switch se.Code {
+	case "unsupported", "not_installed", "conflict", "invalid_parameters", "desktop_unavailable", "busy":
+		return true
+	default:
+		return false
+	}
+}
+
+func shortcutAutomationError(err error) error {
+	if err == nil {
+		return nil
+	}
+	e := automation.PublicError(err)
+	var se *launch.ShortcutError
+	if errors.As(err, &se) && se.Code != "" {
+		e.Code = se.Code
+	}
+	return e
 }

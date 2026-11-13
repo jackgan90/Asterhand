@@ -79,6 +79,8 @@ scripts/release.ps1 是维护者发布入口，要求 Windows PowerShell 7、Git
 
 安装参数 -DesktopShortcut 接受 Auto、Create、Skip、Keep。Auto 首次交互安装询问并默认创建，非交互首次安装跳过；升级 Auto 与 Keep 按本安装实际存在的桌面快捷方式保留，用户手动删除后不会复活。Create 显式创建，Skip 只移除属于本安装的快捷方式。同名外部快捷方式保留；需要创建却遇到冲突时明确报错。快捷方式位于当前用户桌面 Known Folder，兼容重定向和 Unicode，目标为稳定启动器。
 
+运行期桌面快捷方式管理由 `internal/launch` 提供：`ShortcutManager` 通过 `FindInstallation(executable, home)` 与同目录 `AsterhandLauncher.exe` 判定正式安装态（开发直接运行或缺少启动器返回 `not_installed`），非 Windows 构建返回 `supported: false`。Windows 端采用纯 Go（`CGO_ENABLED=0`）Win32 COM（`IShellLinkW` + `IPersistFile`）检查并读写 `FOLDERID_Desktop\Asterhand.lnk`，与 `install.ps1` 的 `Test-OwnedShortcut` / `Set-InstallShortcut` 保持一致（同时识别 `AsterhandLauncher.exe` 与兼容 `start.ps1 -NoBrowser` 快捷方式）。写入前按数据目录获取启动互斥锁（`acquireLaunchLock`），创建、更新或删除后通过 `SHChangeNotify` 通知 Explorer；存在外部同名文件、目录或重解析点时不覆盖、不删除，并在开启请求时返回冲突。运行期切换以实际磁盘快捷方式为唯一事实源，不改写 `installation.json` 且不向 `desktop-settings.json` 写入缓存布尔值，后续安装升级（`Auto`/`Keep`）自动沿用实际图标状态。
+
 -LoginAtStartup 独立启用当前用户 Startup 快捷方式，升级保留已启用的入口；启动参数 --no-browser 避免登录时弹浏览器。桌面选择不改变登录后启动。移除对应 Startup 快捷方式即可关闭。所选旧包没有原生启动器时继续使用兼容 start.ps1，拒绝 DesktopShortcut Create，不生成不存在的启动器目标。安装默认不启动节点，不修改 Tailscale 登录或防火墙。
 
 应用采用星核托举标识，托盘使用简化轮廓。透明 PNG 为图形源，构建工具生成多尺寸 ICO 并将应用图标嵌入节点和启动器。Windows API 使用现有 x/sys/windows，资源加工使用 Windows 自带 API，无额外运行时或 CGO。取舍见 [桌面入口 ADR](adr/004-desktop-launcher-and-tray.md)，验证见 [功能验证](../development/features/windows-desktop-lifecycle/validation.md)。

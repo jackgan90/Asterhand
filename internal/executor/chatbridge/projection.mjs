@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
 import {failure} from './gateway.mjs';
+import {combineDisplayRows, contentSections, textSegmentID, toolBlock, toolResults} from './timeline.mjs';
 
 export const HISTORY_MAX_CHARS = 1000;
 export const FULL_MESSAGE_MAX_CHARS = 8000000;
@@ -38,8 +39,21 @@ export function visibleBodyState(native, maxChars) {
 }
 
 export async function visibleHistory(history, readMessage) {
+  const source = [...(history.messages ?? [])];
+  const first = source[0];
+  if (first?.role === 'assistant' && first.__openclaw?.id && contentSections(first).some(section => section.type === 'tool')) {
+    // A native limit may start between a commentary row and its tool row even
+    // though both share a transcript ID. Recover that one boundary message.
+    const complete = await readMessage(first.__openclaw.id, HISTORY_MAX_CHARS);
+    if (!complete || complete.__openclaw?.id !== first.__openclaw.id) {
+      throw failure('unavailable', 'err.chatbridge.runtime_unavailable', 'Session history is temporarily unavailable.');
+    }
+    let count = 1;
+    while (source[count]?.__openclaw?.id === first.__openclaw.id) count++;
+    source.splice(0, count, complete);
+  }
   const messages = [];
-  for (const native of history.messages ?? []) {
+  for (const native of source) {
     let state = visibleBodyState(native, HISTORY_MAX_CHARS);
     if (state === 'ambiguous') {
       try {
@@ -52,10 +66,10 @@ export async function visibleHistory(history, readMessage) {
     }
     messages.push({...native, __openclaw: {...native.__openclaw, truncated: state !== 'complete'}});
   }
-  return {...history, messages};
+  return {...history, messages: combineDisplayRows(messages)};
 }
 
-export function visibleMessage(native, budget = 8192) {
+export function visibleMessage(native, budget = 8192, results = new Map()) {
   if (!['user', 'assistant'].includes(native?.role) || !native.__openclaw?.id) return null;
   const original = textOf(native);
   let text = textPrefix(original, Math.max(0, budget - 256));
@@ -68,6 +82,15 @@ export function visibleMessage(native, budget = 8192) {
     const date = new Date(native.timestamp);
     if (Number.isFinite(date.getTime())) message.timestamp = date.toISOString();
   }
+  const sections = contentSections(native);
+  if (native.role === 'assistant' && sections.some(section => section.type === 'tool')) {
+    message.blocks = sections.flatMap(section => section.type === 'tool' ? [toolBlock(section, turn, results)] :
+      section.text.trim() ? [{type: 'text', id: textSegmentID(message.id, section.index), text: section.text,
+        truncated: native.__openclaw.truncated === true}] : []);
+    delete message.truncated;
+    return message;
+  }
+  if (!original.trim()) return null;
   while (byteSize(message) > budget && text.length) {
     text = textPrefix(text, Math.max(0, Math.floor(encoder.encode(text).length * 0.75)));
     message.blocks[0].text = text;
@@ -76,16 +99,36 @@ export function visibleMessage(native, budget = 8192) {
   return message;
 }
 
-export function historyPage(history, requestedOffset, requestedCursor) {
-  const cursor = createHash('sha256').update(history.sessionId + ':' + history.deltaCursor).digest('hex');
-  if (requestedOffset && requestedCursor !== cursor) return {resetRequired: true};
-  const native = history.messages ?? [];
+export function historyCursor(history) {
+  return createHash('sha256').update(JSON.stringify([history.sessionId, history.deltaCursor ?? null,
+    history.sessionInfo?.lifecycleRevision ?? null, history.sessionInfo?.activeLeafEntryId ?? null,
+    history.messages ?? []])).digest('hex');
+}
+
+export function historyPage(history, cursor = historyCursor(history)) {
+  const native = combineDisplayRows(history.messages ?? []);
   const messages = [];
-  let remaining = 54 * 1024;
+  const results = toolResults(history);
+  const budget = 54 * 1024;
   for (let index = 0; index < native.length; index++) {
-    const budget = Math.min(24 * 1024, Math.floor(remaining / (native.length - index)));
-    const message = visibleMessage(native[index], budget);
-    if (message) { messages.push(message); remaining -= byteSize(message); }
+    const message = visibleMessage(native[index], 24 * 1024, results);
+    if (message) messages.push(message);
+  }
+  let size = byteSize(messages);
+  while (size > budget) {
+    let reduced = false;
+    const largest = Math.max(0, ...messages.flatMap(message => message.blocks.filter(block => block.type === 'text').map(block => encoder.encode(block.text).length)));
+    for (const message of messages) {
+      for (const block of message.blocks) {
+        if (block.type !== 'text' || !block.text.length) continue;
+        if (encoder.encode(block.text).length < largest * .75) continue;
+        block.text = textPrefix(block.text, Math.floor(encoder.encode(block.text).length * .75));
+        if (block.id) block.truncated = true; else message.truncated = true;
+        reduced = true;
+      }
+    }
+    if (!reduced) throw failure('unavailable', 'err.chatbridge.page_oversized', 'Conversation result exceeds pagination limit.');
+    size = byteSize(messages);
   }
   return {messages, cursor, next_offset: history.nextOffset ?? 0, has_more: history.hasMore === true,
     reset: history.windowReset === true};

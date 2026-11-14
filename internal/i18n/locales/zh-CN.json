@@ -975,7 +975,6 @@
   "common.workspace.step.pending": "待开始",
   "common.workspace.step.in_progress": "进行中",
   "common.workspace.step.completed": "已完成",
-  "common.workspace.activities": "工具活动",
   "web.settings.tools.label": "允许助手调用工具",
   "web.settings.tools.hint": "让助手在自己的文件夹中处理文件、保存记忆。更改后从下一条消息生效。",
   "web.settings.tools.loading": "正在读取工具设置…",

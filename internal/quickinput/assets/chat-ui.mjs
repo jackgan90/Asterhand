@@ -5,7 +5,6 @@ import {ChatOutbox} from './chat-outbox.mjs';
 import {replyStatusView} from './chat-status.mjs';
 import {operationQueue} from './chat-queue.mjs';
 import {connectionView} from './chat-connection.mjs';
-import {toolActivities} from './chat-activities.mjs';
 import {formatDateTime, localizeError, onLocaleChange, t} from './i18n.mjs';
 
 export function chatPanel(bridge, editor) {
@@ -85,7 +84,6 @@ export function chatPanel(bridge, editor) {
     paint();
   }
   const client = conversationClient(bridge, editor, envelope);
-  const activities = toolActivities(query('chat-activities'), client);
   const queue = operationQueue(client, outbox);
   const connection = connectionView(query('chat-connection'), client);
   const render = messageRenderer(query('chat-messages'), {copy, expand: expandMessage});
@@ -153,7 +151,6 @@ export function chatPanel(bridge, editor) {
   async function select(id) {
     selection++;
     selected = id;
-    activities.select(id);
     if (sendingOperation) outbox.bind(sendingOperation, id);
     turn = null;
     historyLoaded = false;
@@ -199,7 +196,6 @@ export function chatPanel(bridge, editor) {
       refreshHistory = false;
       readingOlder = older && !response.page?.reset;
       windowState.apply(response.page ?? {messages: []}, older);
-      void activities.refresh();
       if (response.page?.reset && !sending) sayKey('quickinput.ui.history_reset');
       else sayTurn();
       paint(readingOlder);
@@ -307,8 +303,8 @@ export function chatPanel(bridge, editor) {
   async function poll() {
     if (polling || !visible) return;
     polling = true;
-    if (expanded) void activities.refresh();
     const id = selected, version = selection;
+    const previous = turn;
     try {
       if (queue.enabled) {
         const creating = queue.creating(id);
@@ -334,12 +330,12 @@ export function chatPanel(bridge, editor) {
       const response = await client.call('reconcile', {conversation_id: id,
         ...(queue.enabled ? {operation_id:queue.state.active.operation_id} : identity ? {operation_id: identity.operation_id} : {})});
       if (id !== selected || version !== selection) return;
-      const previous = turn;
       turn = newerTurn(turn, response.turn);
       sayTurn();
       const follow = expanded && followsLatest();
       if (response.live && follow) { windowState.live(response.live); paint(); }
-      if (refreshHistory || turn && (turn.assistant_message_id !== previous?.assistant_message_id || !unsettled(turn) && unsettled(previous))) {
+      if (refreshHistory || turn && (turn.assistant_message_id !== previous?.assistant_message_id || !unsettled(turn) && unsettled(previous) ||
+          unsettled(turn) && windowState.pendingTools())) {
         if (!expanded) { historyLoaded = false; refreshHistory = true; }
         else if (follow) await history();
         else sayTurn('quickinput.ui.jump_latest_hint');
@@ -387,7 +383,7 @@ export function chatPanel(bridge, editor) {
     const id = selected, version = selection;
     const budget = windowState.makeRoom(messageID, 1024 * 1024);
     const encoder = new TextEncoder();
-    const start = restart ? 0 : windowState.messages.find(message => message.id === messageID)?.fragmentNext ?? 0;
+    const start = restart ? 0 : windowState.fragmentNext(messageID);
     let text = '', offset = start, more = true, bytes = 0;
     sayKey('quickinput.ui.reading_full');
     try {
@@ -473,7 +469,6 @@ export function chatPanel(bridge, editor) {
       ? t('quickinput.conversation_label', {id: selected.slice(0, 8)})
       : t('quickinput.default_assistant');
     connection.relocalize();
-    activities.relocalize();
     render.relocalize();
     if (!list.hidden && lastListState) renderList();
     if (lastStatus?.kind === 'key') sayKey(lastStatus.key, lastStatus.args);

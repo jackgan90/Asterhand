@@ -5,7 +5,8 @@ export const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const encoder = new TextEncoder();
 
 export const messageText = message => (message.blocks ?? []).filter(block => block.type === 'text').map(block => block.text).join('');
-export const bodyBytes = message => encoder.encode(messageText(message)).length;
+export const bodyBytes = message => encoder.encode(messageText(message)).length +
+  (message.blocks ?? []).filter(block => block.type === 'tool').reduce((bytes, block) => bytes + encoder.encode(JSON.stringify(block)).length, 0);
 
 export class ChatWindow {
   constructor() { this.clear(); }
@@ -32,23 +33,44 @@ export class ChatWindow {
   }
 
   replace(id, text, truncated, start = 0, next = 0) {
-    const message = this.messages.find(item => item.id === id);
+    const {message, block} = this.findText(id);
     if (message) {
-      message.blocks = [{type: 'text', text}]; message.truncated = truncated;
-      message.fragmentStart = start; message.fragmentNext = next;
+      if (block) Object.assign(block, {text, truncated, fragmentStart: start, fragmentNext: next});
+      else {
+        message.blocks = [{type: 'text', text}]; message.truncated = truncated;
+        message.fragmentStart = start; message.fragmentNext = next;
+      }
     }
     this.trim(false);
   }
 
+  findText(id) {
+    for (const message of this.messages) {
+      if (message.id === id) return {message};
+      const block = message.blocks?.find(item => item.type === 'text' && item.id === id);
+      if (block) return {message, block};
+    }
+    return {};
+  }
+
+  fragmentNext(id) { const {message, block} = this.findText(id); return (block ?? message)?.fragmentNext ?? 0; }
+
+  pendingTools() {
+    return this.messages.some(message => message.blocks?.some(block => block.type === 'tool' &&
+      ['started', 'unknown'].includes(block.tool?.state)));
+  }
+
   makeRoom(id, requestedBytes) {
-    let others = this.messages.filter(message => message.id !== id).reduce((sum, message) => sum + bodyBytes(message), 0);
+    const {message: owner, block} = this.findText(id);
+    const replaced = block ? encoder.encode(block.text ?? '').length : owner ? bodyBytes(owner) : 0;
+    let others = this.messages.reduce((sum, message) => sum + bodyBytes(message), 0) - replaced;
     while (others > MAX_BODY_BYTES - this.reservedBytes - requestedBytes) {
-      const index = this.messages.findIndex(message => message.id !== id);
+      const index = this.messages.findIndex(message => message !== owner);
       if (index < 0) break;
       others -= bodyBytes(this.messages[index]);
       this.messages.splice(index, 1);
     }
-    return MAX_BODY_BYTES - this.reservedBytes - others;
+    return Math.max(0, MAX_BODY_BYTES - this.reservedBytes - others);
   }
 
   trim(older) {

@@ -69,7 +69,7 @@ pwsh -NoProfile -File scripts/check-i18n.ps1
 | [原生工具](../../../../internal/executor/conversation_workspace_integration_test.go) | LT01/03/05/06/07/18：九项工具、读写编辑/补丁移动新增删除、搜索、记忆实际命中、进度、重启历史、新会话记忆、越界与 exec 拒绝 | 本地 SSE 模型夹具；不单独证明真实 DeepSeek 全矩阵 |
 | [原生取消](../../../../internal/executor/conversation_workspace_cancel_test.go) | LT08/09/15：已写文件保留、工具收尾、下一轮继续及旧轮迟到取消 | 系统退出、睡眠和完整磁盘故障待专项验证 |
 | [公共操作](../../../../internal/app/automation_workspace_windows_test.go)、[回执恢复](../../../../internal/app/automation_workspace_recovery_windows_test.go) | LT10/13/14：异名 runtime、scope、重复身份、过期修订、租约冲突及回执中断 | 实际 CLI/MCP 客户端完整工作流仍按自动化验收执行 |
-| [工具设置与聊天活动](../../../../tests/workspace.test.mjs)、[设置交互](../../../../tests/web-interactions.test.mjs)、[聊天模型](../../../../tests/chat-model.test.mjs) | LT06/07/17：开关单独保存、失败核对、迟到响应、重开、双语、活动替换和中间消息 | 浏览器检查设置入口、标签和开关；WebView2 用户流程另验 |
+| [工具设置](../../../../tests/workspace.test.mjs)、[有序聊天](../../../../tests/chat-timeline.test.mjs)、[设置交互](../../../../tests/web-interactions.test.mjs)、[聊天模型](../../../../tests/chat-model.test.mjs) | LT06/07/17：开关单独保存、失败核对、迟到响应、重开、双语、工具原位更新和中间消息 | 工具/文字顺序与跨页回归及本机用户验收已通过，见[历史修复计划](../chat-history-timeline/plan.md)；其他专项仍按矩阵执行 |
 | [默认工具配置](../../../../internal/config/local_tools_test.go)、[运行时配置](../../../../internal/executor/conversation_default_tools_test.go) | LT15：新节点、旧默认迁移、明确关闭保持、保存其他设置/重启、提示词与工具白名单一致 | 配置与生成结果检查；真实模型验收仍按 LT01 执行 |
 | [隔离候选安装](../../../../scripts/test-local-candidate.ps1) | LT15/16 的基础节点部分：真实应用及运行时安装、损坏候选拒绝、在线重启、数据/token/身份保留与运行时 generation 更换 | 已验证；不调用模型，Known Folder 使用隔离目录，完整 ZIP 互操作及旧完整助手会话升级另验 |
 

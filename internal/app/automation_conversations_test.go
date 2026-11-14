@@ -15,8 +15,10 @@ import (
 )
 
 type automationChatRuntime struct {
-	sends atomic.Int32
-	text  atomic.Value
+	sends    atomic.Int32
+	text     atomic.Value
+	messages []conversation.Message
+	segments map[string]string
 }
 
 func (*automationChatRuntime) Describe() (conversation.Descriptor, error) {
@@ -34,10 +36,16 @@ func (f *automationChatRuntime) Submit(_ context.Context, _ conversation.Binding
 func (*automationChatRuntime) Observe(context.Context, conversation.Binding, string, time.Time) (conversation.Observation, error) {
 	return conversation.Observation{Accepted: true, Stopped: true, Saved: true, Run: "completed", UserMessage: "native-message-000001", AssistantMessage: "native-message-000002"}, nil
 }
-func (*automationChatRuntime) History(context.Context, conversation.Binding, int, string) (conversation.Page, error) {
+func (f *automationChatRuntime) History(context.Context, conversation.Binding, int, string) (conversation.Page, error) {
+	if f.messages != nil {
+		return conversation.Page{Messages: f.messages}, nil
+	}
 	return conversation.Page{Messages: []conversation.Message{{ID: "native-message-000001", Role: "user", Blocks: []conversation.Block{{Type: "text", Text: strings.Repeat("visible", 1000)}}}}}, nil
 }
-func (*automationChatRuntime) Message(context.Context, conversation.Binding, string, int) (conversation.Fragment, error) {
+func (f *automationChatRuntime) Message(_ context.Context, _ conversation.Binding, id string, _ int) (conversation.Fragment, error) {
+	if text, ok := f.segments[id]; ok {
+		return conversation.Fragment{Message: id, Text: text}, nil
+	}
 	return conversation.Fragment{Message: "native-message-000001", Text: strings.Repeat("visible", 1000)}, nil
 }
 func (*automationChatRuntime) Cancel(context.Context, conversation.Binding, string) error { return nil }

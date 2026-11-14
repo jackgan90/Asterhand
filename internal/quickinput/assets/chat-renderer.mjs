@@ -2,6 +2,7 @@ import {messageText} from './chat-model.mjs';
 import {markupTokens} from './chat-markup.mjs';
 import {mathRenderer, MAX_WINDOW_MATH_NODES} from './chat-math.mjs';
 import {formatDateTime, t} from './i18n.mjs';
+import {toolActivity} from './chat-activities.mjs';
 
 const bodyRoleKeys = {
   'code-copy': 'quickinput.render.copy_code',
@@ -142,6 +143,53 @@ export function markdown(text, copy, math = mathRenderer().message()) {
   return fragment;
 }
 
+function fragmentControls(parent, state, id, expand, transient) {
+  let notice, restart, more;
+  if (state.fragmentStart) {
+    notice = element('p', undefined, 'chat-author');
+    restart = element('button');
+    restart.type = 'button';
+    restart.addEventListener('click', () => expand(id, true));
+    parent.append(notice, restart);
+  }
+  if (state.truncated && !transient) {
+    more = element('button'); more.type = 'button';
+    more.addEventListener('click', () => expand(id));
+    parent.append(more);
+  }
+  const relocalize = () => {
+    if (notice) notice.textContent = t('quickinput.render.fragment_notice');
+    if (restart) restart.textContent = t('quickinput.render.read_from_start');
+    if (more) more.textContent = t(state.fragmentNext ? 'quickinput.render.read_next_fragment' : 'quickinput.render.read_full_message');
+  };
+  relocalize();
+  return relocalize;
+}
+
+function messageBody(message, copy, expand, math) {
+  const body = element('div', undefined, 'chat-message-body');
+  const tools = [], fragments = [];
+  const structured = message.blocks?.some(block => block.type === 'tool' || block.id);
+  if (!structured) body.append(markdown(messageText(message), copy, math));
+  else for (const block of message.blocks) {
+    if (block.type === 'tool' && block.tool) {
+      const node = toolActivity(block.tool);
+      tools.push(node); body.append(node);
+    } else if (block.type === 'text') {
+      const section = element('div', undefined, 'chat-message-text');
+      section.append(markdown(block.text ?? '', copy, math));
+      fragments.push(fragmentControls(section, block, block.id ?? message.id, expand, message.transient));
+      body.append(section);
+    }
+  }
+  return {body, tools, fragments, structured};
+}
+
+function bodyIdentity(message) {
+  return JSON.stringify((message.blocks ?? []).map(block => block.type === 'tool' ?
+    {type: block.type, id: block.tool?.id, tool: block.tool?.tool} : block));
+}
+
 export function messageRenderer(container, {copy, expand}) {
   const cache = new Map();
   const math = mathRenderer();
@@ -153,10 +201,9 @@ export function messageRenderer(container, {copy, expand}) {
       if (!identities.has(id)) { mathNodes -= entry.mathNodes; entry.node.remove(); cache.delete(id); }
     }
     messages.forEach((message, index) => {
-      const text = messageText(message);
       const key = message.ui_id ?? message.id;
       const deliveryIdentity = message.delivery_status_key || message.delivery_status || '';
-      const signature = message.id + ':' + deliveryIdentity + ':' + message.role + ':' + message.timestamp + ':' + message.truncated + ':' + message.transient + ':' + message.fragmentStart + ':' + text;
+      const signature = message.id + ':' + deliveryIdentity + ':' + message.role + ':' + message.timestamp + ':' + message.truncated + ':' + message.transient + ':' + message.fragmentStart + ':' + bodyIdentity(message);
       let entry = cache.get(key);
       if (!entry) {
         entry = {node: element('article', undefined, 'chat-message'), mathNodes: 0};
@@ -166,10 +213,9 @@ export function messageRenderer(container, {copy, expand}) {
       if (entry.signature !== signature) {
         entry.signature = signature;
         entry.node.classList.toggle('chat-user', message.role === 'user');
-        const body = element('div', undefined, 'chat-message-body');
         mathNodes -= entry.mathNodes;
         const formulaBudget = math.message(MAX_WINDOW_MATH_NODES - mathNodes);
-        body.append(markdown(text, copy, formulaBudget));
+        const {body, tools, fragments, structured} = messageBody(message, copy, expand, formulaBudget);
         entry.mathNodes = formulaBudget.nodes;
         mathNodes += entry.mathNodes;
         const author = element('div', undefined, 'chat-author');
@@ -181,42 +227,32 @@ export function messageRenderer(container, {copy, expand}) {
           timeEl.dateTime = message.timestamp;
           author.append(timeEl);
         }
-        entry.node.replaceChildren(author, body);
-        let deliveryEl = null, fragmentNoticeEl = null, restartBtn = null, moreBtn = null;
+        const toolOnly = tools.length > 0 && !message.blocks.some(block => block.type === 'text' && (block.text || block.truncated));
+        entry.node.classList.toggle('chat-tool-only', toolOnly);
+        entry.node.replaceChildren(...(toolOnly ? [body] : [author, body]));
+        let deliveryEl = null;
         const deliveryText = message.delivery_status_key ? t(message.delivery_status_key) : (message.delivery_status || '');
         if (deliveryText) {
           deliveryEl = element('p', deliveryText, 'chat-delivery-status');
           entry.node.append(deliveryEl);
         }
-        if (message.fragmentStart) {
-          fragmentNoticeEl = element('p', t('quickinput.render.fragment_notice'), 'chat-author');
-          restartBtn = element('button', t('quickinput.render.read_from_start'));
-          restartBtn.type = 'button';
-          restartBtn.addEventListener('click', () => expand(message.id, true));
-          entry.node.append(fragmentNoticeEl, restartBtn);
-        }
-        if (message.truncated && !message.transient) {
-          moreBtn = element('button', t(message.fragmentNext ? 'quickinput.render.read_next_fragment' : 'quickinput.render.read_full_message'));
-          moreBtn.type = 'button';
-          moreBtn.addEventListener('click', () => expand(message.id));
-          entry.node.append(moreBtn);
-        }
+        if (!structured) fragments.push(fragmentControls(entry.node, message, message.id, expand, message.transient));
         entry.meta = {
           role: message.role,
           transient: Boolean(message.transient),
           timestamp: message.timestamp || '',
           deliveryStatusKey: message.delivery_status_key || '',
           deliveryStatusRaw: message.delivery_status || '',
-          fragmentNext: Boolean(message.fragmentNext),
           authorLabel,
           timeEl,
           body,
           deliveryEl,
-          fragmentNoticeEl,
-          restartBtn,
-          moreBtn,
+          fragments,
+          tools,
         };
       }
+      const tools = (message.blocks ?? []).filter(block => block.type === 'tool' && block.tool);
+      entry.meta.tools.forEach((node, toolIndex) => node.update(tools[toolIndex].tool));
       const current = container.children[index];
       if (current !== entry.node) container.insertBefore(entry.node, current ?? null);
     });
@@ -228,9 +264,8 @@ export function messageRenderer(container, {copy, expand}) {
       m.authorLabel.textContent = authorRoleLabel(m.role, m.transient);
       if (m.timeEl) m.timeEl.textContent = ' · ' + formatDateTime(m.timestamp);
       if (m.deliveryEl) m.deliveryEl.textContent = m.deliveryStatusKey ? t(m.deliveryStatusKey) : m.deliveryStatusRaw;
-      if (m.fragmentNoticeEl) m.fragmentNoticeEl.textContent = t('quickinput.render.fragment_notice');
-      if (m.restartBtn) m.restartBtn.textContent = t('quickinput.render.read_from_start');
-      if (m.moreBtn) m.moreBtn.textContent = t(m.fragmentNext ? 'quickinput.render.read_next_fragment' : 'quickinput.render.read_full_message');
+      m.fragments.forEach(relocalize => relocalize());
+      m.tools.forEach(node => node.relocalize());
       relocalizeBodyControls(m.body);
     }
   };

@@ -77,8 +77,11 @@ type Turn struct {
 }
 
 type Block struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type      string        `json:"type"`
+	Text      string        `json:"text,omitempty"`
+	ID        string        `json:"id,omitempty"`
+	Truncated bool          `json:"truncated,omitempty"`
+	Tool      *ToolActivity `json:"tool,omitempty"`
 }
 
 type Message struct {

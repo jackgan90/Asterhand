@@ -46,10 +46,14 @@
     },
     {
       "id": "chat",
-      "ui": "会话、消息、普通发送、连接与指定回复停止",
+      "ui": "会话、按发生顺序排列的文本与工具消息、历史分页、普通发送、连接与指定回复停止",
       "tests": [
         "internal/conversation/queue_test.go",
-        "internal/app/automation_conversations_test.go"
+        "internal/app/automation_conversations_test.go",
+        "internal/app/automation_message_preview_test.go",
+        "internal/executor/conversation_history_integration_test.go",
+        "tests/chat-history.test.mjs",
+        "tests/chat-timeline.test.mjs"
       ],
       "operations": [
         "conversations.connect",

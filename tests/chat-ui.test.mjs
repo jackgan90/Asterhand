@@ -683,3 +683,55 @@ test('external chat commit keeps the conversation it was instructed to use', asy
     assert.equal(h.requests.filter(r => r.action === 'enqueue').length, 0);
   } finally { h.close(); }
 });
+
+test('active tool results refresh at their original position and leave an older page untouched', async () => {
+  const h = harness();
+  let state = 'started';
+  const row = () => ({id:'mixed-message', role:'assistant', blocks:[
+    {type:'text', id:'mixed-message_text_0', text:'before the tool'},
+    {type:'tool', tool:{id:'call-00000000001', tool:'read', state}},
+    {type:'text', id:'mixed-message_text_2', text:'after the tool'},
+  ]});
+  try {
+    h.override('history', request => ({page:{messages:request.offset ? [message(0)] : [row()],
+      cursor:'stable', next_offset:50, has_more:!request.offset}}));
+    await h.open();
+    const rows = h.elements.get('chat-messages');
+    const body = rows.children[0].children[1], tool = body.children[1], before = body.children[0];
+    state = 'completed';
+    await h.tick();
+    assert.equal(rows.children[0].children[1], body);
+    assert.equal(body.children[0], before);
+    assert.equal(body.children[1], tool);
+    assert.equal(tool.dataset.state, 'completed');
+    assert.ok(!h.requests.some(request => request.action === 'activities'));
+    state = 'started';
+    await h.elements.get('chat-refresh').fire('click'); await flush();
+    await h.elements.get('chat-older').fire('click'); await flush();
+    const olderRows = [...rows.children];
+    const count = h.requests.filter(request => request.action === 'history').length;
+    state = 'failed';
+    await h.tick();
+    assert.deepEqual(rows.children, olderRows);
+    assert.equal(h.requests.filter(request => request.action === 'history').length, count);
+    assert.equal(tool.dataset.state, 'started');
+  } finally { h.close(); }
+});
+
+test('queue snapshots with a new assistant message still refresh the displayed tool history', async () => {
+  const h = harness(true);
+  const active = id => ({id:'queued-tool-turn',operation_id:'queued-tool-operation',conversation_id:A,
+    delivery:'accepted',run:'running',persistence:'pending',assistant_message_id:id});
+  try {
+    h.queueState.active = active('first-tool-message');
+    h.override('reconcile', () => ({turn:h.queueState.active}));
+    h.override('history', () => ({turn:h.queueState.active,page:{messages:[{
+      id:h.queueState.active.assistant_message_id,role:'assistant',blocks:[{
+        type:'tool',tool:{id:h.queueState.active.assistant_message_id,tool:'ls',state:'completed'}}]}]}}));
+    await h.open();
+    assert.equal(h.elements.get('chat-messages').children[0].dataset.messageId, 'first-tool-message');
+    h.queueState.active = active('second-tool-message');
+    await h.tick();
+    assert.equal(h.elements.get('chat-messages').children[0].dataset.messageId, 'second-tool-message');
+  } finally { h.close(); }
+});

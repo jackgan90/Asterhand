@@ -5,7 +5,7 @@ import {setLocale} from '../internal/quickinput/assets/i18n.mjs';
 
 setLocale('zh-CN');
 import {conversationClient} from '../internal/quickinput/assets/chat-client.mjs';
-import {historyPage, messageFragment, StreamState, observation, byteSize} from '../internal/executor/chatbridge/projection.mjs';
+import {historyPage, historyCursor, messageFragment, StreamState, observation, byteSize} from '../internal/executor/chatbridge/projection.mjs';
 
 const message = (id, text = '中文🙂') => ({id, role: 'assistant', blocks: [{type: 'text', text}]});
 
@@ -45,11 +45,11 @@ test('ten thousand native history rows remain independently reachable through a 
 test('native projection is bounded after Go escaping and fragments preserve exact Unicode', () => {
   const text = '<>&🙂中文\u2028\n'.repeat(9000);
   const native = {role: 'assistant', timestamp: 1700000000000, content: [{type: 'text', text}], __openclaw: {id: 'native-1', runId: 'turn'}};
-  const page = historyPage({sessionId: 'session', deltaCursor: 'revision', messages: Array.from({length: 24}, (_, i) => ({...native, __openclaw: {id: 'id-' + i}}))}, 0, '');
+  const page = historyPage({sessionId: 'session', deltaCursor: 'revision', messages: Array.from({length: 24}, (_, i) => ({...native, __openclaw: {id: 'id-' + i}}))});
   assert.ok(byteSize(page) < 64 * 1024);
   assert.ok(page.messages.every(item => item.truncated));
   assert.equal(page.messages[0].timestamp, new Date(native.timestamp).toISOString());
-  assert.deepEqual(historyPage({sessionId: 'session', deltaCursor: 'changed'}, 24, page.cursor), {resetRequired: true});
+  assert.notEqual(historyCursor({sessionId: 'session', deltaCursor: 'changed'}), page.cursor);
   let restored = '', offset = 0, fragment;
   do {
     fragment = messageFragment(native, 'native-1', offset);

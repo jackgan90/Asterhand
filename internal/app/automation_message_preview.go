@@ -8,17 +8,21 @@ func messagePreview(message conversation.Message) conversation.Message {
 	blocks := make([]conversation.Block, 0, len(message.Blocks))
 	remaining := 256
 	for _, block := range message.Blocks {
-		if remaining == 0 {
-			message.Truncated = true
-			break
+		if block.Type != "text" {
+			blocks = append(blocks, block)
+			continue
 		}
 		text, end, _ := textFragment(block.Text, 0, remaining)
-		blocks = append(blocks, conversation.Block{Type: block.Type, Text: text})
 		remaining -= len(text)
 		if end < len(block.Text) {
-			message.Truncated = true
-			break
+			if block.ID != "" {
+				block.Truncated = true
+			} else {
+				message.Truncated = true
+			}
 		}
+		block.Text = text
+		blocks = append(blocks, block)
 	}
 	message.Blocks = blocks
 	return message

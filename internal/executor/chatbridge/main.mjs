@@ -1,7 +1,9 @@
 import {Gateway, failure, submissionError} from './gateway.mjs';
 import {ConnectionState} from './connection.mjs';
 import {PromptMonitor} from './prompt-state.mjs';
-import {StreamState, byteSize, historyPage, messageBytes, fragmentBytes, inputReceipt, observation, visibleHistory, visibleBodyState, HISTORY_MAX_CHARS, FULL_MESSAGE_MAX_CHARS} from './projection.mjs';
+import {StreamState, byteSize, fragmentBytes, inputReceipt, observation, visibleHistory, visibleBodyState, HISTORY_MAX_CHARS, FULL_MESSAGE_MAX_CHARS} from './projection.mjs';
+import {readHistoryPage} from './history.mjs';
+import {messageSelection, selectedMessageText} from './timeline.mjs';
 
 const streams = new StreamState();
 const connection = new ConnectionState();
@@ -86,28 +88,26 @@ async function handle(command) {
     case 'history': {
       const offset = command.offset ?? 0;
       if (!Number.isInteger(offset) || offset < 0) throw failure('invalid_request', 'err.chatbridge.invalid_offset', 'Invalid history offset.');
-      const history = await readHistory(binding, {offset});
       const project = value => visibleHistory(value, async (messageId, maxChars) => {
         const result = await gateway.rpc('chat.message.get', {sessionKey: sessionKey(binding),
           sessionId: binding.session, messageId, maxChars});
         return result.ok ? result.message : null;
       });
-      const page = historyPage(await project(history), offset, command.cursor ?? '');
-      if (!page.resetRequired) return page;
-      return {...historyPage(await project(await readHistory(binding)), 0, ''), reset: true};
+      return readHistoryPage(extra => readHistory(binding, extra), project, offset, command.cursor ?? '');
     }
     case 'message': {
       if (!validID(command.message)) throw failure('invalid_request', 'err.chatbridge.invalid_message', 'Invalid message ID.');
       await readHistory(binding, {limit: 1});
+      const selection = messageSelection(command.message);
       const key = JSON.stringify([binding.key, binding.session, binding.lifecycle, command.message]);
       if (!fullMessage || fullMessage.key !== key || fullMessage.expires < Date.now()) {
         fullMessage = null;
         const result = await gateway.rpc('chat.message.get', {sessionKey: sessionKey(binding), sessionId: binding.session,
-          messageId: command.message, maxChars: FULL_MESSAGE_MAX_CHARS});
+          messageId: selection.nativeID, maxChars: FULL_MESSAGE_MAX_CHARS});
         if (!result.ok || !result.message || visibleBodyState(result.message, FULL_MESSAGE_MAX_CHARS) !== 'complete' || byteSize(result.message) > 32 * 1024 * 1024) {
           throw failure('message_unavailable', 'err.chatbridge.message_oversized', 'Runtime cannot return the message within the full-read limit; showing preview.');
         }
-        fullMessage = {key, bytes: messageBytes(result.message), expires: Date.now() + 30000};
+        fullMessage = {key, bytes: new TextEncoder().encode(selectedMessageText(result.message, selection)), expires: Date.now() + 30000};
         const entry = fullMessage;
         setTimeout(() => { if (fullMessage === entry) fullMessage = null; }, 30000).unref();
       }

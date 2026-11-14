@@ -975,7 +975,6 @@
   "common.workspace.step.pending": "Pending",
   "common.workspace.step.in_progress": "In progress",
   "common.workspace.step.completed": "Completed",
-  "common.workspace.activities": "Tool activity",
   "web.settings.tools.label": "Allow the assistant to use tools",
   "web.settings.tools.hint": "Let the assistant work with files in its own folder and save memories. Changes apply from the next message.",
   "web.settings.tools.loading": "Loading tool settings…",

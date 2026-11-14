@@ -1,5 +1,7 @@
 # 测试入口
 
+聊天中工具与文字的顺序、空消息过滤、历史翻页及混合文本全文读取，见[聊天历史顺序与分页计划](../docs/development/features/chat-history-timeline/plan.md#验证入口与边界)。包含固定 OpenClaw 的 32 次工具调用跨页回归，以及公共读取与前端状态更新测试。
+
 ## 自动化CLI/MCP
 
 常规 `go test ./...` 和前端全量测试包含公共注册、UI 覆盖登记、持久收据、历史/日志、批处理及未保存草稿接手。源码对应关系和真实产品验收边界见[自动化验证](../docs/development/features/agent-automation/validation.md)。构建脚本强制执行注册/schema 与 UI 入口覆盖守卫。

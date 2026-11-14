@@ -36,7 +36,7 @@
 | 新对话、历史会话列表、切换会话 | `conversations.create/list/get` 与显式 conversation ID | 目标/角色/runtime 绑定不变，不改变人类当前选择 |
 | 普通文本发送、命令样式“作为文本发送” | `conversations.send`，显式纯文本模式 | 后者复用 UI 的文本转义语义，不把 `/` 当 runtime 管理命令 |
 | 查看等待/未送达/待确认/失败、停止回复 | `turns.get/wait/stop`，按原 operation 查询 | queued/accepted 分开；只停止指定已接收轮次；后续队列继续 |
-| 历史分页、完整正文、复制 Markdown/代码/公式 | `messages.list/get`，有界正文片段 | 获取原始可见文本，注明截断/未保存；不泄露内部提示词/隐藏推理 |
+| 历史分页、完整正文、复制 Markdown/代码/公式 | `messages.list/get`，有界正文片段 | 按发生顺序返回文本/工具块；混合消息的文本段 ID 支持完整分片读取；注明截断/未保存，不泄露工具原始入参、输出或隐藏推理 |
 | 打开面板观察连接、主动连接/重试 | `conversations.connection/connect` | 普通查询不发模型请求；恢复不重发消息 |
 | 当前节点/目标节点选择、能力和在线状态 | `nodes.list/get/capabilities`，正式调用显式目标 | 返回更新时间，离线不替换目标，不把名称当身份 |
 | Web 提交本机/远端文件任务或问答 | `tasks.submit` | 沿用 route/execute 和项目授权；不绕过原节点解释/提交规则 |
@@ -81,7 +81,7 @@
 | 查看工作区与有效能力 | workspaces.get、conversations.capabilities | 只读，区分支持/授权/就绪/约束，不暴露凭据或管理路径 |
 | 浏览目录、搜索文件/内容、读取文件 | workspace_files.list/search/read | 同一工作区根、分页/预算、真实身份与权限检查 |
 | 聊天中创建/修改/移动/删除文件 | conversations.send + 工具结果读取；直接批操作通过 workspace_files.mutate | 复用修改租约、前像、逐项结果、操作身份/修订；不接受任意宿主路径或命令字符串 |
-| 查看工具活动与进度 | turn_activities.list/get，加现有 turns.get/wait/stop | 单调游标、真实终态、未知结果核对；不暴露隐藏推理 |
+| 查看工具活动与进度 | 聊天顺序用 messages.list；完整活动用 turn_activities.list/get，加 turns.get/wait/stop | 聊天中的工具名、状态和声明进度跟随会话读取；完整活动仍检查工作区与会话授权；单调游标、真实终态、未知结果核对，不暴露隐藏推理 |
 | 查看/预览/下载产物 | artifacts.list/get/read | 同一授权 ID 和版本校验，有界分片，不允许任意路径下载 |
 | 查看历史版本并恢复 | workspace_versions.list/get/restore | 修订冲突、操作去重、恢复前快照；无隐式回滚 |
 | 处置确认停止的未知工具轮次 | workspace_operations.get/resolve | 记录核对依据；不能借处置伪造成功或重放修改 |

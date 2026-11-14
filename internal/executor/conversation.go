@@ -274,6 +274,11 @@ func (r *ConversationRuntime) Observe(ctx context.Context, binding conversation.
 func (r *ConversationRuntime) History(ctx context.Context, binding conversation.Binding, offset int, cursor string) (conversation.Page, error) {
 	var page conversation.Page
 	err := r.invoke(ctx, binding, chatCommand{Action: "history", Offset: offset, Cursor: cursor}, &page)
+	if err == nil && hasHistoryTools(page) {
+		if files, fileErr := r.Workspace(); fileErr == nil {
+			enrichHistoryTools(&page, binding.Key, files)
+		}
+	}
 	return page, err
 }
 

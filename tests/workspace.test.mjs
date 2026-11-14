@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {domFixture,tick,deferred} from './web-fixture.mjs';
 import {toolSettings} from '../web/tool-settings.mjs';
-import {toolActivities} from '../internal/quickinput/assets/chat-activities.mjs';
 import {setLocale} from '../web/i18n.mjs';
 setLocale('en-US');
 
@@ -79,15 +78,4 @@ test('tool permission localization keeps current value',async t=>{
  const ui=fixture(t);await ui.open();setLocale('zh-CN');ui.controller.relocalize();
  assert.equal(ui.input.checked,true);assert.match(ui.status.textContent,/下一条消息/);
  setLocale('en-US');ui.controller.relocalize();assert.equal(ui.input.checked,true);
-});
-
-test('tool activity completion replaces the started row and discards other-conversation reads',async t=>{
- const dom=domFixture(),previous=globalThis.document;globalThis.document=dom.document;t.after(()=>{globalThis.document=previous;});
- const container=dom.select('#tools');let request=0;
- const client={call:async()=>({activities:{authorized:true,next:++request,items:[{id:'call',tool:'write',state:request===1?'started':'completed',sequence:request}]}})};
- const panel=toolActivities(container,client);panel.select('conversation');await panel.refresh();await panel.refresh();
- assert.equal(container.children.length,1);assert.match(container.children[0].children[0].textContent,/Completed|已完成/);
- const pending=deferred();client.call=()=>pending.promise;
- const inFlight=panel.refresh();panel.select('next');pending.resolve({activities:{authorized:true,next:3,items:[{id:'old',tool:'write',state:'completed'}]}});await inFlight;
- assert.equal(container.children.length,0);
 });

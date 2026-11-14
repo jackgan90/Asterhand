@@ -11,6 +11,20 @@ import (
 )
 
 func (s *nativeSurface) configureContent() error {
+	if s.notification != nil {
+		// Match the page's transparent corners before navigation. Controller2
+		// inherits slots 0-25; slot 27 takes COREWEBVIEW2_COLOR by value (all zero
+		// means fully transparent), as declared by SDK 1.0.2792.45.
+		controller, err := s.controller.query("{c979903e-d4ca-4228-92eb-47ee3fa96eab}")
+		if err != nil {
+			return err
+		}
+		err = controller.call(27, 0)
+		controller.release()
+		if err != nil {
+			return err
+		}
+	}
 	settings, err := s.core.object(3)
 	if err != nil {
 		return err

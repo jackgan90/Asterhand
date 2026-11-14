@@ -1,5 +1,7 @@
 html,body {height:100%;overflow:hidden}
-main {display:flex;height:auto;gap:12px;padding:16px 38px 14px 16px;border-radius:12px;min-width:0;box-shadow:inset 0 0 24px #76e1ff05}
+/* Keep the theme fill inside the same rounded card as its border. */
+html,body {background:transparent}
+main {display:flex;height:auto;gap:12px;padding:16px 38px 14px 16px;border-radius:12px;min-width:0;background-color:var(--bg);box-shadow:inset 0 0 24px #76e1ff05}
 main::before {display:none}
 .notification-icon {flex:none;width:26px;height:26px;margin-top:2px;border-radius:50%;background:color-mix(in srgb,var(--status-color) 14%,var(--bg));color:var(--status-color)}
 .notification-icon::after {content:"";display:block;width:16px;height:16px;margin:5px;background:currentColor;mask:var(--icon-check) center/contain no-repeat}

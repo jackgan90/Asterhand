@@ -34,6 +34,7 @@ Remove-Item Env:ASTERHAND_DESKTOP_TEST, Env:ASTERHAND_INPUT_HOST_TEST_DIRECTORY
 - [前端](../../../../tests/completion-notifications.test.mjs)与[编辑器](../../../../tests/local-command-management.test.mjs)：纯文本、安全动作、外观更新、默认开关/保存/脏状态、原运行选择及保留其他分屏。
 - [机器字段](../../../../internal/automation/notification_test.go)：创建、patch、草稿及返回 schema 的 boolean 类型，缺省/false/null 语义。覆盖登记、权限及 CLI/MCP 测试沿用[自动化验证](../agent-automation/validation.md)。
 - [原生显示](../../../../internal/quickinput/notification_windows_test.go)：真实 WebView2 三卡片、进入/退出回执、主题语言更新、不抢前台、单行/长标题/错误行的实际高度，以及负坐标/DPI 下不同高度卡片的间距。
+- [圆角背景](../../../../internal/quickinput/notification_frame_windows_test.go)：同一原生显示测试分别检查两种主题、三种内容高度的 WebView2 截图四角透明度与卡片内部不透明度，并查询 HWND 圆角区域，确认四角不拦截桌面。可设置 `ASTERHAND_NOTIFICATION_CAPTURE` 为输出目录保留截图；截图不替代桌面合成和物理点击验收。
 - [独立宿主](../../../../internal/quickinput/notification_process_windows_test.go)：正式启动参数、进程/协议校验、宿主退出后重建、恢复可见身份和最终退出；[日志宿主](../../../../internal/quickinput/log_host_test.go)核对原 run ID 穿过 IPC。
 - [显示与退出动画](../../../../internal/quickinput/notification_animation_windows_test.go)：旧延迟显示计时器不能绕过当前内容的尺寸确认；三卡显示时，中间卡片先退出，顶部卡片紧接退出，移除中间卡片后仍能收到顶部卡片的退出回执，防止补位占住显示名额。
 - [会话状态](../../../../internal/quickinput/notification_session_windows_test.go)：初始锁屏、断连及未知状态暂停，电源恢复不覆盖锁屏，睡眠不被会话变化解除；原生查询用例核对 Windows 当前交互会话，实体锁屏顺序仍需人工验收。
@@ -41,7 +42,7 @@ Remove-Item Env:ASTERHAND_DESKTOP_TEST, Env:ASTERHAND_INPUT_HOST_TEST_DIRECTORY
 
 ## 桌面验收与支持边界
 
-本功能已通过本机 Windows 用户验收，包括命令编辑页两个开关的对齐，以及普通通知紧凑显示、长标题和错误信息按需增高。以下专项环境场景仍按各自的验证条件单独记录，本机验收不替代未执行的专项测试。
+本功能已通过本机 Windows 用户验收，包括命令编辑页两个开关的对齐，以及普通通知紧凑显示、长标题和错误信息按需增高、四角无矩形背景。以下专项环境场景仍按各自的验证条件单独记录，本机验收不替代未执行的专项测试。
 
 实际多屏、100%/150%/200% 混合缩放、任务栏移动、拔屏、锁屏睡眠、减少动态效果、系统延长通知时长和读屏需在对应环境分别验收。卡片外部及间隙应能点击桌面；其他应用输入不受干扰；鼠标移入期间卡片不自动换位。点击通知应定位保留期内的原实例，删除/过期时显示明确错误。
 

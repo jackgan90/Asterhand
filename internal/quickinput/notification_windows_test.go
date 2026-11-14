@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +23,14 @@ func TestNativeNotificationRendering(t *testing.T) {
 	home := t.TempDir()
 	stopped := make(chan error, 1)
 	go func() {
+		// The production entry point enables per-monitor DPI for its process.
+		// Scope that context to this direct-host test without changing other tests.
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		previous, _, _ := uiDLL.NewProc("SetThreadDpiAwarenessContext").Call(^uintptr(3))
+		if previous != 0 {
+			defer uiDLL.NewProc("SetThreadDpiAwarenessContext").Call(previous)
+		}
 		defer commands.Close()
 		defer events.Close()
 		initial, err := hostipc.Read(commands, false)
@@ -82,6 +91,7 @@ ready:
 	if heights[1] >= heights[2] || heights[1] >= heights[3] {
 		t.Fatal("card heights did not follow title/error content", heights)
 	}
+	checkNotificationCorners(t, home, "star")
 	for i := range frame.Cards {
 		frame.Cards[i].Phase = "visible"
 	}
@@ -91,6 +101,7 @@ ready:
 	if err := h.Apply(ctx, frame); err != nil {
 		t.Fatal(err)
 	}
+	checkNotificationCorners(t, home, "frost")
 	if os.Getenv("ASTERHAND_NOTIFICATION_PREVIEW") == "1" {
 		// Preview tooling lists app windows only; this opt-in changes discovery,
 		// after the production NOACTIVATE foreground assertion above has passed.

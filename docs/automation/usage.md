@@ -54,6 +54,17 @@
 
 ## 批量、长内容和恢复
 
+批量删除命令：先用 `commands.list` 遍历全部分页并固定命令 ID/修订；按需筛选，或全选这个快照。每批最多 32 项，向 `batches.submit` 提交以下参数，随后用返回的 `batch_id` 调用 `batches.get`。CLI 用 `automation batches.submit --input <JSON文件> --operation-id <操作ID>`，MCP 调用同名工具并附 `operation_id`。更多项按相同方式分块，逐项检查收据；运行中及修订冲突的命令保留，不删除外部脚本。
+
+```json
+{
+  "on_error": "continue",
+  "items": [
+    {"operation": "commands.delete", "arguments": {"command_id": "<命令ID>", "expected_revision": "<对象修订>"}}
+  ]
+}
+```
+
 `batches.submit` 接收最多 32 个 `{operation, arguments}` 项及 `on_error: stop|continue`，预检查全部项目的操作类别与授权，最多四项同时分派；`batches.get` 分页返回每项身份和收据。遇错停止不撤销已接纳项目，节点重启不自动续发未分派项目。`read.many` 接收最多 100 项只读请求，逐项返回结果和错误。单图修改是原子的，多对象批次没有整体事务或回滚。
 
 普通响应最多 64 KiB，完整命令/草稿读取和候选校验允许 1 MiB。大图可对 `commands.get` 或 `drafts.get` 指定 `format: json_fragments`，按游标拼接 `text` 后解析 JSON；内容或修订改变会拒绝旧游标，重新读取整份快照。消息、任务正文和事件也有片段接口。所有序列/字节偏移使用字符串或不透明游标，不把大整数转为 JavaScript 普通数值。

@@ -689,8 +689,16 @@ details.advanced > summary:hover { color: var(--fg); }
 #local-commands { width: min(1280px, 96vw); max-width: 1280px; }
 .commands-management { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 28px; }
 .commands-sidebar { min-width: 0; }
-.commands-sidebar > input { margin-top: 0; }
+.commands-search-row { display: flex; align-items: stretch; gap: 8px; }
+.commands-search-row input { flex: 1; min-width: 0; margin-top: 0; }
+.commands-search-row .icon-btn { flex: 0 0 40px; width: 40px; height: auto; }
 #registered-commands { max-height: 520px; margin-top: 12px; overflow-y: auto; }
+.commands-selection { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 12px; font-size: 12px; }
+.commands-selection label { display: flex; align-items: center; gap: 6px; margin: 0; }
+.commands-selection input, .registered-command-row > input { width: 16px; height: 16px; margin: 0; padding: 0; flex-shrink: 0; accent-color: var(--accent); }
+.registered-command-row { display: flex; align-items: center; gap: 8px; }
+.registered-command-row .registered-command { flex: 1; min-width: 0; }
+#commands-delete-results { max-height: 180px; overflow: auto; font-size: 12px; overflow-wrap: anywhere; }
 #registered-commands > p { padding: 24px 0; text-align: center; font-size: 13px; color: var(--faint); }
 .registered-command {
   flex-direction: column;

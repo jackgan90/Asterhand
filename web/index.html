@@ -255,9 +255,23 @@
       <p class="dialog-lead" data-i18n="web.commands.lead">在快捷面板中输入 / 即可选择并运行命令。脚本在后台运行，不接受交互输入。</p>
       <div class="commands-management">
         <section class="commands-sidebar" aria-label="已添加的命令" data-i18n-aria-label="web.commands.sidebar_aria">
-          <input id="commands-search" aria-label="搜索命令" data-i18n-aria-label="web.commands.search_placeholder" placeholder="搜索命令" data-i18n-placeholder="web.commands.search_placeholder" />
-          <div class="actions compact"><button id="command-new" type="button" data-i18n="web.commands.new">新建</button><button id="commands-refresh" type="button" class="quiet" data-i18n="web.commands.refresh">刷新</button></div>
+          <div class="commands-search-row">
+            <input id="commands-search" aria-label="搜索命令" data-i18n-aria-label="web.commands.search_placeholder" placeholder="搜索命令" data-i18n-placeholder="web.commands.search_placeholder" />
+            <button id="commands-refresh" type="button" class="secondary icon-btn" title="刷新" data-i18n-title="web.commands.refresh" aria-label="刷新" data-i18n-aria-label="web.commands.refresh" aria-busy="false">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M20 12a8 8 0 1 0-2.3 5.7" /></svg>
+            </button>
+          </div>
+          <div class="actions compact">
+            <button id="command-new" type="button" class="secondary"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg><span data-i18n="web.commands.new">新建</span></button>
+            <button id="commands-manage" type="button" class="secondary" aria-expanded="false" aria-controls="commands-selection registered-commands commands-delete-results" data-i18n="web.commands.manage">管理</button>
+          </div>
+          <div id="commands-selection" class="commands-selection" hidden>
+            <label><input id="commands-select-all" type="checkbox" /><span data-i18n="web.commands.select_all">全选全部命令</span></label>
+            <span id="commands-selection-count" role="status"></span>
+            <button id="commands-delete-selected" type="button" class="danger" disabled data-i18n="web.commands.delete_selected">删除所选</button>
+          </div>
           <div id="registered-commands"></div>
+          <div id="commands-delete-results" hidden role="status" aria-live="polite"></div>
         </section>
         <form id="command-form" class="command-editor">
           <h3 id="command-form-title" data-i18n="web.commands.form_new">新建命令</h3>

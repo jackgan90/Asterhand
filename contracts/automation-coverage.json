@@ -3,11 +3,13 @@
   "groups": [
     {
       "id": "commands",
-      "ui": "命令与脚本图管理、搜索、保存和运行",
+      "ui": "命令与脚本图管理、搜索、保存、运行及多选/全选后批量删除（复用批处理组合）",
       "tests": [
         "internal/localcommands/registry_test.go",
         "tests/graph-editor.test.mjs",
-        "tests/local-command-management.test.mjs"
+        "tests/local-command-management.test.mjs",
+        "tests/command-selection.test.mjs",
+        "internal/app/commands_batch_delete_test.go"
       ],
       "operations": [
         "commands.clone",
@@ -183,7 +185,8 @@
     "/api/stop": "node",
     "/api/stream": "tasks",
     "/api/automation/editor": "drafts",
-    "/api/local-commands/delete": "commands"
+    "/api/local-commands/delete": "commands",
+    "/api/local-commands/delete-batch": "commands"
   },
   "native_actions": {
     "internal/localcommands/wire/protocol.go": {

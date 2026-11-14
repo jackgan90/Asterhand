@@ -6,6 +6,8 @@
 
 ## 日常自动化、CLI 与 MCP
 
+[本地命令批量删除](features/batch-delete-local-commands/plan.md)：提供 Web“管理”模式中的多选、全选、逐项删除结果及 CLI/MCP 等价组合，批量删除及管理界面调整已通过本机用户验收。
+
 [统一自动化计划](features/agent-automation/plan.md)的实现、工程验证、独立审核及用户验收已完成。CLI/MCP 已覆盖[日常业务操作](../automation/coverage.md)和未保存草稿，客户端与 Web 保留原有呈现和交互；验证方法及专项环境边界见[验证说明](features/agent-automation/validation.md)。后续补充了[命令与脚本图 Schema 自描述增强](features/command-schema-self-description/plan.md)（工程验证及本机用户验收通过）。
 
 ## 已实现的 Windows 助手基础

@@ -5,6 +5,7 @@ import {$, node, dialog} from './ui.mjs';
 import {graphEditor} from './graph-editor.mjs';
 import {sameValue} from './graph-history.mjs';
 import {graphContent} from './graph-model.mjs';
+import {commandSelection} from './command-selection.mjs';
 
 const runLabel = run => t(runKey(run));
 
@@ -43,6 +44,26 @@ export function localCommands({api, post, session, listen, guarded, actions, edi
   let catalog = {revision:'', commands:[]}, selected = '', dirty = false, busy = false, generation = 0;
   let picker = null, statusState = null, runStates = {}, stateTimer = null, stateLoading = false, managedAvailable=true;
   let baseline = null;
+  const selection = commandSelection({post, confirm:actions.confirm, locked:()=>busy, lock:setBusy,
+    active:()=>Boolean(session()?.active), beforeDelete:ids=>!ids.has(selected) || canDiscard(),
+    deleted:ids=>{
+      const removed = new Set(ids);
+      catalog = {...catalog, commands:catalog.commands.filter(command=>!removed.has(command.id))};
+      if (removed.has(selected)) populate(); else paint();
+    },
+    settled:async()=>{
+      const version=generation, scope=session();
+      try {
+        const fresh=await api('/api/local-commands');
+        if(version!==generation || !scope?.active)return;
+        // Keep the old catalog token if the open draft's baseline changed elsewhere.
+        const before=catalog.commands.find(command=>command.id===selected);
+        const after=fresh.commands.find(command=>command.id===selected);
+        if(!selected || before?.revision===after?.revision)catalog=fresh;
+        paint();
+      } catch(error) {if(version===generation && scope?.active)paintStatus({kind:'error',error});}
+    },
+  });
   const field = name => form.elements.namedItem(name);
   const editor = graphEditor({container:$('#command-graph-editor'),onChange:updateDirty,browse});
   const live=editors?.register({
@@ -120,7 +141,9 @@ export function localCommands({api, post, session, listen, guarded, actions, edi
   }
   function paint() {
     const term = search.value.trim().toLocaleLowerCase('en-US');
+    const focused = document.activeElement?.dataset?.commandSelection;
     list.replaceChildren();
+    selection.sync(catalog.commands);
     const commands = [...catalog.commands].sort((a, b) => a.name.localeCompare(b.name, 'en-US'));
     for (const command of commands) {
       if (![command.name, ...(command.aliases ?? [])].some(name => name.toLocaleLowerCase('en-US').includes(term))) continue;
@@ -133,7 +156,10 @@ export function localCommands({api, post, session, listen, guarded, actions, edi
       title.append(dot, node('span', command.name));
       button.append(title, node('span', command.description || (command.aliases ?? []).join(' / ')));
       button.addEventListener('click', () => {if (!busy && canDiscard()) {populate(command); paintStatus(null);}});
-      list.append(button);
+      button.disabled = busy;
+      const row = node('div', null, 'registered-command-row'), checkbox = selection.checkbox(command);
+      row.append(checkbox, button); list.append(row);
+      if (focused === command.id) checkbox.focus({preventScroll:true});
     }
     if (!list.children.length) {
       list.append(node('p', catalog.commands.length ? t('web.commands.empty_no_match') : t('web.commands.empty_none')));
@@ -172,12 +198,21 @@ export function localCommands({api, post, session, listen, guarded, actions, edi
   }
   async function refresh(id = selected) {
     const scope = session(), version = ++generation;
-    const result = await api('/api/local-commands');
-    if (!scope?.active || version !== generation) return;
-    catalog = result;
-    const command = result.commands.find(value => value.id === id);
-    populate(command);void refreshStates();
-    paintStatus(id && !command ? {kind: 'deleted_notice'} : null);
+    setBusy(true);
+    $('#commands-refresh').setAttribute('aria-busy', 'true');
+    try {
+      const result = await api('/api/local-commands');
+      if (!scope?.active || version !== generation) return;
+      catalog = result;
+      const command = result.commands.find(value => value.id === id);
+      populate(command);void refreshStates();
+      paintStatus(id && !command ? {kind: 'deleted_notice'} : null);
+    } finally {
+      if (version === generation) {
+        $('#commands-refresh').setAttribute('aria-busy', 'false');
+        setBusy(false);
+      }
+    }
   }
   async function open(id = '') {
     if (busy || panel.open && !canDiscard()) return;
@@ -197,6 +232,7 @@ export function localCommands({api, post, session, listen, guarded, actions, edi
     busy = value;
     for (const control of panel.querySelectorAll('button,input,textarea,select')) control.disabled = value;
     lockForm();
+    selection.paint();
   }
   async function mutate(remove = false, external = '') {
     if (busy || !catalog.revision || runBusy(runStates[selected])) {if(external)throw Object.assign(new Error('busy'),{code:'busy'});return;}
@@ -257,13 +293,16 @@ export function localCommands({api, post, session, listen, guarded, actions, edi
   listen(form, 'input', updateDirty);
   listen(form, 'submit', event => {event.preventDefault(); void mutate();});
   listen($('#command-delete'), 'click', () => mutate(true));
+  listen($('#commands-manage'), 'click', () => {selection.toggle(); paint();});
+  listen($('#commands-select-all'), 'change', selection.selectAll);
+  listen($('#commands-delete-selected'), 'click', () => void selection.submit());
   listen(search, 'input', paint);
   listen($('#command-logs'), 'click', () => runAction('logs'));
   listen($('#command-stop-all'), 'click', () => runAction('stop-all'));
   listen($('#commands-close'), 'click', () => {if (!busy && canDiscard()) panel.close();});
   listen(panel, 'cancel', event => {if (busy || !canDiscard()) event.preventDefault();});
   // Unfinished canvas gestures never outlive the dialog or the page session.
-  listen(panel, 'close', () => {live?.invalidate();editor.cancelInteraction();});
-  function stop() { clearTimeout(stateTimer);generation++; picker?.abort(); picker = null; editor.cancelInteraction(); setBusy(false); }
+  listen(panel, 'close', () => {live?.invalidate();editor.cancelInteraction();selection.leave();paint();});
+  function stop() { clearTimeout(stateTimer);generation++; selection.stop(); $('#commands-refresh').setAttribute('aria-busy', 'false'); picker?.abort(); picker = null; editor.cancelInteraction(); setBusy(false); }
   return {open, relocalize, stop};
 }

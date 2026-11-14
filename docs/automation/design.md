@@ -67,6 +67,8 @@ CLI 支持 JSON 标准输入/文件、稳定 JSON 输出、明确退出码和有
 
 ## 图编辑与人机并发
 
+Web 批量删除是公共 `commands.delete` 的有界组合：同源适配 `POST /api/local-commands/delete-batch` 接收 `items: [{command_id, expected_revision, operation_id}]`（1—32 个不同命令、不同操作身份），完整检查批次形状后逐项派发，返回同顺序 `results: Response[]`。沿用人类主体及领域收据，不增加通用人类代理权限。CLI/MCP 使用现有 `batches.submit`（`on_error: continue`）组合相同操作及 `batches.get` 核对；全选由 `commands.list` 遍历同目录修订的所有页后固定集合，无隐式服务端 delete-all。跨项允许部分成功，运行占用或修订冲突按原机器错误返回，未知项保留原操作身份核对。
+
 图仍属于命令，不新增第二套独立图存储。`commands.get` 返回完整可编辑配置、命令修订与能力；`commands.create/clone/patch/delete/validate` 使用统一模型。复制只复制配置并生成新命令/步骤身份，不复制脚本文件、运行记录或权限。新建和复制支持单次输入包含名称、图和元数据，避免必须先创建无效中间对象。
 
 `patch` 按稳定 ID 描述添加/删除/修改步骤、连接/断开边、调整顺序/坐标和命令属性，保持参数数组及空参数原义。先对副本应用整个修改，再归一化和检查图、名称及容量，最后一次提交；任何错误都不部分保存。`validate` 接收 `{command_id?, candidate}` 并返回归一化候选或领域校验错误，不写配置、不检查模型、不运行脚本。保存允许尚不存在的脚本；运行前沿用领域路径可用性复核。调用者可以比较候选和原配置得到差异。

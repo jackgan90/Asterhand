@@ -5,6 +5,54 @@ import {domFixture, deferred, tick, descendants} from './web-fixture.mjs';
 import {setLocale, t as translate} from '../web/i18n.mjs';
 import {newGraph} from '../web/graph-model.mjs';
 
+test('bulk deletion preserves another command draft and history, then clears the deleted editor', async t => {
+  const dom=domFixture(), panel=dom.select('#local-commands'), form=dom.select('#command-form');
+  globalThis.document=dom.document;
+  for(const name of ['name','aliases','description','allow_concurrent','timeout','timeout_unit']) form.elements[name]=dom.document.createElement('input');
+  form.elements.namedItem=name=>form.elements[name];
+  panel.querySelectorAll=()=>[...dom.elements.values(),...descendants(dom.select('#registered-commands'))];
+  form.querySelectorAll=()=>Object.values(form.elements).filter(value=>typeof value!=='function');
+  let catalog={revision:'catalog-1',commands:[{id:'a',name:'alpha',revision:'a-1',graph:newGraph()},{id:'b',name:'beta',revision:'b-1',graph:newGraph()}]};
+  let posts=0, confirms=0;
+  const controller=localCommands({
+    api:async path=>path==='/api/local-commands/state'?{runs:{},managed_available:true}:catalog,
+    post:async(path,body)=>{
+      assert.equal(path,'/api/local-commands/delete-batch'); posts++;
+      const ids=new Set(body.items.map(item=>item.command_id));
+      catalog={revision:`catalog-${posts+1}`,commands:catalog.commands.filter(command=>!ids.has(command.id))};
+      return {results:body.items.map(()=>({receipt:{state:'completed'}}))};
+    },session:()=>({active:true}),listen:(el,event,fn)=>el.addEventListener(event,fn),guarded:fn=>fn(),
+    actions:{confirm:()=>{confirms++;return true;}},
+  });
+  t.after(()=>{controller.stop();delete globalThis.document;});
+  await controller.open('a'); await tick();
+  dom.select('#commands-manage').fire('click');
+  const all=()=>descendants(dom.select('#command-graph-editor'));
+  const card=all().find(el=>el.dataset.kind==='script');
+  for(const type of ['keydown','keyup']) {const event=new Event(type);Object.assign(event,{key:'ArrowRight'});card.dispatchEvent(event);}
+  form.elements.description.value='keep this draft';form.fire('input');
+  dom.select('#commands-manage').fire('click');
+  assert.equal(dom.select('#commands-selection').hidden,true);
+  assert.equal(form.elements.description.value,'keep this draft');
+  assert.equal(all().find(el=>el.className==='quiet graph-undo').disabled,false);
+  dom.select('#commands-manage').fire('click');
+  const selectBeta=dom.select('#registered-commands').children[1].children[0];
+  selectBeta.checked=true;selectBeta.fire('change');
+  dom.select('#commands-search').value='alpha';dom.select('#commands-search').fire('input');
+  controller.relocalize();
+  dom.select('#commands-delete-selected').fire('click');await tick();await tick();
+  assert.equal(posts,1);assert.equal(confirms,1,'unrelated dirty editor does not ask to discard');
+  assert.equal(form.elements.name.value,'alpha');assert.equal(form.elements.description.value,'keep this draft');
+  assert.equal(form.dataset.dirty,'true');
+  assert.equal(all().find(el=>el.className==='quiet graph-undo').disabled,false);
+  all().find(el=>el.className==='quiet graph-undo').onclick();
+  assert.equal(form.elements.description.value,'keep this draft');
+  dom.select('#commands-select-all').checked=true;dom.select('#commands-select-all').fire('change');
+  dom.select('#commands-delete-selected').fire('click');await tick();await tick();
+  assert.equal(posts,2);assert.equal(confirms,3,'deleting the dirty editor confirms discard as well');
+  assert.equal(form.elements.name.value,'');assert.equal(form.dataset.dirty,'false');
+});
+
 async function harness(t) {
   const dom = domFixture(), panel = dom.select('#local-commands'), form = dom.select('#command-form');
   const requests = [], selections = [], scope = {active:true};

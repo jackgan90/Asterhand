@@ -16,6 +16,10 @@ import (
 // commandsAPI is only reachable after the normal local session/Origin/CSRF
 // checks. There is deliberately no HTTP launch route or remote API equivalent.
 func (a *App) commandsAPI(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/api/local-commands/delete-batch" && r.Method == http.MethodPost {
+		a.deleteCommandBatch(w, r)
+		return
+	}
 	if r.URL.Path == "/api/local-commands/browse" && r.Method == http.MethodPost {
 		a.browseCommandScript(w, r)
 		return

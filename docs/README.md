@@ -1,5 +1,7 @@
 # 文档导航
 
+[本地命令批量删除](development/features/batch-delete-local-commands/plan.md)：管理模式内多选、全选、逐项错误反馈与修订/运行占用保护；本机用户验收通过。
+
 本地命令统一使用脚本图，可按命令开启多实例执行，日志按实例独立查看；实现与验证见[统一命令计划](development/features/unified-command-runs/plan.md)。
 
 本文按产品领域组织需求、架构决策、使用指南和维护入口；每个链接均指向仓库中的长期文档。

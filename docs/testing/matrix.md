@@ -1,5 +1,7 @@
 # 自动化验收矩阵
 
+命令完成通知使用[专项验证入口](../development/features/local-command-completion-notifications/validation.md)：Go 覆盖配置兼容、终态发布、公共队列、IPC 和宿主；Node 覆盖表单及运行选择；Windows 原生用例验证真实 WebView2 的进入/退出和不抢焦点。锁屏睡眠、拔屏、辅助功能与不同缩放分别登记结果。
+
 本文定义故障与行为的预期矩阵，不表示整行场景均已验证。已实现的自动化入口见 [测试指南](../../tests/README.md)，真实设备步骤见 [人工验收](acceptance.md)。
 
 | ID | 场景 | 必须观察到的结果 |

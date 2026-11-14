@@ -73,24 +73,25 @@ func (r Request) Validate() error {
 }
 
 type Entry struct {
-	AllowConcurrent bool              `json:"allow_concurrent"`
-	Active          int               `json:"active_count"`
-	Failed          int               `json:"failed_count"`
-	Interrupted     int               `json:"interrupted_count"`
-	ActiveRunIDs    []string          `json:"active_run_ids,omitempty"`
-	RunID           string            `json:"run_id,omitempty"`
-	Phase           string            `json:"phase,omitempty"`
-	Result          string            `json:"result,omitempty"`
-	Reason          string            `json:"reason,omitempty"`
-	ID              string            `json:"id"`
-	Revision        string            `json:"revision"`
-	Name            string            `json:"name"`
-	Aliases         []string          `json:"aliases"`
-	Description     string            `json:"description"`
-	State           string            `json:"state"`
-	Detail          string            `json:"detail,omitempty"`
-	DetailKey       string            `json:"detail_key,omitempty"`
-	DetailArgs      map[string]string `json:"detail_args,omitempty"`
+	NotifyOnCompletion bool              `json:"notify_on_completion"`
+	AllowConcurrent    bool              `json:"allow_concurrent"`
+	Active             int               `json:"active_count"`
+	Failed             int               `json:"failed_count"`
+	Interrupted        int               `json:"interrupted_count"`
+	ActiveRunIDs       []string          `json:"active_run_ids,omitempty"`
+	RunID              string            `json:"run_id,omitempty"`
+	Phase              string            `json:"phase,omitempty"`
+	Result             string            `json:"result,omitempty"`
+	Reason             string            `json:"reason,omitempty"`
+	ID                 string            `json:"id"`
+	Revision           string            `json:"revision"`
+	Name               string            `json:"name"`
+	Aliases            []string          `json:"aliases"`
+	Description        string            `json:"description"`
+	State              string            `json:"state"`
+	Detail             string            `json:"detail,omitempty"`
+	DetailKey          string            `json:"detail_key,omitempty"`
+	DetailArgs         map[string]string `json:"detail_args,omitempty"`
 }
 
 type Error struct {

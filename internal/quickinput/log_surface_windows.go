@@ -17,6 +17,7 @@ import (
 
 type logSurface struct {
 	id         string
+	runID      string
 	session    string
 	anchor     *hostipc.WindowAnchor
 	shown      chan error
@@ -41,12 +42,18 @@ func NewLogWindowHost(home string, call CommandHandler) LogWindowHost {
 }
 
 func (s *nativeSurface) pageURL() string {
+	if s.notification != nil {
+		return surfaceOrigin + "/quick-input/notification.html"
+	}
 	if s.log != nil {
 		return surfaceOrigin + "/quick-input/command-log.html"
 	}
 	return surfaceURL
 }
 func (s *nativeSurface) titleKey() string {
+	if s.notification != nil {
+		return "brand.notification_window_title"
+	}
 	if s.log != nil {
 		return "brand.log_window_title"
 	}
@@ -64,7 +71,7 @@ func (s *nativeSurface) logBridgeMessage(raw string) {
 	if m.Kind == "ready" && !s.documentReady {
 		s.documentReady = true
 		s.logProgress("page_ready", "")
-		if err = s.postJSON(map[string]any{"kind": "init", "generation": s.epoch, "command_id": s.log.id, "theme": s.theme, "locale": s.locale}); err != nil {
+		if err = s.postJSON(map[string]any{"kind": "init", "generation": s.epoch, "command_id": s.log.id, "run_id": s.log.runID, "theme": s.theme, "locale": s.locale}); err != nil {
 			s.ready <- err
 		}
 		return

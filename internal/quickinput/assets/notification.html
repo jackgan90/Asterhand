@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title data-i18n="brand.notification_window_title"></title><link rel="stylesheet" href="input.css"><link rel="stylesheet" href="notification.css"></head>
+<body><main id="notification" role="status" aria-live="polite" aria-atomic="true">
+  <div class="notification-icon" aria-hidden="true"></div>
+  <div class="notification-content">
+    <div class="notification-heading"><span id="notification-result"></span><span class="notification-brand" data-i18n="brand.primary"></span></div>
+    <strong id="notification-name"></strong>
+    <div class="notification-footer"><span id="notification-detail"></span><button id="notification-open" type="button"></button></div>
+    <p id="notification-error" hidden></p>
+  </div>
+  <button id="notification-close" type="button" data-i18n-aria-label="common.notification.close" data-i18n-title="common.notification.close"><span aria-hidden="true">×</span></button>
+</main><script type="module" src="notification.mjs"></script></body></html>

@@ -3,9 +3,11 @@
   "groups": [
     {
       "id": "commands",
-      "ui": "命令与脚本图管理、搜索、保存、运行及多选/全选后批量删除（复用批处理组合）",
+      "ui": "命令与脚本图管理、完成通知开关、搜索、保存、运行及多选/全选后批量删除（复用批处理组合）",
       "tests": [
         "internal/localcommands/registry_test.go",
+        "internal/localcommands/notification_setting_test.go",
+        "internal/automation/notification_test.go",
         "tests/graph-editor.test.mjs",
         "tests/local-command-management.test.mjs",
         "tests/command-selection.test.mjs",
@@ -227,7 +229,7 @@
   },
   "exceptions": {
     "human": "认证、秘密、配对及授权须人类操作；混合入口逐字段按 coverage.md 分类。",
-    "display": "纯展示操作以结构化读取或显式设置等价替代；实体按键录制不需要模拟。",
+    "display": "纯展示操作以结构化读取或显式设置等价替代；实体按键录制不需要模拟。完成卡片的动画、排队和关闭以 runs.get/wait、logs.read 等价读取，展示可用性由 settings.get.notifications 提供。",
     "known-path": "脚本选择器以设置已知本地绝对路径等价替代，不增加任意目录浏览。"
   }
 }

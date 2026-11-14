@@ -132,7 +132,7 @@ func (r *logRuntime) open(m hostipc.Message) {
 			return
 		}
 		entry = &logWindowEntry{firstRequest: m.Request}
-		log := &logSurface{id: m.WindowID, session: r.initial.Session, anchor: m.Anchor, shown: make(chan error, 1),
+		log := &logSurface{id: m.WindowID, runID: m.RunID, session: r.initial.Session, anchor: m.Anchor, shown: make(chan error, 1),
 			started: time.Now(), send: r.peer.send, routes: &r.routes}
 		log.hidden = func() { r.emit(logRuntimeEvent{entry: entry, kind: "hidden"}) }
 		entry.surface = newWindowSurface(r.initial.Home, nil, func(err error) { r.emit(logRuntimeEvent{entry: entry, kind: "failed", err: err}) }, nil, log)
@@ -142,6 +142,15 @@ func (r *logRuntime) open(m hostipc.Message) {
 		go r.watch(entry)
 	}
 	r.sequence++
+	if m.RunID != "" {
+		s := entry.surface
+		_ = s.dispatch(r.ctx, func() {
+			s.log.runID = m.RunID
+			if s.pageInitialized {
+				_ = s.postJSON(map[string]any{"kind": "select_run", "run_id": m.RunID})
+			}
+		})
+	}
 	entry.used = r.sequence
 	r.pending[m.Request] = logPendingOpen{entry: entry, anchor: m.Anchor}
 	if entry.shown {

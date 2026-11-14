@@ -48,9 +48,7 @@ func (a *App) desktopAPI(w http.ResponseWriter, r *http.Request) {
 			st, err = a.Input.Apply(r.Context(), change)
 			if err == nil {
 				a.notifyRefresh()
-				if a.CommandLogs != nil {
-					a.CommandLogs.Update(st.Desired.Theme, st.EffectiveLocale)
-				}
+				a.updateDesktopAppearance(st)
 				outLocale := reqLocale
 				if change.Locale != nil {
 					outLocale = st.EffectiveLocale
@@ -65,9 +63,7 @@ func (a *App) desktopAPI(w http.ResponseWriter, r *http.Request) {
 			st, err = a.Input.SetLocale(r.Context(), change)
 			if err == nil {
 				a.notifyRefresh()
-				if a.CommandLogs != nil {
-					a.CommandLogs.Update(st.Desired.Theme, st.EffectiveLocale)
-				}
+				a.updateDesktopAppearance(st)
 				result = st.Localize(st.EffectiveLocale)
 			}
 		}

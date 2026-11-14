@@ -53,6 +53,9 @@ func (a *App) RequestStop(confirmed bool) bool {
 	a.requests.stop()
 	cancel := a.cancel
 	a.mu.Unlock()
+	if a.Notifications != nil {
+		a.Notifications.Stop()
+	}
 	a.Commands.BeginShutdown()
 	if a.Input != nil {
 		a.Input.BeginStop()

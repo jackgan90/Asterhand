@@ -1,5 +1,7 @@
 # 平台与支持范围
 
+本地命令完成通知首版仅实现 Windows Win32/WebView2 展示，公共队列与展示接口独立。macOS/Linux 返回 `unsupported`，不启动窗口，也不影响命令结果读取；公共测试和交叉编译不构成这两个平台的桌面验收。Windows 无交互桌面时展示不可用，执行和日志服务继续工作。
+
 以下为 Windows 助手版本 0.1.0-alpha.1 的支持边界。精确依赖由 [依赖清单](../../packaging/dependencies.json) 和 [运行时锁文件](../../packaging/runtime-lock.json) 管理，验证操作见 [测试指南](../../tests/README.md)。
 
 | 平台或能力 | 支持与验证边界 |

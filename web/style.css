@@ -746,6 +746,8 @@ details.advanced > summary:hover { color: var(--fg); }
 .toggle-row.compact small { margin-top: 2px; }
 .toggle-row > span { font-size: 13px; color: var(--muted); }
 .command-editor .field-grid { align-items: start; }
+.command-options > .toggle-row { align-self: stretch; }
+.command-options > .toggle-row > span { align-self: start; }
 .command-argument { display: flex; gap: 8px; margin-top: 8px; }
 .command-argument input { flex: 1; min-width: 0; margin: 0; }
 .command-script-path { display: flex; align-items: center; gap: 8px; margin-top: 6px; }

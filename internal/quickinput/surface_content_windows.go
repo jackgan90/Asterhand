@@ -130,7 +130,9 @@ func (s *nativeSurface) receiveMessage(_ uintptr, args *comRef) uintptr {
 	}
 	message, err := args.boundedText(4, 128*1024)
 	if err == nil && len(message) <= 128*1024 {
-		if s.log != nil {
+		if s.notification != nil {
+			s.notificationBridgeMessage(message)
+		} else if s.log != nil {
 			s.logBridgeMessage(message)
 		} else {
 			s.bridgeMessage(message)

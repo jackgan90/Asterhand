@@ -1,5 +1,7 @@
 # 测试需求
 
+TEST-NTF-01：完成通知必须覆盖默认开关兼容、显式关闭、公共操作和草稿、最终保存后一次性发布、主动停止过滤、有限排队与汇总、悬停/桌面中断计时、迟到事件、原运行日志定位和宿主独立退出。原生动画、焦点、多屏/DPI 与辅助功能按[完成通知验证说明](../development/features/local-command-completion-notifications/validation.md)单独验证，替身不算桌面验收。
+
 ## 自动化验证要求
 
 - TEST-AUTO-01：公共操作、CLI/MCP 定义与日常 UI 覆盖登记一致，缺失或 schema 漂移阻断交付；静态登记不能替代行为验证。

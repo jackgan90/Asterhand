@@ -23,6 +23,7 @@ import (
 	"github.com/jackgan90/Asterhand/internal/launch"
 	"github.com/jackgan90/Asterhand/internal/localcommands"
 	"github.com/jackgan90/Asterhand/internal/model"
+	"github.com/jackgan90/Asterhand/internal/notifications"
 	"github.com/jackgan90/Asterhand/internal/peer"
 	"github.com/jackgan90/Asterhand/internal/quickinput"
 	"github.com/jackgan90/Asterhand/internal/store"
@@ -46,6 +47,7 @@ type App struct {
 	Chat            *conversation.Service
 	Commands        *localcommands.Registry
 	CommandLogs     quickinput.LogWindowHost
+	Notifications   *notifications.Service
 	pickScript      func(context.Context) (string, error)
 	commandPicking  bool
 	desktopRequests chan struct{}
@@ -112,13 +114,15 @@ func New(c *config.Manager, x executor.Executor) (*App, error) {
 	a.Input = quickinput.New(c.Home)
 	a.Shortcut = launch.NewShortcutManager(c.Home)
 	a.Commands = localcommands.Open(c.Home)
-	if err = a.Commands.ConfigureRuns(localcommands.NewRunManager(c.Home, localcommands.NewPlatformBackend(), nil)); err != nil {
+	runs := localcommands.NewRunManager(c.Home, localcommands.NewPlatformBackend(), nil)
+	if err = a.Commands.ConfigureRuns(runs); err != nil {
 		log.Printf("%s", i18n.T(i18n.Effective(), "err.localcmd.managed_unavailable"))
 	}
 	a.Input.SetCommandHandler(a.commandCall)
 	a.CommandLogs = quickinput.NewLogWindowHost(c.Home, a.commandCall)
+	a.prepareCommandNotifications(runs)
 	preferences := a.Input.Status()
-	a.CommandLogs.Update(preferences.Desired.Theme, preferences.EffectiveLocale)
+	a.updateDesktopAppearance(preferences)
 	a.Chat = conversation.New(c.Get().NodeID, s, executor.NewConversationRuntime(c))
 	a.Input.SetConversationClient(conversation.Client{Target: a.Chat.Target(), Transport: a.Chat})
 	a.Chat.SetCompletionHandler(a.Input.ReplyCompleted)
@@ -205,8 +209,11 @@ func (a *App) Close() error {
 		commandErr := a.Commands.Close(commandCtx)
 		commandCancel()
 		var logErr error
+		if a.Notifications != nil {
+			logErr = a.Notifications.Close()
+		}
 		if a.CommandLogs != nil {
-			logErr = a.CommandLogs.Close()
+			logErr = errors.Join(logErr, a.CommandLogs.Close())
 		}
 		if a.Input != nil {
 			a.Input.Close()

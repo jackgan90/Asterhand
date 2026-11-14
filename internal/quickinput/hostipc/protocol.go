@@ -14,6 +14,7 @@ import (
 	"github.com/jackgan90/Asterhand/internal/editors"
 	"github.com/jackgan90/Asterhand/internal/i18n"
 	commandswire "github.com/jackgan90/Asterhand/internal/localcommands/wire"
+	"github.com/jackgan90/Asterhand/internal/notifications"
 )
 
 const Version = 1
@@ -50,34 +51,37 @@ const (
 // Sequence is an editor revision within one Session. Revision belongs to the
 // parent draft, and Epoch invalidates edits after an explicit draft reset.
 type Message struct {
-	Version      int                    `json:"version"`
-	Session      string                 `json:"session"`
-	Kind         Kind                   `json:"kind"`
-	Request      uint64                 `json:"request,omitempty"`
-	Sequence     uint64                 `json:"sequence,omitempty"`
-	Epoch        uint64                 `json:"epoch,omitempty"`
-	Revision     uint64                 `json:"revision,omitempty"`
-	Text         string                 `json:"text,omitempty"`
-	Theme        string                 `json:"theme,omitempty"`
-	Locale       string                 `json:"locale,omitempty"`
-	Home         string                 `json:"home,omitempty"`
-	AppVersion   string                 `json:"app_version,omitempty"`
-	Source       string                 `json:"source,omitempty"`
-	Runtime      string                 `json:"runtime,omitempty"`
-	Code         string                 `json:"code,omitempty"`
-	Visible      bool                   `json:"visible,omitempty"`
-	Recovered    bool                   `json:"recovered,omitempty"`
-	ChatID       string                 `json:"chat_id,omitempty"`
-	Chat         *wire.Request          `json:"chat,omitempty"`
-	ChatReply    *ChatReply             `json:"chat_reply,omitempty"`
-	CommandID    string                 `json:"command_request_id,omitempty"`
-	Command      *commandswire.Request  `json:"command,omitempty"`
-	CommandReply *commandswire.Response `json:"command_reply,omitempty"`
-	WindowID     string                 `json:"window_id,omitempty"`
-	Anchor       *WindowAnchor          `json:"window_anchor,omitempty"`
-	LogEvent     *LogWindowEvent        `json:"log_event,omitempty"`
-	Editor       *EditorRequest         `json:"editor,omitempty"`
-	EditorReply  *editors.Reply         `json:"editor_reply,omitempty"`
+	Notifications *notifications.Snapshot `json:"notifications,omitempty"`
+	Notification  *notifications.Event    `json:"notification,omitempty"`
+	RunID         string                  `json:"run_id,omitempty"`
+	Version       int                     `json:"version"`
+	Session       string                  `json:"session"`
+	Kind          Kind                    `json:"kind"`
+	Request       uint64                  `json:"request,omitempty"`
+	Sequence      uint64                  `json:"sequence,omitempty"`
+	Epoch         uint64                  `json:"epoch,omitempty"`
+	Revision      uint64                  `json:"revision,omitempty"`
+	Text          string                  `json:"text,omitempty"`
+	Theme         string                  `json:"theme,omitempty"`
+	Locale        string                  `json:"locale,omitempty"`
+	Home          string                  `json:"home,omitempty"`
+	AppVersion    string                  `json:"app_version,omitempty"`
+	Source        string                  `json:"source,omitempty"`
+	Runtime       string                  `json:"runtime,omitempty"`
+	Code          string                  `json:"code,omitempty"`
+	Visible       bool                    `json:"visible,omitempty"`
+	Recovered     bool                    `json:"recovered,omitempty"`
+	ChatID        string                  `json:"chat_id,omitempty"`
+	Chat          *wire.Request           `json:"chat,omitempty"`
+	ChatReply     *ChatReply              `json:"chat_reply,omitempty"`
+	CommandID     string                  `json:"command_request_id,omitempty"`
+	Command       *commandswire.Request   `json:"command,omitempty"`
+	CommandReply  *commandswire.Response  `json:"command_reply,omitempty"`
+	WindowID      string                  `json:"window_id,omitempty"`
+	Anchor        *WindowAnchor           `json:"window_anchor,omitempty"`
+	LogEvent      *LogWindowEvent         `json:"log_event,omitempty"`
+	Editor        *EditorRequest          `json:"editor,omitempty"`
+	EditorReply   *editors.Reply          `json:"editor_reply,omitempty"`
 }
 
 var ErrProtocol = errors.New("invalid input host protocol")
@@ -92,6 +96,8 @@ func (m Message) Validate(fromHost bool) error {
 	var allowed bool
 	if fromHost {
 		switch m.Kind {
+		case NotificationEvent:
+			allowed = validNotificationEvent(m.Notification)
 		case Ready:
 			allowed = m.AppVersion != "" && m.Source != "" && m.Runtime != ""
 		case Edit:
@@ -111,12 +117,14 @@ func (m Message) Validate(fromHost bool) error {
 		}
 	} else {
 		switch m.Kind {
+		case NotificationFrame:
+			allowed = validNotifications(m.Notifications)
 		case Initialize:
 			allowed = m.Home != "" && m.AppVersion != "" && m.Source != "" && m.Epoch != 0 && validTheme(m.Theme) && (m.Locale == "" || i18n.ValidLocale(m.Locale))
 		case Toggle, Snapshot:
 			allowed = m.Request != 0
 		case OpenLog:
-			allowed = m.Request != 0 && commandswire.ValidID(m.WindowID)
+			allowed = m.Request != 0 && commandswire.ValidID(m.WindowID) && (m.RunID == "" || commandswire.ValidID(m.RunID))
 		case Theme:
 			allowed = m.Request != 0 && validTheme(m.Theme)
 		case Locale:
@@ -134,6 +142,9 @@ func (m Message) Validate(fromHost bool) error {
 		}
 	}
 	if !allowed {
+		return ErrProtocol
+	}
+	if m.Kind != NotificationFrame && m.Notifications != nil || m.Kind != NotificationEvent && m.Notification != nil || m.Kind != OpenLog && m.RunID != "" {
 		return ErrProtocol
 	}
 	if m.Kind != EditorCall && m.Editor != nil || m.Kind != EditorResult && m.EditorReply != nil {

@@ -20,8 +20,8 @@ const inputCSP = "default-src 'none'; script-src 'self'; style-src 'self'; font-
 var inputResourceTypes = resourceTypes()
 
 func resourceTypes() map[string]string {
-	allowed := map[string]string{"index.html": "text/html; charset=utf-8", "command-log.html": "text/html; charset=utf-8"}
-	for _, name := range []string{"input.css", "chat.css", "commands.css", "command-log.css"} {
+	allowed := map[string]string{"index.html": "text/html; charset=utf-8", "command-log.html": "text/html; charset=utf-8", "notification.html": "text/html; charset=utf-8"}
+	for _, name := range []string{"input.css", "chat.css", "commands.css", "command-log.css", "notification.css"} {
 		allowed[name] = "text/css; charset=utf-8"
 	}
 	// Monochrome CSS mask icons; the page colors them with the theme.
@@ -29,7 +29,7 @@ func resourceTypes() map[string]string {
 		allowed["icons/"+name+".svg"] = "image/svg+xml"
 	}
 	for _, name := range []string{"input.js", "i18n.mjs", "i18n-catalog.mjs", "input-model.mjs", "composer-layout.mjs", "webview2-bridge.mjs", "chat-client.mjs",
-		"chat-model.mjs", "chat-renderer.mjs", "chat-ui.mjs", "live-input.mjs", "chat-outbox.mjs", "chat-status.mjs", "chat-queue.mjs", "chat-connection.mjs",
+		"chat-model.mjs", "chat-renderer.mjs", "chat-ui.mjs", "live-input.mjs", "chat-outbox.mjs", "chat-status.mjs", "chat-queue.mjs", "chat-connection.mjs", "notification.mjs",
 		"chat-markup.mjs", "chat-math.mjs", "command-client.mjs", "command-model.mjs", "command-results.mjs", "command-ui.mjs", "command-log.mjs", "command-run.mjs", "log-model.mjs", "legacy-log-decoder.mjs", "legacy-log-tables.mjs", "log-graph.mjs", "log-node.mjs", "log-reader.mjs", "log-pane.mjs"} {
 		allowed[name] = "application/javascript; charset=utf-8"
 	}

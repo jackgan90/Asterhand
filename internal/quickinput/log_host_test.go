@@ -109,10 +109,11 @@ func TestLogHostReusesReadyAndCarriesClickMonitor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), logAnchorContextKey{}, anchor), time.Second)
 	defer cancel()
 	for range 3 {
-		if err := h.Open(ctx, model.ID()); err != nil {
+		runID := model.ID()
+		if err := h.Open(WithLogRun(ctx, runID), model.ID()); err != nil {
 			t.Fatal(err)
 		}
-		if m := <-received; m.Anchor == nil || *m.Anchor != anchor {
+		if m := <-received; m.Anchor == nil || *m.Anchor != anchor || m.RunID != runID {
 			t.Fatal("lost input monitor", m)
 		}
 	}

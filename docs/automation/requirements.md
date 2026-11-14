@@ -1,5 +1,7 @@
 # 自动化、CLI 与 MCP 需求
 
+AUTO-NTF-01：`commands.create/get/list/validate/patch/clone` 与命令草稿支持布尔字段 `notify_on_completion`，创建默认开启、编辑缺省保留、显式 false 保持关闭，null 和错误类型拒绝。UI、CLI、MCP 共用注册、运行接纳快照和终态保存规则；卡片关闭和动画是展示行为，业务结果通过 `runs.get/wait`、`logs.read` 等价读取。`settings.get.notifications` 返回展示可用性和当前队列数量。
+
 状态：公共操作与 Windows CLI/MCP 已实现，工程验证、独立审核及用户验收已完成。本文为持续有效的需求，实施范围见[统一自动化计划](../development/features/agent-automation/plan.md)，验证方法与专项环境边界见[验证说明](../development/features/agent-automation/validation.md)。
 
 ## 目标与覆盖边界

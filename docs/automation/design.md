@@ -1,5 +1,9 @@
 # 自动化公共操作设计
 
+## 本地命令通知字段
+
+`notify_on_completion` 使用默认开启且能区分缺省与 false 的领域类型，机器 schema 映射为 boolean。创建/校验缺省采用 true；patch 或旧版完整保存缺省保留现值；显式 null 拒绝。复制保留值，读输出包含有效布尔值。命令草稿保留同一字段；旧草稿替换缺字段时浏览器保留当前开关。运行接纳后根据快照决定通知，不重新读取注册配置。展示失败不改变公共运行结果；`settings.get.notifications` 提供 `state`、`pending` 和 `visible`，其中 `idle` 表示尚未首次启动宿主，`unsupported` 表示平台未实现。
+
 状态：公共操作和三入口适配已实现，工程验证、独立审核及用户验收已完成，范围见[功能计划](../development/features/agent-automation/plan.md)。当前行为与差异见[覆盖清单](coverage.md)，需求见[自动化需求](requirements.md)。
 
 ## 已固定的基础参数

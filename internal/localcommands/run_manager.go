@@ -13,22 +13,24 @@ import (
 )
 
 type managedRun struct {
-	group       *runGroup
-	logBytes    int64
-	finalizing  bool
-	graph       *graphRun
-	mu          sync.Mutex
-	record      RunRecord
-	file        *logFile
-	busy        bool
-	started     time.Duration
-	stopStarted time.Duration
-	done        chan struct{}
+	observeCompletion bool
+	group             *runGroup
+	logBytes          int64
+	finalizing        bool
+	graph             *graphRun
+	mu                sync.Mutex
+	record            RunRecord
+	file              *logFile
+	busy              bool
+	started           time.Duration
+	stopStarted       time.Duration
+	done              chan struct{}
 }
 
 // RunManager owns accepted work independently of request and UI lifetimes.
 // Lock order is registry -> manager -> run; workers only acquire the run lock.
 type RunManager struct {
+	completion atomic.Pointer[completionObserver]
 	groups     map[string]*runGroup
 	recovering atomic.Int32
 	graphSlots chan struct{}
@@ -239,6 +241,7 @@ func (m *RunManager) persistFinalLocked(run *managedRun) bool {
 		return false
 	}
 	run.busy = false
+	m.completedLocked(run)
 	close(run.done)
 	return true
 }

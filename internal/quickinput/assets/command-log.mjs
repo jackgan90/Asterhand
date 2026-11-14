@@ -11,7 +11,7 @@ const bridge = webview2Bridge(), byID = id => document.getElementById(id);
 const stop = byID('log-stop'), encoding = byID('log-encoding');
 let epoch = '', commandID = '', record = null, stopping = false, refreshing = false;
 let runs = {runs: []};
-let timer = null, visible = true, error = null;
+let timer = null, visible = true, error = null, selectionVersion = 0;
 const post = (kind, fields = {}) => bridge.send({version: 1, kind, generation: epoch, ...fields});
 const client = commandClient(bridge, post), read = logReadQueue(client.call);
 const graphView = logGraphView({byID, changed: () => void refresh(), createPane: (nodeID, next) =>
@@ -55,19 +55,22 @@ async function refresh() {
   if (!epoch || !visible) return;
   if (refreshing) { scheduleRefresh(); return; }
   refreshing = true;
-  const generation = epoch, id = commandID;
+  const generation = epoch, id = commandID, selectedVersion = selectionVersion;
   try {
     const response = await client.call('runs', {command_id: id});
-    if (epoch !== generation || commandID !== id) return;
+    if (epoch !== generation || commandID !== id || selectedVersion !== selectionVersion) return;
     const next = response.runs || {runs: []}, records = new Map();
     const ids = new Set(graphView.required(next));
     if (next.latest_run_id) ids.add(next.latest_run_id);
     for (const runID of ids) {
       const detail = await client.call('status', {command_id: id, run_id: runID});
-      if (epoch !== generation || commandID !== id) return;
+      if (epoch !== generation || commandID !== id || selectedVersion !== selectionVersion) return;
       if (detail.run) records.set(runID, detail.run);
     }
-    runs = next; record = records.get(next.latest_run_id) || null;
+    // A notification can address a retained run outside the current round.
+    // Include only explicitly inspected/fixed history, keeping the list bounded.
+    for (const [runID, detail] of records) if (!next.runs.some(run => run.run_id === runID)) next.runs.push(detail);
+    runs = next; record = records.get(graphView.inspected || next.latest_run_id) || null;
     error = record ? null : {messageKey: 'err.localcmd.no_run'};
     renderMetadata();
     graphView.metadata(next, records);
@@ -104,7 +107,12 @@ bridge.subscribe(message => {
   if (message.kind === 'init') {
     if (commandID !== message.command_id || epoch !== message.generation) { record = null; runs = {runs: []}; graphView.metadata(null); }
     epoch = message.generation; commandID = message.command_id; setLocale(message.locale);
+    const targetRun = message.run_id || ''; selectionVersion++;
+    if (targetRun) graphView.target(targetRun);
     document.documentElement.dataset.theme = message.theme; applyI18n(); post('initialized'); void refresh();
+  }
+  if (message.kind === 'select_run') {
+    selectionVersion++; graphView.target(message.run_id); void refresh();
   }
   if (message.kind === 'theme') document.documentElement.dataset.theme = message.theme;
   if (message.kind === 'locale') { setLocale(message.locale); applyI18n(); renderMetadata(); graphView.relocalize(); }

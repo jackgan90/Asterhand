@@ -9,6 +9,9 @@ import (
 )
 
 func PatchCommand(c localcommands.Command, patch CommandPatch) (localcommands.Command, error) {
+	if patch.NotifyOnCompletion.Present() {
+		c.NotifyOnCompletion = patch.NotifyOnCompletion
+	}
 	if patch.Name != nil {
 		c.Name = *patch.Name
 	}

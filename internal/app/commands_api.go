@@ -30,7 +30,7 @@ func (a *App) commandsAPI(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/api/local-commands" && r.Method == http.MethodGet:
 		result, err = a.Commands.Snapshot()
 	case r.URL.Path == "/api/local-commands/state" && r.Method == http.MethodGet:
-		result = map[string]any{"runs": a.Commands.RunStates(), "managed_available": a.Commands.ManagedAvailable()}
+		result = map[string]any{"runs": a.Commands.RunStates(), "managed_available": a.Commands.ManagedAvailable(), "notifications": a.notificationStatus()}
 	case (r.URL.Path == "/api/local-commands/stop" || r.URL.Path == "/api/local-commands/stop-all" || r.URL.Path == "/api/local-commands/logs") && r.Method == http.MethodPost:
 		var input struct {
 			ID     string   `json:"id"`

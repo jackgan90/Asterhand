@@ -1,5 +1,9 @@
 # 安装与环境需求
 
+## 命令通知宿主
+
+INSTALL-NTF-01：Windows 安装使用同版本、同来源校验的 `AsterhandInputHost.exe --notification-host` 独立非提权进程显示命令通知。快捷键关闭或主 Web 关闭不影响通知；宿主故障不影响已完成脚本的结果。无交互桌面应报告不可用，macOS/Linux 报告未支持。详见[自绘通知决策](adr/010-command-completion-notifications.md)。
+
 自动化要求（已接入公共操作）：INSTALL-AUTO-01 要求 CLI/MCP 与节点同包分发、来源/版本/许可可核对，帮助和版本不要求服务在线；INSTALL-AUTO-02 要求本机当前用户可直接连接，保留升级数据，显式启动/停止复用既有安装定位与生命周期。见[自动化设计](../automation/design.md#版本安装与验证)。
 
 ## 持续聊天生命周期

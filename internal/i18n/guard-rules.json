@@ -28,7 +28,8 @@
   "html_checked_files": [
     "web/index.html",
     "internal/quickinput/assets/index.html",
-    "internal/quickinput/assets/command-log.html"
+    "internal/quickinput/assets/command-log.html",
+    "internal/quickinput/assets/notification.html"
   ],
   "excluded_paths": [
     "internal/prompt/",

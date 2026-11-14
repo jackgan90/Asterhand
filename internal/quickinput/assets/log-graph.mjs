@@ -12,13 +12,20 @@ const maxPanes = 8;
 // Modes: "merged" shows the inspected run's combined log, "active" follows
 // running nodes, and "selected" keeps a fixed set of run/node panes.
 export function runLogSelection() {
-  let round = '', inspected = '', mode = 'merged';
+  let round = '', inspected = '', mode = 'merged', pinned = false;
   const selected = new Map();
   const add = (runID, nodeID) => { if (selected.size < maxPanes || selected.has(paneKey(runID, nodeID))) selected.set(paneKey(runID, nodeID), {runID, nodeID}); };
   return {
     get inspected() { return inspected; },
     get mode() { return mode; },
+    clear() { round=''; inspected=''; mode='merged'; pinned=false; selected.clear(); },
     inspect(id) { inspected = id; },
+    target(id) {
+      inspected = id; pinned = true;
+      // Keep existing split panes and their scroll positions when there is room.
+      if (mode === 'selected') add(id, '');
+      else { mode = 'merged'; selected.clear(); }
+    },
     merged() { mode = 'merged'; selected.clear(); },
     active() { mode = 'active'; selected.clear(); },
     // Entering the fixed mode keeps what is currently on screen.
@@ -30,7 +37,8 @@ export function runLogSelection() {
     },
     reset(list) {
       if (round !== list.round_id) {
-        round = list.round_id; inspected = list.latest_run_id || ''; mode = 'merged'; selected.clear();
+        round = list.round_id;
+        if (!pinned) { inspected = list.latest_run_id || ''; mode = 'merged'; selected.clear(); }
       }
     },
     has(runID, nodeID = '') {
@@ -47,7 +55,7 @@ export function runLogSelection() {
       const ids = new Set([inspected]);
       for (const choice of selected.values()) ids.add(choice.runID);
       if (mode === 'active') for (const run of list.runs) if (run.phase !== 'finished') ids.add(run.run_id);
-      return [...ids].filter(id => list.runs.some(run => run.run_id === id));
+      return [...ids].filter(id => id && (pinned || list.runs.some(run => run.run_id === id)));
     },
     choices(list, records) {
       if (mode === 'merged') return inspected ? [{runID: inspected, nodeID: ''}] : [];
@@ -144,8 +152,11 @@ export function logGraphView({byID, createPane, changed = () => {}}) {
   modes.selected.onclick = () => { selection.custom(selection.choices(list, records)); update(); };
   runPicker.onchange = () => { selection.inspect(runPicker.value); changed(); };
   return {
+    get inspected() { return selection.inspected; },
+    target(id) { selection.target(id); },
     required(next) { selection.reset(next); return selection.required(next); },
     metadata(next = {runs: []}, nextRecords = new Map()) {
+      if (!next) selection.clear();
       list = next || {runs: []}; records = nextRecords; selection.reset(list); render();
     },
     refresh,

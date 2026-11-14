@@ -119,6 +119,7 @@ func (r *Registry) List(request wire.Request) wire.Response {
 			Aliases: c.Aliases, Description: c.Description, State: status.state, Detail: detail, DetailKey: status.detailKey, AllowConcurrent: c.AllowConcurrent})
 		state := r.managed.Summary(c.ID)
 		entry := &reply.Entries[len(reply.Entries)-1]
+		entry.NotifyOnCompletion = c.NotifyOnCompletion.Enabled()
 		entry.RunID, entry.Phase, entry.Result, entry.Reason = state.RunID, state.Phase, state.Result, state.Reason
 		entry.Active, entry.Failed, entry.Interrupted, entry.ActiveRunIDs = state.Active, state.Failed, state.Interrupted, state.ActiveRunIDs
 		encoded, _ := json.Marshal(reply)

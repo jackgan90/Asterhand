@@ -1,5 +1,7 @@
 # CLI 与 MCP 使用
 
+命令的 `notify_on_completion` 为布尔值，默认 true。通过 `commands.patch` 与当前命令修订传入 `"notify_on_completion": false` 可关闭完成提醒，传入 true 可重新开启；省略字段保留当前值。创建、复制、读取以及 `drafts.get/update/commit` 使用同一开关。通知只显示在运行节点的 Windows 桌面，运行结果仍用 `runs.wait/get` 和 `logs.read` 读取；`settings.get` 的 `notifications` 字段可检查桌面展示是否可用。
+
 在 Codex 等外部客户端中配置 Asterhand 的 MCP 服务，或直接调用 CLI。提示词指定工作对象。两者使用同一个可执行文件，按 Windows 当前用户连接本机节点。先用当前版本启动一次节点，使客户端可以找到本机管道和证书。
 
 ## CLI

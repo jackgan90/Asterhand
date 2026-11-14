@@ -8,7 +8,7 @@ import {newGraph} from '../web/graph-model.mjs';
 test('bulk deletion preserves another command draft and history, then clears the deleted editor', async t => {
   const dom=domFixture(), panel=dom.select('#local-commands'), form=dom.select('#command-form');
   globalThis.document=dom.document;
-  for(const name of ['name','aliases','description','allow_concurrent','timeout','timeout_unit']) form.elements[name]=dom.document.createElement('input');
+  for(const name of ['name','aliases','description','allow_concurrent','notify_on_completion','timeout','timeout_unit']) form.elements[name]=dom.document.createElement('input');
   form.elements.namedItem=name=>form.elements[name];
   panel.querySelectorAll=()=>[...dom.elements.values(),...descendants(dom.select('#registered-commands'))];
   form.querySelectorAll=()=>Object.values(form.elements).filter(value=>typeof value!=='function');
@@ -56,7 +56,7 @@ test('bulk deletion preserves another command draft and history, then clears the
 async function harness(t) {
   const dom = domFixture(), panel = dom.select('#local-commands'), form = dom.select('#command-form');
   const requests = [], selections = [], scope = {active:true};
-  for (const name of ['name','aliases','description','allow_concurrent','timeout','timeout_unit']) form.elements[name] = dom.document.createElement('input');
+  for (const name of ['name','aliases','description','allow_concurrent','notify_on_completion','timeout','timeout_unit']) form.elements[name] = dom.document.createElement('input');
   form.elements.namedItem = name => form.elements[name];
   panel.querySelectorAll = () => [...dom.elements.values()];
   form.querySelectorAll = () => Object.values(form.elements).filter(value => typeof value !== "function");
@@ -122,7 +122,7 @@ test('saving the open command keeps the graph view through the success reload', 
   globalThis.requestAnimationFrame = callback => callback();
   t.after(() => delete globalThis.requestAnimationFrame);
   const dom = domFixture(), panel = dom.select('#local-commands'), form = dom.select('#command-form'), scope = {active:true};
-  for (const name of ['name','aliases','description','allow_concurrent','timeout','timeout_unit']) form.elements[name] = dom.document.createElement('input');
+  for (const name of ['name','aliases','description','allow_concurrent','notify_on_completion','timeout','timeout_unit']) form.elements[name] = dom.document.createElement('input');
   form.elements.namedItem = name => form.elements[name];
   panel.querySelectorAll = () => [...dom.elements.values()];
   form.querySelectorAll = () => Object.values(form.elements).filter(value => typeof value !== 'function');
@@ -154,7 +154,7 @@ test('saving the open command keeps the graph view through the success reload', 
 
 async function historyForm(t) {
   const dom = domFixture(), panel = dom.select('#local-commands'), form = dom.select('#command-form'), scope = {active:true};
-  for (const name of ['name','aliases','description','allow_concurrent','timeout','timeout_unit']) form.elements[name] = dom.document.createElement('input');
+  for (const name of ['name','aliases','description','allow_concurrent','notify_on_completion','timeout','timeout_unit']) form.elements[name] = dom.document.createElement('input');
   form.elements.namedItem = name => form.elements[name];
   panel.querySelectorAll = () => [...dom.elements.values()];
   form.querySelectorAll = () => Object.values(form.elements).filter(value => typeof value !== 'function');
@@ -183,6 +183,16 @@ async function historyForm(t) {
     fail:async error => { pending.reject(error); await tick(); },
   };
 }
+
+test('completion switch defaults on for existing definitions and persists false with dirty tracking', async t => {
+  const h = await historyForm(t), checkbox=h.form.elements.notify_on_completion;
+  assert.equal(checkbox.checked,true);
+  checkbox.checked=false;h.form.fire('input');assert.equal(h.form.dataset.dirty,'true');
+  await h.save();assert.equal(h.posted().command.notify_on_completion,false);await h.succeed();
+  assert.equal(checkbox.checked,false);assert.equal(h.form.dataset.dirty,'false');
+  h.select('#commands-refresh').fire('click');await tick();
+  assert.equal(checkbox.checked,false);
+});
 
 test('saving retains history, revisions and dirty state tracks undo and redo across the save point', async t => {
   const h = await historyForm(t);

@@ -45,6 +45,14 @@ func launchWindowsHostFrom(directory string) (hostProcess, error) {
 }
 
 func launchWindowsHostMode(directory string, logs bool) (hostProcess, error) {
+	mode := ""
+	if logs {
+		mode = "--log-host"
+	}
+	return launchWindowsHostKind(directory, mode)
+}
+
+func launchWindowsHostKind(directory, mode string) (hostProcess, error) {
 	if err := checkInteractiveSession(); err != nil {
 		return nil, err
 	}
@@ -76,7 +84,7 @@ func launchWindowsHostMode(directory string, logs bool) (hostProcess, error) {
 	p := &windowsHostProcess{input: commandWrite, output: statusRead, exited: make(chan struct{})}
 	p.job, err = newHostJob()
 	if err == nil {
-		err = p.createMode(guard.Name(), token, commandRead, statusWrite, logs)
+		err = p.createKind(guard.Name(), token, commandRead, statusWrite, mode)
 	}
 	if err != nil {
 		commandWrite.Close()
@@ -110,6 +118,14 @@ func (p *windowsHostProcess) create(path string, token windows.Token, commands, 
 }
 
 func (p *windowsHostProcess) createMode(path string, token windows.Token, commands, status *os.File, logs bool) error {
+	mode := ""
+	if logs {
+		mode = "--log-host"
+	}
+	return p.createKind(path, token, commands, status, mode)
+}
+
+func (p *windowsHostProcess) createKind(path string, token windows.Token, commands, status *os.File, mode string) error {
 	handles := []windows.Handle{windows.Handle(commands.Fd()), windows.Handle(status.Fd())}
 	for _, handle := range handles {
 		if err := windows.SetHandleInformation(handle, windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT); err != nil {
@@ -138,8 +154,8 @@ func (p *windowsHostProcess) createMode(path string, token windows.Token, comman
 		return err
 	}
 	args := windows.ComposeCommandLine([]string{path, "--command-handle", strconv.FormatUint(uint64(handles[0]), 10), "--status-handle", strconv.FormatUint(uint64(handles[1]), 10)})
-	if logs {
-		args += " --log-host"
+	if mode != "" {
+		args += " " + mode
 	}
 	command, _ := windows.UTF16PtrFromString(args)
 	directory, _ := windows.UTF16PtrFromString(filepath.Dir(path))

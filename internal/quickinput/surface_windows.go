@@ -49,7 +49,8 @@ type nativeWindowClass struct {
 }
 
 type nativeSurface struct {
-	log *logSurface
+	log          *logSurface
+	notification *notificationSurface
 
 	hwnd                          atomic.Uintptr
 	ready                         chan error
@@ -188,6 +189,9 @@ func (s *nativeSurface) initializeWebView() error {
 		}
 	}
 	profile := filepath.Join(s.home, "quick-input-profile")
+	if s.notification != nil {
+		profile = filepath.Join(s.home, "notification-profile")
+	}
 	if s.log != nil {
 		profile = s.logProfileDirectory()
 	}
@@ -214,16 +218,23 @@ func (s *nativeSurface) createWindow() error {
 	title, _ := windows.UTF16PtrFromString(i18n.T(s.locale, s.titleKey()))
 	const appWindow = 0x00040000                                 // WS_EX_APPWINDOW; no owner or TOOLWINDOW suppression.
 	windowStyle := uintptr(0x80000000 | 0x00080000 | 0x00020000) // POPUP | SYSMENU | MINIMIZEBOX
+	extendedStyle := uintptr(appWindow)
+	if s.notification != nil {
+		extendedStyle = 0x08000000 | 0x00000080 | 0x00080000
+		windowStyle = 0x80000000
+	} // NOACTIVATE | TOOLWINDOW | LAYERED
 	if s.log != nil {
 		windowStyle = 0x00cf0000
 	}
-	hwnd, _, err := uiDLL.NewProc("CreateWindowExW").Call(appWindow, uintptr(unsafe.Pointer(s.class)), uintptr(unsafe.Pointer(title)), windowStyle, 0, 0, 680, initialSurfaceHeight, 0, 0, instance, 0)
+	hwnd, _, err := uiDLL.NewProc("CreateWindowExW").Call(extendedStyle, uintptr(unsafe.Pointer(s.class)), uintptr(unsafe.Pointer(title)), windowStyle, 0, 0, 680, initialSurfaceHeight, 0, 0, instance, 0)
 	if hwnd == 0 {
 		return err
 	}
 	s.hwnd.Store(hwnd)
 	s.applyWindowFrame()
-	if s.log == nil {
+	if s.notification != nil {
+		uiDLL.NewProc("SetLayeredWindowAttributes").Call(hwnd, 0, 0, 2)
+	} else if s.log == nil {
 		s.positionForShow()
 	} else {
 		s.positionLogWindow(s.log.anchor)
@@ -461,7 +472,9 @@ func surfaceWindowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uin
 		default:
 		}
 	case 0x0010:
-		if s.log != nil {
+		if s.notification != nil {
+			s.notification.emit("dismiss")
+		} else if s.log != nil {
 			s.hide(false)
 			s.log.visible.Store(false)
 			if s.log.hidden != nil {
@@ -475,6 +488,10 @@ func surfaceWindowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uin
 	case 0x0113:
 		if wParam == 70 {
 			s.finishClose()
+		} else if s.notification != nil && wParam == 71 {
+			s.animateNotification()
+		} else if s.notification != nil && wParam == 72 {
+			s.revealNotification()
 		}
 	default:
 		return s.windowEvent(hwnd, message, wParam, lParam)

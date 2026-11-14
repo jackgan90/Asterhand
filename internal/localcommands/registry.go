@@ -177,6 +177,9 @@ func (r *Registry) saveLocked(change Mutation, objectRevision string, identity *
 		return SaveResult{}, problem("conflict", "err.localcmd.save_conflict")
 	}
 	if index >= 0 {
+		if !change.Command.NotifyOnCompletion.Present() {
+			command.NotifyOnCompletion = next.Commands[index].NotifyOnCompletion
+		}
 		next.Commands = slices.Delete(next.Commands, index, index+1)
 	}
 	for _, other := range next.Commands {

@@ -86,7 +86,8 @@ func (h *logHost) connect() (*logConnection, error) {
 }
 
 func (h *logHost) Open(ctx context.Context, id string) error {
-	if !commandswire.ValidID(id) {
+	runID := logRunTarget(ctx)
+	if !commandswire.ValidID(id) || runID != "" && !commandswire.ValidID(runID) {
 		return hostipc.ErrProtocol
 	}
 	if err := ctx.Err(); err != nil {
@@ -110,7 +111,7 @@ func (h *logHost) Open(ctx context.Context, id string) error {
 	reply := make(chan error, 1)
 	c.requests.Store(seq, reply)
 	defer c.requests.Delete(seq)
-	if err = c.send(hostipc.Message{Kind: hostipc.OpenLog, Request: seq, WindowID: id, Anchor: anchor}); err != nil {
+	if err = c.send(hostipc.Message{Kind: hostipc.OpenLog, Request: seq, WindowID: id, RunID: runID, Anchor: anchor}); err != nil {
 		return err
 	}
 	select {

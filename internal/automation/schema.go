@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/jackgan90/Asterhand/internal/localcommands"
 )
 
 // Decode rejects unknown fields, trailing JSON, duplicate keys, invalid Unicode
@@ -109,6 +111,9 @@ func jsonField(f reflect.StructField) (string, bool) {
 func Schema[T any]() map[string]any { return typeSchema(reflect.TypeFor[T]()) }
 
 func typeSchema(typ reflect.Type) map[string]any {
+	if typ == reflect.TypeFor[localcommands.NotificationSetting]() {
+		return map[string]any{"type": "boolean"}
+	}
 	if typ == reflect.TypeFor[[]byte]() {
 		return map[string]any{"type": "string", "contentEncoding": "base64"}
 	}

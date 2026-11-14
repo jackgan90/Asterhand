@@ -56,6 +56,7 @@ func (a *App) registerAutomationSettings(r *automation.Registry) {
 				"node":             nodeSettingsView(a.Config.Get()),
 				"desktop":          desktopView(a.Input.Status()),
 				"desktop_shortcut": a.shortcutStatus().Localize(i18n.Effective()),
+				"notifications":    a.notificationStatus(),
 			}}, nil
 		})
 	automation.Register(r, automation.Definition{Name: "settings.patch", Description: "Atomically update one ordinary settings object against its expected revision", Role: "edit", Write: true, Batch: true}, func(v automation.SettingsPatch) string { return r.Node }, func(p automation.Principal, v automation.SettingsPatch) error { return p.Require("node", r.Node) }, a.automationSettingsPatch)
@@ -177,9 +178,7 @@ func (a *App) automationDesktopPatch(ctx context.Context, call automation.Call, 
 	published := st.Desired.Publication != nil && st.Desired.Publication.Identity == call.Identity
 	if err == nil || published {
 		a.notifyRefresh()
-		if a.CommandLogs != nil {
-			a.CommandLogs.Update(st.Desired.Theme, st.EffectiveLocale)
-		}
+		a.updateDesktopAppearance(st)
 	}
 	return automation.Outcome{Data: desktopView(st), Summary: map[string]string{"revision": st.Desired.Revision}, Accepted: published || err == nil, Unknown: published && err != nil}, desktopError(err)
 }

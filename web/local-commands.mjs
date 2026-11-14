@@ -33,7 +33,8 @@ function matchesSavedContent(current, {submitted, saved}) {
 
 function commandContent(command) {
   return {name:command.name, aliases:command.aliases ?? [], description:command.description ?? '',
-    allow_concurrent:command.allow_concurrent === true, timeout_seconds:command.timeout_seconds ?? null, graph:graphContent(command.graph)};
+    allow_concurrent:command.allow_concurrent === true, notify_on_completion:command.notify_on_completion !== false,
+    timeout_seconds:command.timeout_seconds ?? null, graph:graphContent(command.graph)};
 }
 
 export function localCommands({api, post, session, listen, guarded, actions, editors}) {
@@ -72,10 +73,12 @@ export function localCommands({api, post, session, listen, guarded, actions, edi
       baseline_revision:catalog.commands.find(c=>c.id===selected)?.revision||''}:null,
     busy:()=>busy||editor.changingGeometry||runBusy(runStates[selected]),
     read:()=>({name:field('name').value,aliases:field('aliases').value,description:field('description').value,
-      allow_concurrent:field('allow_concurrent').checked,timeout:field('timeout').value,timeout_unit:field('timeout_unit').value,graph:editor.rawSnapshot()}),
+      allow_concurrent:field('allow_concurrent').checked,notify_on_completion:field('notify_on_completion').checked,
+      timeout:field('timeout').value,timeout_unit:field('timeout_unit').value,graph:editor.rawSnapshot()}),
     apply:value=>{
       for(const name of ['name','aliases','description','timeout','timeout_unit'])field(name).value=value[name]??'';
       field('allow_concurrent').checked=Boolean(value.allow_concurrent);
+      if (Object.hasOwn(value, 'notify_on_completion')) field('notify_on_completion').checked=value.notify_on_completion !== false;
       editor.replaceLiveGraph(value.graph);updateDirty();
     },
     commit:id=>mutate(false,id),
@@ -103,6 +106,7 @@ export function localCommands({api, post, session, listen, guarded, actions, edi
     catch { timeout = {value: field('timeout').value, unit: field('timeout_unit').value}; }
     return {name: field('name').value.trim(), aliases: field('aliases').value.split('\n').map(value => value.trim()).filter(Boolean),
       description: field('description').value.trim(), allow_concurrent: field('allow_concurrent').checked,
+      notify_on_completion: field('notify_on_completion').checked,
       timeout_seconds: timeout, graph: editor.comparison()};
   }
   function updateDirty() {
@@ -127,6 +131,7 @@ export function localCommands({api, post, session, listen, guarded, actions, edi
     for (const name of ['name', 'description']) field(name).value = command[name] ?? '';
     field('aliases').value = (command.aliases ?? []).join('\n');
     field('allow_concurrent').checked=command.allow_concurrent===true;
+    field('notify_on_completion').checked=command.notify_on_completion !== false;
     editor.load(command.graph);
     field('timeout').value=command.timeout_seconds ?? '';field('timeout_unit').value='1';
     $('#command-delete').hidden = !selected;
@@ -225,6 +230,7 @@ export function localCommands({api, post, session, listen, guarded, actions, edi
       id:selected, revision:catalog.commands.find(value => value.id === selected)?.revision ?? '',
       name:field('name').value.trim(), aliases:field('aliases').value.split('\n').map(value=>value.trim()).filter(Boolean),
       description:field('description').value.trim(), allow_concurrent:field('allow_concurrent').checked,
+      notify_on_completion:field('notify_on_completion').checked,
       timeout_seconds:timeoutSeconds(field('timeout').value,field('timeout_unit').value), graph:editor.read(),
     };
   }

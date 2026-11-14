@@ -124,7 +124,7 @@ func (m *RunManager) admitLocked(command Command, previous *runGroup, newRound b
 	index.IDs = append(slices.Clone(index.IDs), id)
 	index.Latest, index.Sequence = id, sequence
 	run := &managedRun{record: RunRecord{Version: 1, ID: id, RoundID: index.RoundID, Sequence: sequence, Command: command,
-		Phase: "starting", Started: time.Now().UTC(), LogComplete: true}, busy: true, done: make(chan struct{}), group: group}
+		Phase: "starting", Started: time.Now().UTC(), LogComplete: true}, busy: true, observeCompletion: true, done: make(chan struct{}), group: group}
 	if identity != nil {
 		copy := *identity
 		run.record.Operation = &copy

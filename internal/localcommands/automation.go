@@ -154,6 +154,7 @@ func (r *Registry) Page(query, revision, after string, limit int, allowed func(s
 		status := r.status(c)
 		item := r.managed.Summary(c.ID)
 		item.ID, item.Revision, item.Name = c.ID, c.Revision, c.Name
+		item.NotifyOnCompletion = c.NotifyOnCompletion.Enabled()
 		item.Aliases, item.Description, item.AllowConcurrent = slices.Clone(c.Aliases), c.Description, c.AllowConcurrent
 		item.State, item.DetailKey = status.state, status.detailKey
 		page.Items = append(page.Items, item)

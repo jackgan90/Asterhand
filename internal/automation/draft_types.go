@@ -18,13 +18,14 @@ type DraftGet struct {
 
 // Text fields preserve unfinished input. Conversion belongs to explicit commit.
 type CommandDraft struct {
-	Name        string     `json:"name"`
-	Aliases     string     `json:"aliases"`
-	Description string     `json:"description"`
-	Concurrent  bool       `json:"allow_concurrent"`
-	Timeout     string     `json:"timeout"`
-	TimeoutUnit string     `json:"timeout_unit"`
-	Graph       DraftGraph `json:"graph"`
+	NotifyOnCompletion localcommands.NotificationSetting `json:"notify_on_completion,omitempty" description:"Completion notification switch; omit to preserve the existing editor value"`
+	Name               string                            `json:"name"`
+	Aliases            string                            `json:"aliases"`
+	Description        string                            `json:"description"`
+	Concurrent         bool                              `json:"allow_concurrent"`
+	Timeout            string                            `json:"timeout"`
+	TimeoutUnit        string                            `json:"timeout_unit"`
+	Graph              DraftGraph                        `json:"graph"`
 }
 type DraftGraph struct {
 	Nodes       []DraftStep               `json:"nodes"`

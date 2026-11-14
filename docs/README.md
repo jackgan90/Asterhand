@@ -1,5 +1,7 @@
 # 文档导航
 
+[本地命令完成通知](development/features/local-command-completion-notifications/plan.md)：Windows 桌面右下角主题卡片、按内容调整高度、进退动效、多实例排队和逐命令通知开关；工程验证、独立审计修复复审及本机用户验收通过，专项环境边界见[验证说明](development/features/local-command-completion-notifications/validation.md)。
+
 [本地命令批量删除](development/features/batch-delete-local-commands/plan.md)：管理模式内多选、全选、逐项错误反馈与修订/运行占用保护；本机用户验收通过。
 
 本地命令统一使用脚本图，可按命令开启多实例执行，日志按实例独立查看；实现与验证见[统一命令计划](development/features/unified-command-runs/plan.md)。

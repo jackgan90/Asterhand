@@ -1,0 +1,26 @@
+html,body {height:100%;overflow:hidden}
+main {display:flex;height:auto;gap:12px;padding:16px 38px 14px 16px;border-radius:12px;min-width:0;box-shadow:inset 0 0 24px #76e1ff05}
+main::before {display:none}
+.notification-icon {flex:none;width:26px;height:26px;margin-top:2px;border-radius:50%;background:color-mix(in srgb,var(--status-color) 14%,var(--bg));color:var(--status-color)}
+.notification-icon::after {content:"";display:block;width:16px;height:16px;margin:5px;background:currentColor;mask:var(--icon-check) center/contain no-repeat}
+:root {--status-color:#80e3a3}
+:root[data-theme=frost] {--status-color:#267040}
+:root[data-result=failed] {--status-color:#ffb4a5}
+:root[data-theme=frost][data-result=failed] {--status-color:#a52b32}
+:root[data-result=failed] .notification-icon::after {mask-image:var(--icon-alert)}
+.notification-content {min-width:0;flex:1}
+.notification-heading {display:flex;justify-content:space-between;gap:8px;align-items:center;font-size:11px;color:var(--muted);line-height:18px}
+#notification-result {color:var(--status-color);font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.notification-brand {opacity:.7;font-size:10px;white-space:nowrap}
+#notification-name {display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere;font-size:14px;font-weight:600;line-height:19px;margin:3px 0 5px}
+.notification-footer {display:flex;gap:8px;justify-content:space-between;align-items:center;font-size:11px;color:var(--muted);line-height:20px}
+#notification-detail {overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+button {font:inherit;border:0;background:transparent;color:var(--accent);cursor:pointer;border-radius:5px;padding:2px 5px;white-space:nowrap;transition:background-color 120ms,color 120ms}
+button:hover {background:color-mix(in srgb,var(--accent) 12%,transparent)}
+button:focus-visible {outline:2px solid var(--accent);outline-offset:1px}
+button:disabled {opacity:.6;cursor:wait}
+#notification-close {position:absolute;right:9px;top:9px;color:var(--muted);width:24px;height:24px;padding:0;font-size:19px;line-height:24px}
+#notification-error {margin:0;font-size:11px;line-height:15px;color:var(--status-color);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+[hidden] {display:none!important}
+@media(prefers-reduced-motion:reduce) {button {transition:none}}
+@media(forced-colors:active) {.notification-icon,button,#notification-result {color:CanvasText} main {border:1px solid CanvasText}}

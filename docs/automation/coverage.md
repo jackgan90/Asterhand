@@ -18,7 +18,7 @@
 | Web“管理”内多选、全选全部命令、批量删除（管理切换仅控制显示） | `commands.list` 遍历分页固定 ID/修订；`batches.submit` 组合 `commands.delete`，`batches.get` 查逐项结果（CLI/MCP 同 schema） | 每批最多 32 项，可顺序分块；对象修订、运行锁与逐项收据；部分成功，不回滚；未知结果先核对原身份 |
 | 添加/删除/重命名步骤、选择脚本、参数、工作目录、步骤超时 | 整图替换或一次 `commands.patch` 中的步骤操作 | 稳定步骤 ID、参数空项、平台路径规则；允许缺失文件配置 |
 | 连接/断开依赖、调整步骤顺序、并行数 | 同一图修改中的边/顺序/属性操作 | 最终图校验一次，中间不完整图不写入正式配置 |
-| 拖动布局、命令并发开关、整图超时 | 显式坐标、自动布局及命令属性修改 | 布局不改变依赖；保留已有坐标和执行限制 |
+| 拖动布局、命令并发开关、整图超时、执行结束后通知 | 显式坐标、自动布局及命令属性修改，通知字段为 `notify_on_completion` | 布局不改变依赖；保留已有坐标和执行限制；通知字段缺省与显式 false 区分 |
 | 图撤销/重做、保存、放弃修改 | 自有候选快照/修改序列、`validate`、显式保存 | 可回到任一未保存草稿；恢复已保存内容需新写入及修订检查；不操作他人的撤销栈 |
 | 续改未保存的图、普通表单、快捷聊天和任务回答 | `drafts.list/get/update/commit` | 按业务目标和窗口 ID 操作，检查原修订，复用已有保存/发送，见[编辑器接口](draft-handoff.md) |
 | 脚本文件选择窗口 | 直接设置本机脚本绝对路径，运行时复核可用性 | 无需弹窗；不扩大为任意目录浏览、脚本正文写入或上传 |
@@ -63,6 +63,10 @@
 安装、升级、Tailscale 登录及系统依赖管理不属于日常自动化首期；普通启动/停止已经纳入。新增人类能力必须先分类；不能把已有业务操作重新命名为纯展示来规避覆盖。
 
 ## 验证与扩展
+
+### 命令完成通知
+
+[本地命令完成通知](../development/features/local-command-completion-notifications/plan.md)通过 `notify_on_completion` 接入命令创建、读取、校验、局部修改、复制以及命令草稿的 CLI/MCP schema；新建与现有缺失字段默认 true，局部更新省略字段保持原值，显式 false 保留，null 拒绝。通知卡片、动画、关闭和排队为展示操作，运行结果与日志通过 `runs.list/get/wait`、`logs.read` 等价读取；`settings.get.notifications` 读取展示可用性及队列数量。专项测试与平台边界见[验证说明](../development/features/local-command-completion-notifications/validation.md)。
 
 覆盖依据来自[Web 需求](../web/requirements.md)、[会话设计](../assistant/conversations.md)、[命令设计](../executors/local-commands.md)、[脚本图设计](../executors/script-graphs.md)、[任务设计](../tasks/design.md)和[安装设计](../installation/design.md)。[注册入口](../../internal/app/automation.go)按领域组织公共操作，[CLI](../../internal/automation/cli.go)与[MCP](../../internal/automation/mcp.go)消费同一组定义；行为测试按[覆盖登记](../../contracts/automation-coverage.json)关联。[Go 守卫](../../internal/app/automation_coverage_test.go)对比实际注册与登记、检查输出 schema，[UI 守卫](../../tests/automation-coverage.test.mjs)检查 Web 端点和原生闭合动作的新入口。这些静态检查不能证明动态 UI 的业务语义，reviewer 仍须逐行核对本表。
 

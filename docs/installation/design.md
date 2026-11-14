@@ -166,3 +166,9 @@ packaging/dependencies.json 是 Node、OpenClaw、模型插件、Go 构建器、
 构建将源码摘要写入程序和 release manifest。真实验证核对该摘要；安装测试在独立中文含空格目录运行 Windows PowerShell 5.1，覆盖首次/重复安装、重复启动、运行时 doctor、旧 flat 配置迁移以及身份/凭据字节保留。包激活与数据库回滚分别处理，不承诺自动回滚；停止与安装后启动必须显式选择。
 
 完整命令及更新步骤见 [升级流程](../../packaging/upgrade.md)。验证报告、人工两机验收、提交、推送和发布分别记录。
+
+## 本机工具数据与升级
+
+LocalTools 缺失或没有策略修订时按默认开启处理，并补齐稳定修订；已有非空修订的明确开启或关闭保持，人工切换生成新修订。沿用 conversations/runtime-<binding>/workspace，原生 state 与 file-versions 独立保存；普通升级不改变 binding。文件插件嵌入程序，启动时写到受管 runtime 目录，仅从固定包复制缺失原生模板。未修改 Node/OpenClaw 清单版本、安装流程或旧任务项目目录。
+
+安装验证应覆盖旧配置缺字段或无修订的默认值迁移、明确关闭保持、开关保存、同工作区历史/记忆/版本保留及 unknown 不重放；安装/repair 不覆盖用户明确选择。具体测试和未验证项见[本机工具验证](../development/features/local-runtime-tools/validation.md)。

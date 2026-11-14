@@ -142,6 +142,9 @@ func (s *Service) Call(ctx context.Context, request Request) (response Response,
 		}
 	}
 	switch request.Action {
+	case "activities":
+		response.Activities, err = s.activities(request)
+		return response, err
 	case "connect", "connection":
 		if runtime, ok := s.runtime.(interface {
 			Connection(context.Context, bool) string

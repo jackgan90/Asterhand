@@ -19,6 +19,22 @@ func (a *App) reconcileAutomationOperation(receipt operations.Receipt) (operatio
 	switch receipt.Name {
 	case "drafts.commit":
 		return a.reconcileEditorCommit(receipt)
+	case "workspace_files.mutate", "workspace_versions.restore", "workspace_operations.resolve":
+		files, err := a.Chat.Workspace()
+		if err != nil {
+			return receipt, err
+		}
+		op, err := files.Operation(receipt.NativeID())
+		if receipt.Name == "workspace_operations.resolve" {
+			op, err = files.Resolution(receipt.NativeID())
+		}
+		if err != nil {
+			return receipt, nil
+		}
+		if op.State == "started" || op.State == "unknown" {
+			return receipt, nil
+		}
+		summary = map[string]string{"activity_id": op.ID, "state": op.State}
 	case "conversations.create", "conversations.send":
 		conversation, turn, err := a.Chat.OperationStatus(receipt.NativeID())
 		if errors.Is(err, store.ErrNotFound) {

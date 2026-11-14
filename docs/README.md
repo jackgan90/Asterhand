@@ -1,5 +1,7 @@
 # 文档导航
 
+[本机持续会话工具能力计划](development/features/local-runtime-tools/plan.md)：首批本机文件、搜索、记忆、进度与文件恢复已交付并通过用户验收；采用[正式文件 I/O 桥接](development/features/local-runtime-tools/preflight.md)，未设置过工具权限时默认开启，可在“设置 → 助手”关闭。工程覆盖与专项验证边界见[验证说明](development/features/local-runtime-tools/validation.md)。先逐步完善本机能力，再评估远程聊天。
+
 [本地命令完成通知](development/features/local-command-completion-notifications/plan.md)：Windows 桌面右下角主题卡片、按内容调整高度、进退动效、多实例排队和逐命令通知开关；工程验证、独立审计修复复审及本机用户验收通过，专项环境边界见[验证说明](development/features/local-command-completion-notifications/validation.md)。
 
 [本地命令批量删除](development/features/batch-delete-local-commands/plan.md)：管理模式内多选、全选、逐项错误反馈与修订/运行占用保护；本机用户验收通过。

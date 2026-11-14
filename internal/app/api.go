@@ -103,6 +103,8 @@ func (a *App) api(w http.ResponseWriter, r *http.Request) {
 		send(w, 200, network.Inspect(r.Context(), port).Localize(reqLocale))
 	case "/api/settings":
 		a.settings(w, r)
+	case "/api/workspace/permission":
+		a.workspacePolicyAPI(w, r)
 	case "/api/probe":
 		a.probe(w, r)
 	case "/api/peers":

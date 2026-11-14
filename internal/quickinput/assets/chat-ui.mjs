@@ -5,6 +5,7 @@ import {ChatOutbox} from './chat-outbox.mjs';
 import {replyStatusView} from './chat-status.mjs';
 import {operationQueue} from './chat-queue.mjs';
 import {connectionView} from './chat-connection.mjs';
+import {toolActivities} from './chat-activities.mjs';
 import {formatDateTime, localizeError, onLocaleChange, t} from './i18n.mjs';
 
 export function chatPanel(bridge, editor) {
@@ -84,6 +85,7 @@ export function chatPanel(bridge, editor) {
     paint();
   }
   const client = conversationClient(bridge, editor, envelope);
+  const activities = toolActivities(query('chat-activities'), client);
   const queue = operationQueue(client, outbox);
   const connection = connectionView(query('chat-connection'), client);
   const render = messageRenderer(query('chat-messages'), {copy, expand: expandMessage});
@@ -151,6 +153,7 @@ export function chatPanel(bridge, editor) {
   async function select(id) {
     selection++;
     selected = id;
+    activities.select(id);
     if (sendingOperation) outbox.bind(sendingOperation, id);
     turn = null;
     historyLoaded = false;
@@ -196,6 +199,7 @@ export function chatPanel(bridge, editor) {
       refreshHistory = false;
       readingOlder = older && !response.page?.reset;
       windowState.apply(response.page ?? {messages: []}, older);
+      void activities.refresh();
       if (response.page?.reset && !sending) sayKey('quickinput.ui.history_reset');
       else sayTurn();
       paint(readingOlder);
@@ -303,6 +307,7 @@ export function chatPanel(bridge, editor) {
   async function poll() {
     if (polling || !visible) return;
     polling = true;
+    if (expanded) void activities.refresh();
     const id = selected, version = selection;
     try {
       if (queue.enabled) {
@@ -468,6 +473,7 @@ export function chatPanel(bridge, editor) {
       ? t('quickinput.conversation_label', {id: selected.slice(0, 8)})
       : t('quickinput.default_assistant');
     connection.relocalize();
+    activities.relocalize();
     render.relocalize();
     if (!list.hidden && lastListState) renderList();
     if (lastStatus?.kind === 'key') sayKey(lastStatus.key, lastStatus.args);

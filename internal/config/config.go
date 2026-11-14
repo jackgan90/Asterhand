@@ -34,6 +34,7 @@ func DefaultWorkspaceProject(root string) Project {
 }
 
 type Config struct {
+	LocalTools             LocalToolPolicy            `json:"local_runtime_tools,omitempty"`
 	Revision               string                     `json:"revision,omitempty"`
 	Publication            *operations.Publication    `json:"automation_publication,omitempty"`
 	NodeID                 string                     `json:"node_id"`
@@ -55,6 +56,13 @@ type Config struct {
 	VerifiedBundle         string                     `json:"verified_bundle,omitempty"`
 	VerifiedExecution      string                     `json:"verified_execution,omitempty"`
 	AcceptanceDelay        int                        `json:"acceptance_delay_seconds,omitempty"`
+}
+
+// LocalToolPolicy defaults on until configured. Later changes are made only
+// through the dedicated human permission control and receive a new revision.
+type LocalToolPolicy struct {
+	Enabled  bool   `json:"enabled"`
+	Revision string `json:"revision,omitempty"`
 }
 type Manager struct {
 	writeMu sync.Mutex

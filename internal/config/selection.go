@@ -16,6 +16,11 @@ var credentialID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 // normalize is the only migration from the original flat model configuration.
 // Credentials stay at the original path so migration never duplicates a secret.
 func normalize(c Config) Config {
+	// Earlier defaults serialized enabled=false without a policy revision.
+	// Only an actual saved choice must survive a change to the product default.
+	if c.LocalTools.Revision == "" {
+		c.LocalTools = LocalToolPolicy{Enabled: true, Revision: "default-tools-v1"}
+	}
 	if c.AgentRuntime == "" {
 		c.AgentRuntime = packaging.Dependencies().DefaultTarget().Runtime
 	}

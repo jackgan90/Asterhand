@@ -22,6 +22,7 @@ export default {
     // OpenClaw captures plugin source into a separate immutable directory.
     // The mutable policy path therefore comes only from trusted host config.
     const {policyPath: planURL} = api.pluginConfig ?? {};
+    const toolsAllow = Array.isArray(api.pluginConfig?.toolsAllow) ? api.pluginConfig.toolsAllow : [];
     if (typeof planURL !== 'string' || !isAbsolute(planURL)) return;
     const observations = new Map();
     const remember = (run, record) => {
@@ -41,8 +42,8 @@ export default {
         const plan = readPlan(planURL);
         if (!plan || !context.sessionKey?.startsWith('agent:main:asterhand:')) return;
         context.hookInvocation?.assertActive();
-        return plan.application.mode === 'replace' ? {systemPrompt: plan.text, toolsAllow: []} :
-          {appendSystemContext: plan.text, toolsAllow: []};
+        return plan.application.mode === 'replace' ? {systemPrompt: plan.text, toolsAllow} :
+          {appendSystemContext: plan.text, toolsAllow};
       } catch { /* Optional prompt customization never blocks a turn. */ }
     });
     api.on('llm_input', (event, context) => {
@@ -58,7 +59,7 @@ export default {
         const effective = event.systemPrompt ?? '';
         // The embedded harness appends required model-identity context after a replacement.
         const applied = plan.application.mode === 'replace' ? effective.startsWith(plan.text) : effective.includes(plan.text);
-        const safeTools = Array.isArray(event.tools) && event.tools.length === 0;
+        const safeTools = Array.isArray(event.tools) && event.tools.every(tool => toolsAllow.includes(tool.name ?? tool.function?.name));
         // Keep only correlation and status, never prompt, body, or credentials.
         const application = {...plan.application, state: applied && safeTools ? 'applied' : 'degraded',
           ...(applied && safeTools ? {} : {reason: 'unconfirmed'})};

@@ -62,6 +62,7 @@ func (a *App) registerAutomation(r *automation.Registry) {
 	a.registerAutomationRuns(r)
 	a.registerAutomationLogs(r)
 	a.registerAutomationConversations(r)
+	a.registerAutomationWorkspace(r)
 	a.registerAutomationSettings(r)
 	a.registerAutomationTasks(r)
 	a.registerAutomationNodes(r)
@@ -142,6 +143,8 @@ func authorizeReceipt(p automation.Principal, r operations.Receipt) error {
 		family = "conversations"
 	case strings.HasPrefix(r.Name, "tasks."):
 		family = "projects"
+	case strings.HasPrefix(r.Name, "workspace_"):
+		family = "workspaces"
 	case strings.HasPrefix(r.Name, "drafts."), strings.HasPrefix(r.Name, "batches."):
 		return nil // Draft receipts contain only identities owned by this actor.
 	}

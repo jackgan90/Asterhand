@@ -8,7 +8,7 @@
 
 [持续会话设计](conversations.md)是本机快捷聊天的数据、运行时与恢复契约权威，关联 [ADR-AST-005](adr/005-conversation-runtime-and-transport-boundaries.md)。当前源码已接入，产品验收边界见验证说明；下文 route/execute/probe 和一次性 `agent exec` 仍描述已交付任务路径。
 
-独立会话服务位于 `internal/conversation`，运行时适配器位于 `internal/executor/conversation*.go`。首个实现使用受管 OpenClaw Gateway，正文和上下文保存在其独立持久目录，agentd 只保存会话绑定及请求恢复元数据。首版当前节点/默认角色、文本多轮、流式回复、历史分页和停止；工具与管理命令关闭。模型就绪与任务工具 probe 分开，纯聊天不要求文件授权目录。
+独立会话服务位于 `internal/conversation`，运行时适配器位于 `internal/executor/conversation*.go`。首个实现使用受管 OpenClaw Gateway，正文和上下文保存在其独立持久目录，agentd 只保存会话绑定及请求恢复元数据。当前节点/默认角色支持文本多轮、流式回复、历史分页和停止；默认支持受限工作区文件、记忆检索和进度，用户可关闭工具，已有明确选择保持。管理命令保持关闭。模型就绪与任务工具 probe 分开，纯聊天不要求文件授权目录。
 
 UI 经受限 IPC 访问会话服务，不接触 Gateway 凭据或厂商协议。公共层显式区分节点、角色、会话与轮次，runtime 替换、任务执行、多节点、多角色和远程通信仅保留边界。锁定运行时的接入决策与验证边界见[功能计划](../development/features/local-node-chat/plan.md)；尚未完成的真实模型、实体 IME 与安装验收单独列出。
 
@@ -55,3 +55,9 @@ Linux 密钥层为权限受限本地文件，未宣称加密；当前 Linux 基�
 executor 层统一提供 `capabilities.chat` 与 `capabilities.model_tasks`，各自包含 available/code/detail。available 表示必要本地配置齐全，不承诺 API 在线。检查只读当前配置、凭据及少量安装文件，不启动 Node/OpenClaw 或模型请求；聊天不依赖任务工具插件和文件授权目录。执行任务另按本次 project 校验目标目录，A 的模型路由不要求 A 的本地目录。
 
 保存名称、公布地址或监听地址保留诊断；模型选择、凭据写入/删除、运行时或授权目录实际变化撤销旧 passed。重启保留诊断失败/过期的状态，失败详情只在当前进程展示，避免持久化运行时错误内容。旧 `ready` 字段继续表示手动诊断通过，新入口读取能力字段。详见 [功能计划](../development/features/on-demand-model-readiness/plan.md)。
+
+## 本机工具能力
+
+[能力设计](runtime-capabilities.md)定义当前工作区授权、原生工具适配、文件版本、执行观察与恢复。会话正文仍由原生 Gateway 保存；节点只新增有界活动和文件修改日志。工具授权保存在节点配置，独立于模型提示词、旧任务授权目录和外部自动化凭据。
+
+共享服务位于 internal/workspace，会话通过可选 WorkspaceRuntime 接口取得能力；UI、CLI、MCP 和原生文件桥使用同一修改、修订及恢复规则。Windows 文件 I/O 拒绝不安全路径和链接，未知修改阻止后续写入直到显式核对。工具轮次占有工作区直到原生终态与文件操作均收尾，停止保留已经产生的文件。

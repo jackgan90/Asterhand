@@ -12,7 +12,7 @@ export function conversationClient(bridge, editor, onEnvelope) {
     const entry = pending.get(message.id);
     const response = envelope.response ?? {};
     if (response.target?.node_id) target = response.target;
-    if (envelope.response?.connection === undefined && !['connect', 'connection'].includes(entry?.action)) onEnvelope(envelope);
+    if (envelope.response?.connection === undefined && !['connect', 'connection', 'activities'].includes(entry?.action)) onEnvelope(envelope);
     if (!entry) return;
     pending.delete(message.id);
     clearTimeout(entry.timer);

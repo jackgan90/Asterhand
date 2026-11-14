@@ -70,4 +70,21 @@
 
 覆盖依据来自[Web 需求](../web/requirements.md)、[会话设计](../assistant/conversations.md)、[命令设计](../executors/local-commands.md)、[脚本图设计](../executors/script-graphs.md)、[任务设计](../tasks/design.md)和[安装设计](../installation/design.md)。[注册入口](../../internal/app/automation.go)按领域组织公共操作，[CLI](../../internal/automation/cli.go)与[MCP](../../internal/automation/mcp.go)消费同一组定义；行为测试按[覆盖登记](../../contracts/automation-coverage.json)关联。[Go 守卫](../../internal/app/automation_coverage_test.go)对比实际注册与登记、检查输出 schema，[UI 守卫](../../tests/automation-coverage.test.mjs)检查 Web 端点和原生闭合动作的新入口。这些静态检查不能证明动态 UI 的业务语义，reviewer 仍须逐行核对本表。
 
-本期验收要求上述本机日常操作及现有远端任务全部覆盖。跨节点持续聊天、远程图操作、内置助手工具接入另建 feature，沿用同一操作语义并扩展目标能力；它们不作为本期覆盖率的分母，也不得被宣传为已交付。
+本期验收要求上述本机日常操作及现有远端任务全部覆盖。跨节点持续聊天、远程图操作另建 feature；内置助手工具按下节的独立工作区身份接入，沿用同一操作语义并扩展目标能力；它们不作为本期覆盖率的分母，也不得被宣传为已交付。
+
+## 本机持续会话工具能力
+
+以下操作已注册并同步机器 schema、contracts/automation-coverage.json 与行为测试。它们使用 workspaces scope；活动与产物还检查 conversations scope。外部客户端权限与内置助手权限分开，启用/撤销只能使用“设置 → 助手”的人工开关。日常 Web 不展示文件、搜索、版本和恢复面板，相关公共 CLI/MCP 操作完整保留。实现和验证边界见[本机工具计划](../development/features/local-runtime-tools/plan.md)。
+
+| 人类操作 | 公共操作 / CLI 与 MCP 等价 | 规则 |
+|---|---|---|
+| 查看工作区与有效能力 | workspaces.get、conversations.capabilities | 只读，区分支持/授权/就绪/约束，不暴露凭据或管理路径 |
+| 浏览目录、搜索文件/内容、读取文件 | workspace_files.list/search/read | 同一工作区根、分页/预算、真实身份与权限检查 |
+| 聊天中创建/修改/移动/删除文件 | conversations.send + 工具结果读取；直接批操作通过 workspace_files.mutate | 复用修改租约、前像、逐项结果、操作身份/修订；不接受任意宿主路径或命令字符串 |
+| 查看工具活动与进度 | turn_activities.list/get，加现有 turns.get/wait/stop | 单调游标、真实终态、未知结果核对；不暴露隐藏推理 |
+| 查看/预览/下载产物 | artifacts.list/get/read | 同一授权 ID 和版本校验，有界分片，不允许任意路径下载 |
+| 查看历史版本并恢复 | workspace_versions.list/get/restore | 修订冲突、操作去重、恢复前快照；无隐式回滚 |
+| 处置确认停止的未知工具轮次 | workspace_operations.get/resolve | 记录核对依据；不能借处置伪造成功或重放修改 |
+| 开启/撤销工具权限 | 人工例外；专用设置入口 | 改变执行范围；CLI/MCP 只读状态，模型不能批准自身权限 |
+
+内置助手仅获已授权工作区的窄调用上下文；外部当前用户 CLI/MCP 原有能力保持，不将 commands.run、node 管理或全量自动化凭据注入内置模型。活动展示的展开/折叠为纯展示，等价读取是 turn_activities；文件恢复是业务操作，必须三入口一致。

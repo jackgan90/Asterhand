@@ -79,6 +79,15 @@ test('stream ignores duplicates, retains bounded runs, and requires stop proof',
   assert.equal(observation(history, 'run', 100, 200, {terminal: 'final'}).stopped, false);
 });
 
+test('an intermediate assistant tool-call message cannot finish a tool turn',()=>{
+ const history={sessionInfo:{hasActiveRun:false},messages:[{role:'assistant',stopReason:'toolUse',content:'Editing the file',__openclaw:{id:'mid',runId:'run'}}]};
+ assert.equal(observation(history,'run',200,100,null).stopped,false);
+ history.messages.push({role:'assistant',stopReason:'stop',content:'Finished',__openclaw:{id:'final',runId:'run'}});
+ assert.equal(observation(history,'run',200,100,null).run,'completed');
+ history.sessionInfo.hasActiveRun=true;
+ assert.equal(observation(history,'run',200,100,{terminal:'final'}).stopped,false);
+});
+
 test('closed client preserves operation identity and processes a late durable receipt', async () => {
   let receive;
   const posts = [], envelopes = [];

@@ -39,3 +39,7 @@ TEST-NTF-01：完成通知必须覆盖默认开关兼容、显式关闭、公共
 首版不要求 coding harness 测试。新增适配器后才引入其协议 fixture 与真实兼容性门槛。
 
 日常测试使用 Go testing、真实临时 SQLite/HTTP/TLS 和进程 fixture，不调用计费模型；真实 DeepSeek 由本机表单配置后独立验收。报告列出已运行子场景与未运行矩阵项，不将模拟双节点算作物理双 Windows 验收。
+
+## 本机工具验证
+
+TEST-TOOLS-01：真实 Windows 验证路径、目录链接、硬链接、外部进程竞争及恢复修订，保留正常修改对照。TEST-TOOLS-02：固定原生 Gateway 验证最终工具 schema、拒绝执行、记忆实际命中、终态/取消和重启，不将配置字段当作功能证据。TEST-TOOLS-03：公共 UI/CLI/MCP 的 scope、幂等、回执中断与部分完成共享验证；真实模型、桌面、安装和完整成本按[功能矩阵](../development/features/local-runtime-tools/validation.md)分别验收。

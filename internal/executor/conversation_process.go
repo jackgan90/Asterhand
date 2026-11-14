@@ -45,6 +45,7 @@ type chatProcess struct {
 	cleanup  func()
 	done     chan struct{}
 	exited   chan struct{}
+	settled  <-chan struct{}
 	mu       sync.Mutex
 	write    sync.Mutex
 	sequence uint64
@@ -63,7 +64,9 @@ func launchChatProcess(cmd *exec.Cmd, diagnostics ...*chatDiagnostics) (*chatPro
 		return nil, err
 	}
 	// The optional sink persists only fixed diagnostic fields, never raw stderr.
-	cmd.Stderr = io.Discard
+	if cmd.Stderr == nil {
+		cmd.Stderr = io.Discard
+	}
 	if len(diagnostics) != 0 {
 		cmd.Stderr = diagnostics[0]
 	}
@@ -106,10 +109,20 @@ func (p *chatProcess) stop() {
 
 func (p *chatProcess) close() error {
 	p.stop()
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
 	select {
 	case <-p.exited:
+	case <-timer.C:
+		return conversation.FailKey("cleanup_pending", "err.conv.runtime.cleanup_pending")
+	}
+	if p.settled == nil {
 		return nil
-	case <-time.After(5 * time.Second):
+	}
+	select {
+	case <-p.settled:
+		return nil
+	case <-timer.C:
 		return conversation.FailKey("cleanup_pending", "err.conv.runtime.cleanup_pending")
 	}
 }

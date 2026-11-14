@@ -156,12 +156,13 @@ export function observation(history, runID, startedAt, processStarted, stream) {
   const active = info.hasActiveRun === true || (info.activeRunIds ?? []).includes(runID) || (history.pendingInputs?.total ?? 0) > 0;
   const terminal = stream?.terminal;
   const nativeTerminal = info.lastRunId === runID && ['completed', 'done', 'error', 'failed', 'killed', 'cancelled'].includes(info.status);
-  const stopped = !active && info.hasActiveRun === false && (Boolean(terminal) || Boolean(assistant) || nativeTerminal || startedAt < processStarted);
+  const finalAssistant = assistant && ['stop', 'endTurn', 'aborted', 'error'].includes(assistant.stopReason);
+  const stopped = !active && info.hasActiveRun === false && (Boolean(terminal) || finalAssistant || nativeTerminal || startedAt < processStarted);
   let run = active ? 'running' : 'unknown';
   if (stopped) {
     if (terminal === 'aborted' || assistant?.stopReason === 'aborted' || info.lastRunId === runID && info.abortedLastRun) run = 'cancelled';
     else if (terminal === 'error' || assistant?.stopReason === 'error') run = 'failed';
-    else if (assistant) run = 'completed';
+    else if (assistant && (finalAssistant || terminal === 'final' || nativeTerminal)) run = 'completed';
     else run = 'interrupted';
   }
   const live = stream?.text && !assistant ? {

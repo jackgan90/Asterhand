@@ -1,0 +1,17 @@
+{
+  "id": "asterhand-workspace",
+  "name": "Asterhand workspace tools",
+  "activation": {"onStartup": true},
+  "contracts": {"tools": ["workspace_search"]},
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "workspace": {"type": "string"},
+      "endpoint": {"type": "string"},
+      "token": {"type": "string"},
+      "policy": {"type": "string"}
+    },
+    "required": ["workspace", "endpoint", "token", "policy"],
+    "additionalProperties": false
+  }
+}

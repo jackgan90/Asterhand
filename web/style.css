@@ -554,7 +554,7 @@ details.advanced > summary:hover { color: var(--fg); }
 .about-list { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 16px 0 0; font-size: 13px; }
 .about-list dt { color: var(--muted); }
 .about-list dd { margin: 0; }
-#theme-status[data-tone="error"], #desktop-shortcut-status[data-tone="error"] { color: var(--danger); }
+#theme-status[data-tone="error"], #desktop-shortcut-status[data-tone="error"], #assistant-tools-status[data-tone="error"] { color: var(--danger); }
 #settings-form { display: flex; flex-direction: column; flex: 1; }
 .pane-head { margin-bottom: 6px; }
 .pane-head p { margin-top: 4px; font-size: 13px; color: var(--muted); }

@@ -52,8 +52,16 @@ Go `os.OpenRoot` 约束路径解析，拒绝绝对路径、穿越、NTFS 流、�
 
 首个 adapter 使用受管 Gateway，生命周期、凭据注入、认证连接与状态目录由后端管理。UI 不知道 WebSocket RPC、配置路径或管理凭据。当前任务仍独立 `agent exec`；会话 state 与其 state 分开，禁止共享独占写入目录或接管用户已有 Gateway。
 
-验收覆盖原生持久收据而非仅 HTTP/WS ACK、重复与迟到响应、cancel 与完成竞争、状态查询、历史代次/超长消息、无工具/管理命令旁路。实现前验证门槛与范围见[计划](../development/features/local-node-chat/plan.md)。未来工具执行仍需目标节点授权与执行契约；类型化消息只能展示执行事件，不能授予能力。
+验收覆盖原生持久收据而非仅 HTTP/WS ACK、重复与迟到响应、cancel 与完成竞争、状态查询、历史代次/超长消息、无工具/管理命令旁路。实现前验证门槛与范围见[计划](../development/features/local-node-chat/plan.md)。本机工作区工具另按当前策略修订授权；类型化消息只展示执行事件，不授予能力。
 
 ## 可选聊天提示词适配
 
-提示词组装独立于 harness；适配器声明 replace/append/unsupported，实际状态区分 pending/applied/degraded。应用失败继续原生聊天，状态只携带安全的枚举与版本。默认保留 harness 原生身份、语气与行为，只适配能力和入口冲突；append/applied 为正常成功。OpenClaw 私有 Gateway 加载应用自带的可信提示词插件，before_prompt_build 使用 appendSystemContext 保留原生组装，llm_input 核实补充规则与零工具输入。隔离工作区开启原生角色文件初始化并保留已有定制；不读取工程或个人 home 的设定。工具权限仍由有效运行配置约束。详见[会话设计](../assistant/conversations.md)与[功能计划](../development/features/chat-prompt-interaction/plan.md)。
+提示词组装独立于 harness；适配器声明 replace/append/unsupported，实际状态区分 pending/applied/degraded。应用失败继续原生聊天，状态只携带安全的枚举与版本。默认保留 harness 原生身份、语气与行为，只适配能力和入口冲突；append/applied 为正常成功。OpenClaw 私有 Gateway 加载应用自带的可信提示词插件，before_prompt_build 使用 appendSystemContext 保留原生组装，llm_input 核实补充规则与当前授权工具白名单。隔离工作区开启原生角色文件初始化并保留已有定制；不读取工程或个人 home 的设定。工具权限仍由有效运行配置约束。详见[会话设计](../assistant/conversations.md)与[功能计划](../development/features/chat-prompt-interaction/plan.md)。
+
+## 持续会话原生工具
+
+[本机工具能力设计](../assistant/runtime-capabilities.md)通过可选 WorkspaceRuntime 提供共享工作区服务与人工权限修改。公共层不判断原生工具名；OpenClaw adapter 生成九项白名单，保留原生 read/write/edit/apply_patch、ls、memory_search/memory_get 与 progress_card，只新增受限 workspace_search。
+
+可信插件通过正式 registerSandboxBackend/createFsBridge 接入 Windows 文件服务，保留原生编辑与补丁算法；构造 shell/exec 的后端入口明确拒绝。调用前保存身份、前像并持有文件/父目录句柄，调用后核对每个目标的实际修订。宿主直写失败原因和现用实现见[实施门槛](../development/features/local-runtime-tools/preflight.md)。原任务 Executor.Execute、任务 token 与 create-only 授权目录保持独立。
+
+插件仅获短期私有回调凭据；回调校验运行、会话、策略和工具调用身份。原生 after_tool_call 是异步通知，因此适配器在释放轮次前还检查共享服务，不能只依赖该 hook 返回。进程退出后清理句柄并标记未完成操作 unknown；下一次启动不重放。memory-core 使用关键词索引，文件发现/读取通过相同文件桥，索引写入内部 state。每次 memory_search 先等待原生索引同步；后台记忆、可执行 skill 和任意插件加载保持禁用。

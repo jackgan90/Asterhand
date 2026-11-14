@@ -7,6 +7,11 @@
   "configSchema": {
     "type": "object",
     "properties": {
+      "toolsAllow": {
+        "type": "array",
+        "items": {"type": "string"},
+        "maxItems": 16
+      },
       "policyPath": {
         "type": "string",
         "minLength": 1,

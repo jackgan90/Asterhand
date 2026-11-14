@@ -15,3 +15,6 @@
 - [ADR-AST-007：保留原生 Harness 设定，仅适配产品冲突](007-preserve-native-harness-prompts.md)。
 - [ADR-AST-008：提示词诊断与聊天展示分离](008-keep-prompt-diagnostics-out-of-chat.md)。
 - [ADR-AST-009：模型按需配置，诊断与功能准入分离](009-on-demand-model-readiness.md)。
+
+- [ADR-AST-010：跨 harness 工具能力与本机优先](010-local-runtime-capability-boundaries.md)。
+- [ADR-AST-011：默认开启受限助手工具](011-default-assistant-tools.md)。

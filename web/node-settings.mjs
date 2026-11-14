@@ -10,7 +10,7 @@ const probeKeys = {
   stale: "web.settings.probe.stale",
 };
 
-export function nodeSettings({api, post, session, desktop, shortcut, guarded, notice, refreshPeers, listen, editors}) {
+export function nodeSettings({api, post, session, desktop, shortcut, tools, guarded, notice, refreshPeers, listen, editors}) {
   let probeTimer, probeGeneration = 0, openGeneration = 0;
   let loadedData = null, lastProbe = null, lastNetwork = null, statusState = null;
   let nameDirty = false, renderedDefaultName = "";
@@ -41,11 +41,11 @@ export function nodeSettings({api, post, session, desktop, shortcut, guarded, no
     }
   });
   listen($("#settings"),"close",()=>live?.invalidate());
-  // Language, theme, and desktop shortcut apply immediately through the desktop
-  // settings API; they sit inside this form's DOM but are not submitted with it.
+  // Immediate preferences and tool permission have their own APIs; they sit
+  // inside this form's DOM but are not submitted with the node settings.
   const edited = event => {
     const id = event.target?.id;
-    const immediate = id === "settings-locale" || id === "desktop-shortcut" || event.target?.name === "ui-theme";
+    const immediate = id === "settings-locale" || id === "desktop-shortcut" || id === "assistant-tools-enabled" || event.target?.name === "ui-theme";
     if (!immediate && !["model", "name"].includes(event.target?.name)) otherDirty = true;
     if (!immediate) markDirty(true);
   };
@@ -114,6 +114,7 @@ export function nodeSettings({api, post, session, desktop, shortcut, guarded, no
     const scope = session(), generation = ++openGeneration;
     void desktop.open();
     void shortcut?.open?.();
+    void tools?.open?.();
     const data = await api("/api/settings"),
       c = data.config;
     if (!scope?.active || generation !== openGeneration) return;

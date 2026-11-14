@@ -8,9 +8,10 @@ import (
 	"strings"
 
 	"github.com/jackgan90/Asterhand/internal/config"
+	"github.com/jackgan90/Asterhand/internal/workspace"
 )
 
-func conversationConfig(c config.Config, options openClawOptions, provider providerBridge, root string, port int, promptEnabled bool) ([]byte, error) {
+func conversationConfig(c config.Config, options openClawOptions, provider providerBridge, root string, port int, promptEnabled bool, transports ...*workspace.Transport) ([]byte, error) {
 	value := map[string]any{
 		"gateway": map[string]any{"mode": "local", "bind": "loopback", "port": port,
 			"auth":      map[string]any{"mode": "token", "token": "${OPENCLAW_GATEWAY_TOKEN}"},
@@ -32,6 +33,13 @@ func conversationConfig(c config.Config, options openClawOptions, provider provi
 		"update":    map[string]any{"checkOnStart": false},
 	}
 	configureConversationPrompt(value, root, promptEnabled)
+	var access *workspace.Transport
+	if len(transports) > 0 {
+		access = transports[0]
+	}
+	if err := configureWorkspace(value, c, root, access); err != nil {
+		return nil, err
+	}
 	return json.MarshalIndent(value, "", "  ")
 }
 

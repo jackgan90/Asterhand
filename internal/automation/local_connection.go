@@ -21,7 +21,7 @@ func localSecret(login []byte) string {
 
 func localPrincipal() Principal {
 	return Principal{ID: localActor, Name: "Local user", Roles: []string{"read", "edit", "execute"},
-		Scopes: map[string][]string{"commands": {"*"}, "projects": {"*"}, "conversations": {"*"}, "node": {"*"}}}
+		Scopes: map[string][]string{"commands": {"*"}, "projects": {"*"}, "conversations": {"*"}, "workspaces": {"*"}, "node": {"*"}}}
 }
 
 // The node publishes only its address and public certificate. The current

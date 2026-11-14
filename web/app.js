@@ -12,6 +12,7 @@ import {taskController} from "./task-controller.mjs";
 import {taskView} from "./task-view.mjs";
 import {localCommands} from "./local-commands.mjs";
 import {liveEditors} from "./live-editors.mjs";
+import {toolSettings} from "./tool-settings.mjs";
 
 export function mountApp() {
   restoreTheme();
@@ -33,9 +34,10 @@ export function mountApp() {
   const desktop = desktopSettings(client.api, client.post, {listen, session, editors});
   const shortcut = desktopShortcut(client.api, client.post, {listen, session});
   const commands = localCommands({...client, listen, session, guarded, actions, editors});
+  const tools = toolSettings({...client,listen,session});
   let commandTarget = new URLSearchParams(location.hash.slice(1)).get("commands");
   const nodes = nodeController({...client, session, guarded, notice, actions, listen, isSubmitting:() => tasks?.submitting() || false});
-  const settings = nodeSettings({...client, session, desktop, shortcut, guarded, notice, listen, editors, refreshPeers:nodes.refresh});
+  const settings = nodeSettings({...client, session, desktop, shortcut, tools, guarded, notice, listen, editors, refreshPeers:nodes.refresh});
   const view = taskView({guarded, editors, submissionChanged:nodes.updateSubmission, callbacks:{
     answer:(...args) => tasks.answer(...args), cancel:(...args) => tasks.cancel(...args),
     resolve:job => tasks.resolve(job), detail:(...args) => tasks.detail(...args), refresh:() => tasks.refresh(),
@@ -78,6 +80,7 @@ export function mountApp() {
     shortcut.relocalize();
     settings.relocalize();
     commands.relocalize();
+    tools.relocalize();
   };
   const locale = localeController({
     desktop,
@@ -143,7 +146,7 @@ export function mountApp() {
       await tasks.refresh(scope);
     },
     connection,
-    stopped:() => { editors.stop(); settings.stop(); desktop.stop(); shortcut.stop(); commands.stop(); notices.stop(); },
+    stopped:() => { editors.stop(); settings.stop(); desktop.stop(); shortcut.stop(); commands.stop(); tools.stop(); notices.stop(); },
     failed:error => {
       if (error?.messageKey === "err.http.login_link_required") return;
       notice(localizeError(error));

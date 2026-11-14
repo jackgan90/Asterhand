@@ -92,3 +92,7 @@ peer 授权针对本机 workspace 项目；只有任务 origin 能读取或回�
 目标节点是历史与运行状态权威，入口只保存引用和必要缓存。入口退出/断网不取消目标已接受轮次；恢复按原 ID 和目标对账，快照/游标补读并有界退避。失联是连接状态，不是失败终态。未来 `@节点/角色` 经候选选择解析稳定 ID，重名显示所属节点，不支持按文本猜测后自动换目标。
 
 远程协议具体传输、身份映射与兼容版本留待远程聊天 feature 实测定稿；本次只验证本机路径及抽象 fixture，不把它算作双机聊天验收或扩大手机访问范围。
+
+## 本机工作区权限
+
+权限存入 Config.LocalTools，工作区身份由 node_id 与 runtime binding 派生。人工 POST /api/workspace/permission 沿用 Web 认证和 CSRF，先取得会话配置门禁，再比较期望修订；忙时明确拒绝。普通自动化只读权限，文件业务另检查 workspaces scope。内置插件仅获本次 Gateway 的随机私有回调 token，校验运行、会话和策略；不获得 Web、peer 或全量自动化凭据。详见[工作区设计](../assistant/runtime-capabilities.md)。

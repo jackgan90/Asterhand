@@ -11,11 +11,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackgan90/Asterhand/internal/config"
 	"github.com/jackgan90/Asterhand/internal/conversation"
 	"github.com/jackgan90/Asterhand/internal/model"
+	"github.com/jackgan90/Asterhand/internal/workspace"
 	"github.com/jackgan90/Asterhand/packaging"
 )
 
@@ -33,11 +35,15 @@ type ConversationRuntime struct {
 	start       chatStarter
 	ctx         context.Context
 	cancel      context.CancelFunc
+	workspaceMu sync.Mutex
+	workspace   *workspace.Service
 }
 
 func NewConversationRuntime(manager *config.Manager) *ConversationRuntime {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &ConversationRuntime{config: manager, gate: make(chan struct{}, 1), ctx: ctx, cancel: cancel, start: startConversationProcess}
+	r := &ConversationRuntime{config: manager, gate: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
+	r.start = r.startWithWorkspace
+	return r
 }
 
 func (r *ConversationRuntime) Describe() (conversation.Descriptor, error) {
@@ -128,7 +134,16 @@ func startChatProcess(ctx context.Context, c config.Config, options openClawOpti
 	if !promptEnabled {
 		plan.Application = plan.Application.Fallback("unconfirmed")
 	}
-	data, err := conversationConfig(c, options, provider, root, port, promptEnabled)
+	access, _ := ctx.Value(workspaceTransportKey{}).(*workspace.Transport)
+	if c.LocalTools.Enabled {
+		if access == nil {
+			return nil, workspaceError(workspaceUnavailable())
+		}
+		if err := prepareWorkspacePlugin(root); err != nil {
+			return nil, err
+		}
+	}
+	data, err := conversationConfig(c, options, provider, root, port, promptEnabled, access)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +191,14 @@ func (r *ConversationRuntime) Close() error {
 	r.gate <- struct{}{}
 	defer func() { <-r.gate }()
 	if r.process != nil {
-		return r.process.close()
+		if err := r.process.close(); err != nil {
+			return err
+		}
+	}
+	r.workspaceMu.Lock()
+	defer r.workspaceMu.Unlock()
+	if r.workspace != nil {
+		return r.workspace.RuntimeStopped()
 	}
 	return nil
 }
@@ -215,13 +237,37 @@ func (r *ConversationRuntime) Submit(ctx context.Context, binding conversation.B
 		}
 	}
 	var receipt conversation.Receipt
+	if r.config.Get().LocalTools.Enabled {
+		files, fileErr := r.Workspace()
+		if fileErr == nil {
+			fileErr = files.AcquireTurnScope(workspace.Scope{Conversation: binding.Key, Turn: submission.ID, Policy: r.config.Get().LocalTools.Revision})
+		}
+		if fileErr != nil {
+			// Workspace admission happens before a message reaches the runtime.
+			pub := conversation.PublicError(workspaceError(fileErr))
+			pub.Code = "rejected"
+			return receipt, pub
+		}
+	}
 	err = process.call(ctx, chatCommand{Action: "submit", Binding: binding, Run: submission.ID, Text: submission.Text}, &receipt)
+	if err != nil && conversation.PublicError(err).Code == "rejected" {
+		if files, fileErr := r.Workspace(); fileErr == nil {
+			_ = files.ReleaseTurn(submission.ID, true)
+		}
+	}
 	return receipt, err
 }
 
 func (r *ConversationRuntime) Observe(ctx context.Context, binding conversation.Binding, request string, started time.Time) (conversation.Observation, error) {
 	var observation conversation.Observation
 	err := r.invoke(ctx, binding, chatCommand{Action: "observe", Run: request, Started: started.UnixMilli()}, &observation)
+	if err == nil && observation.Stopped {
+		if files, fileErr := r.Workspace(); fileErr == nil {
+			if fileErr = files.ReleaseTurn(request, true); fileErr != nil {
+				observation.Stopped, observation.Run = false, "running"
+			}
+		}
+	}
 	return observation, err
 }
 

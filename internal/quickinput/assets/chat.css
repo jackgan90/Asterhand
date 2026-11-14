@@ -83,3 +83,7 @@ main:has(#command-panel:not([hidden])) .chat-actions:has(#chat-status[data-idle=
 }
 
 .chat-delivery-status { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+#chat-activities { max-height: 160px; overflow: auto; font-size: 12px; }
+.tool-activity { padding: 6px 10px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.tool-activity small { display: block; opacity: .7; }
+.tool-activity ul { margin: 4px 0; padding-left: 20px; }

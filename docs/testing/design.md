@@ -121,3 +121,7 @@ Go 用真实 HTTP/TLS 双实例验证改名不撤销模型就绪、单向地址�
 - **静态守卫层**：`scripts/sync-i18n.mjs --check`、`tests/i18n-guard.test.mjs` 与 `internal/i18n/guard_test.go` 基于 `internal/i18n/guard-rules.json` 校验注册表与词表对称性、`disallow_cjk` 语种脚本约束、全栈双向键引用、HTML 静态绑定及受检源码 UI 字面量，并模拟第三语言扩展（含汉字语种）免改代码通过验证。
 - **语言状态与故障隔离层**：覆盖系统优先/浏览器次选/`en-US` 回退、未登录 `sessionStorage` 隔离、`POST /api/desktop/locale` 在无交互桌面/宿主失败/热键冲突/录制租约下的独立提交、跨页面并发 `formBaseline` 保护、写盘后响应丢失对账，以及延迟旧请求在服务端被 `expected_revision` 以 `409` 拦截的确定性时序。
 - **无损局部刷新与升级兼容层**：验证任务问答输入、本地命令编辑、热键录制、IME 组合、多行草稿、历史分页、流式回复与默认设备名未编辑保存期间切换语言不丢失状态且不重跑数学公式排版；验证旧版 `desktop-settings.json`、`config.json`、SQLite `Job`/`Outbox`、旧节点 `/v1/*` 响应与 `TaskRejection` 摘要证明的双向兼容。
+
+## 本机工具测试层
+
+[功能验证](../development/features/local-runtime-tools/validation.md)将 Windows 真实文件服务、原生 Gateway 本地模型、公共注册和 UI 分层。外部写入由独立测试子进程制造，前像与实际字节直接比较；junction/硬链接使用真实文件系统。原生测试检查模型收到的 schema、工具实际结果、跨会话记忆和停止后文件状态；公共回执测试模拟领域已完成而通用回执未发布，查询只补记结果。前端测试覆盖工具开关单独保存、未知保存结果、关闭重开后的迟到响应、模型草稿保持、双语和聊天活动更新；文件恢复的重复身份由公共服务测试验证。默认策略测试覆盖新节点、旧配置迁移、明确关闭保持及运行时配置生成。原始报告保留在隔离构建输出，不进入产品目录或长期文档。

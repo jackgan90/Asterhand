@@ -1,5 +1,9 @@
 # 开发路线图
 
+## 本机助手工具能力优先
+
+[本机工具计划](features/local-runtime-tools/plan.md)首批已交付，工程回归、独立审查和用户验收完成；采用[正式文件 I/O 桥接](features/local-runtime-tools/preflight.md)，专项验证边界见[验证说明](features/local-runtime-tools/validation.md)。首批包含文件读写/发现、本地记忆、工具活动/产物及文件恢复，暂不执行脚本。之后分批完善本机网络、媒体、隔离执行、委派与后台工作；本机常用原生能力基本完善后再评估远程聊天。其他 harness 保留能力适配边界，本批仅实现 OpenClaw。旧 route/execute 兼容入口暂保留。
+
 本地命令统一脚本图与多实例执行已实现并通过用户验收；范围和验证见[统一命令计划](features/unified-command-runs/plan.md)。
 
 路线图区分现有能力和后续工作。具体行为以各领域 requirements/design 为准，验证方式见 [测试指南](../../tests/README.md)，平台边界见 [支持矩阵](../testing/platforms.md)。

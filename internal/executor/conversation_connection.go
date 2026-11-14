@@ -13,7 +13,8 @@ func chatFingerprint(c config.Config, options openClawOptions, key string) strin
 	return model.Hash(struct {
 		Options              openClawOptions
 		Provider, Model, Key string
-	}{options, c.LLM.Provider, c.LLM.Model, model.Digest([]byte(key))})
+		Tools                config.LocalToolPolicy
+	}{options, c.LLM.Provider, c.LLM.Model, model.Digest([]byte(key)), c.LocalTools})
 }
 
 // Connection never submits a model message. Only an explicit connect may start

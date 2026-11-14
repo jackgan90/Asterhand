@@ -93,7 +93,7 @@ func (r *Registry) dispatchGuarded(ctx context.Context, token string, request Re
 // automation transports must always use Dispatch with their subject token.
 func (r *Registry) DispatchHuman(ctx context.Context, request Request) Response {
 	return r.dispatchAuthorized(ctx, func() (Principal, error) {
-		return Principal{ID: "human:web", Name: "Local human", Roles: []string{"read", "edit", "execute"}, Scopes: map[string][]string{"node": {"*"}, "commands": {"*"}, "conversations": {"*"}, "projects": {"*"}}}, nil
+		return Principal{ID: "human:web", Name: "Local human", Roles: []string{"read", "edit", "execute"}, Scopes: map[string][]string{"node": {"*"}, "commands": {"*"}, "conversations": {"*"}, "workspaces": {"*"}, "projects": {"*"}}}, nil
 	}, request, nil)
 }
 

@@ -17,8 +17,12 @@ const chatPromptPlugin = "asterhand-chat-policy"
 var chatPromptFiles embed.FS
 
 func conversationPrompt(c config.Config) prompt.Plan {
+	tools := []string{}
+	if c.LocalTools.Enabled {
+		tools = nativeWorkspaceTools()
+	}
 	return prompt.Default(prompt.Append, prompt.Model{Provider: c.LLM.Provider, Name: c.LLM.Model},
-		prompt.Capabilities{Tools: []string{}, History: true, Streaming: true, Cancellation: true})
+		prompt.Capabilities{Tools: tools, History: true, Streaming: true, Cancellation: true})
 }
 
 // Policy files are derived installation artifacts in the protected chat runtime.

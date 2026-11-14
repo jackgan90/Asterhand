@@ -155,6 +155,33 @@
         "operations.new_id",
         "read.many"
       ]
+    },
+    {
+      "id": "workspace",
+      "ui": "设置中的助手工具开关与聊天活动；文件发现/读写、产物、版本恢复及未知操作核对保留公共接口，不提供常用界面",
+      "tests": [
+        "internal/workspace/service_windows_test.go",
+        "internal/app/automation_workspace_windows_test.go",
+        "tests/workspace.test.mjs"
+      ],
+      "operations": [
+        "workspaces.get",
+        "conversations.capabilities",
+        "workspace_files.list",
+        "workspace_files.search",
+        "workspace_files.read",
+        "workspace_files.mutate",
+        "workspace_versions.list",
+        "workspace_versions.get",
+        "workspace_versions.restore",
+        "turn_activities.list",
+        "turn_activities.get",
+        "workspace_operations.get",
+        "workspace_operations.resolve",
+        "artifacts.list",
+        "artifacts.get",
+        "artifacts.read"
+      ]
     }
   ],
   "web_endpoints": {
@@ -188,7 +215,8 @@
     "/api/stream": "tasks",
     "/api/automation/editor": "drafts",
     "/api/local-commands/delete": "commands",
-    "/api/local-commands/delete-batch": "commands"
+    "/api/local-commands/delete-batch": "commands",
+    "/api/workspace/permission": "human"
   },
   "native_actions": {
     "internal/localcommands/wire/protocol.go": {
@@ -218,7 +246,8 @@
       "queue_item": "chat",
       "reconcile": "chat",
       "select": "chat",
-      "submit": "chat"
+      "submit": "chat",
+      "activities": "workspace"
     },
     "internal/quickinput/hostipc/editor.go": {
       "list": "drafts",

@@ -10,6 +10,7 @@ import (
 	"github.com/jackgan90/Asterhand/internal/notifications"
 	"github.com/jackgan90/Asterhand/internal/operations"
 	"github.com/jackgan90/Asterhand/internal/quickinput"
+	"github.com/jackgan90/Asterhand/internal/workspace"
 )
 
 func resultObject(text, flags, numbers string, extra map[string]any) map[string]any {
@@ -36,6 +37,13 @@ func describeAutomationResults(r *automation.Registry) {
 	}
 	text := map[string]any{"type": "string"}
 	object := map[string]any{"type": "object"}
+	set("workspaces.get conversations.capabilities", automation.Schema[workspace.Status]())
+	set("workspace_files.list workspace_files.search", automation.Schema[workspace.Page]())
+	set("workspace_files.read artifacts.read", automation.Schema[workspace.Fragment]())
+	set("workspace_files.mutate workspace_versions.get workspace_versions.restore turn_activities.get workspace_operations.get workspace_operations.resolve", automation.Schema[workspace.Operation]())
+	set("workspace_versions.list turn_activities.list", resultObject("", "", "next", map[string]any{"items": arrayOf(automation.Schema[workspace.Operation]())}))
+	set("artifacts.list", resultObject("", "", "next", map[string]any{"items": arrayOf(automation.Schema[workspace.Artifact]())}))
+	set("artifacts.get", automation.Schema[workspace.Artifact]())
 	fragment := resultObject("format text offset next", "complete", "", nil)
 	set("commands.validate", automation.Schema[localcommands.Command]())
 	set("commands.get", map[string]any{"anyOf": []any{automation.Schema[localcommands.Command](), fragment}})

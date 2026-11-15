@@ -59,6 +59,7 @@ const {createOpenClawCodingTools} = await import('openclaw/plugin-sdk/agent-harn
 const {applyEmbeddedAttemptToolsAllow, toolPolicy} = await import('openclaw/plugin-sdk/agent-harness-runtime');
 const pluginMod = await import(pathToFileURL(path.join(pluginDir, 'index.mjs')).href);
 const filesMod = await import(pathToFileURL(path.join(pluginDir, 'files.mjs')).href);
+const displayMod = await import(pathToFileURL(path.join(pluginDir, 'tool-display.mjs')).href);
 
 const registered = [];
 const hooks = [];
@@ -136,10 +137,20 @@ const runtimePolicy = toolPolicy.createToolPolicyMatcher({allow: allowed, deny: 
 const combinedSurface = [...coreSurface, ...registered].filter(t => runtimePolicy(t.name));
 const effectiveSurface = applyEmbeddedAttemptToolsAllow(combinedSurface, allowed);
 
+const displayErrors = registered.flatMap(t => {
+  const res = displayMod.validateToolDisplaySpec(t);
+  return res.ok ? [] : res.errors;
+});
+const negativeDisplayCaught =
+  !displayMod.validateToolDisplaySpec({name: 'no_spec', parameters: {properties: {path: {}}}}).ok &&
+  !displayMod.validateToolDisplaySpec({name: 'read_file', display: {kind: 'path', pathParams: ['missing_field']}, parameters: {properties: {path: {}}}}).ok;
+
 console.log(JSON.stringify({
   allowedTools: allowed,
   registeredNames: registered.map(t => t.name),
   hasDescriptions: registered.every(t => typeof t.description === 'string' && t.description.length > 0 && t.parameters?.type === 'object'),
+  displayErrors,
+  negativeDisplayCaught,
   hooks,
   collisions: checkCollisions(registered.map(t => t.name)),
   simulatedCollisions: checkCollisions(['read', 'apply_patch', 'apply-patch', 'bash']),
@@ -194,9 +205,11 @@ func TestWorkspacePluginSDKPreflight(t *testing.T) {
 	}
 	var report struct {
 		AllowedTools        []string `json:"allowedTools"`
-		RegisteredNames     []string `json:"registeredNames"`
-		HasDescriptions     bool     `json:"hasDescriptions"`
-		Hooks               []string `json:"hooks"`
+		RegisteredNames       []string `json:"registeredNames"`
+		HasDescriptions       bool     `json:"hasDescriptions"`
+		DisplayErrors         []string `json:"displayErrors"`
+		NegativeDisplayCaught bool     `json:"negativeDisplayCaught"`
+		Hooks                 []string `json:"hooks"`
 		Collisions          []string `json:"collisions"`
 		SimulatedCollisions []string `json:"simulatedCollisions"`
 		EffectiveNames      []string `json:"effectiveNames"`
@@ -219,6 +232,12 @@ func TestWorkspacePluginSDKPreflight(t *testing.T) {
 	}
 	if !report.HasDescriptions {
 		t.Fatal("one or more registered tools lacked description or object parameters schema")
+	}
+	if len(report.DisplayErrors) != 0 {
+		t.Fatalf("tool display spec validation errors: %v", report.DisplayErrors)
+	}
+	if !report.NegativeDisplayCaught {
+		t.Fatal("validateToolDisplaySpec failed to reject missing or mismatched display spec")
 	}
 	if len(report.Collisions) != 0 {
 		t.Fatalf("plugin tool names collided with OpenClaw core tools or aliases: %v", report.Collisions)

@@ -127,6 +127,16 @@ export function historyPage(history, cursor = historyCursor(history)) {
         reduced = true;
       }
     }
+    if (!reduced) {
+      for (const message of messages) {
+        for (const block of message.blocks) {
+          if (block.type === 'tool' && block.tool?.summary) {
+            delete block.tool.summary;
+            reduced = true;
+          }
+        }
+      }
+    }
     if (!reduced) throw failure('unavailable', 'err.chatbridge.page_oversized', 'Conversation result exceeds pagination limit.');
     size = byteSize(messages);
   }

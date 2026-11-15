@@ -9,6 +9,7 @@ type ToolActivity struct {
 	ID       string     `json:"id"`
 	Turn     string     `json:"turn_id"`
 	Tool     string     `json:"tool"`
+	Summary  string     `json:"summary,omitempty"`
 	State    string     `json:"state"`
 	Sequence int64      `json:"sequence"`
 	Progress []ToolStep `json:"progress,omitempty"`

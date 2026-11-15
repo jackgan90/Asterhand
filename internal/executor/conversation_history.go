@@ -39,6 +39,9 @@ func enrichHistoryTools(page *conversation.Page, conversationID string, files *w
 				activity.State = state
 			}
 			activity.Sequence = op.Sequence
+			if activity.Summary == "" && op.Summary != "" {
+				activity.Summary = op.Summary
+			}
 			activity.Progress = nil
 			for _, step := range op.Progress {
 				activity.Progress = append(activity.Progress, wire.ToolStep{Text: step.Text, Status: step.Status})
@@ -47,6 +50,10 @@ func enrichHistoryTools(page *conversation.Page, conversationID string, files *w
 			after, _ := json.Marshal(activity)
 			if len(after)-len(before) > remaining {
 				activity.Progress = nil
+				after, _ = json.Marshal(activity)
+			}
+			if len(after)-len(before) > remaining {
+				activity.Summary = block.Tool.Summary
 				after, _ = json.Marshal(activity)
 			}
 			if len(after)-len(before) <= remaining {

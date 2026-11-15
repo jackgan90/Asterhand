@@ -6,6 +6,8 @@
 
 [聊天历史顺序与分页修复](development/features/chat-history-timeline/plan.md)：文字与工具调用按发生顺序显示，修复空助手气泡和静止会话翻页重置；工程验证及本机用户验收完成。
 
+[聊天工具调用目标摘要展示](development/features/chat-tool-call-summaries/plan.md)：由工具定义白名单声明可展示目标参数（路径、检索词、记忆位置及补丁目标），前后端与 CLI/MCP 统一承载有界 `summary` 并以紧凑同行最多两行布局呈现；工程验证及本机用户验收完成。
+
 [本地命令完成通知](development/features/local-command-completion-notifications/plan.md)：Windows 桌面右下角主题卡片、按内容调整高度、进退动效、多实例排队和逐命令通知开关；工程验证、独立审计修复复审及本机用户验收通过，专项环境边界见[验证说明](development/features/local-command-completion-notifications/validation.md)。
 
 [本地命令批量删除](development/features/batch-delete-local-commands/plan.md)：管理模式内多选、全选、逐项错误反馈与修订/运行占用保护；本机用户验收通过。

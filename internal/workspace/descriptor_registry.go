@@ -154,7 +154,7 @@ func buildDescriptorTable() map[string]ToolDescriptor {
 				}
 				root := defaultRootID(in.RootID)
 				claims, err := dedupClaims([]ResourceClaim{{Domain: DomainFS, Root: root, Key: rel, Coverage: CoverageExact, Access: AccessShared}})
-				return PreparedPlan{Tool: item.name, Semantic: item.semantic, Claims: claims, Effects: effectSet(eff...), ReadPath: rel}, err
+				return PreparedPlan{Tool: item.name, Semantic: item.semantic, Claims: claims, Effects: effectSet(eff...), ReadPath: rel, Summary: rel}, err
 			},
 		})
 	}
@@ -167,7 +167,7 @@ func buildDescriptorTable() map[string]ToolDescriptor {
 			if err != nil {
 				return PreparedPlan{}, err
 			}
-			return PreparedPlan{Tool: "write_file", Semantic: SemanticFileWrite, Claims: claims, Targets: targets, Modifying: true,
+			return PreparedPlan{Tool: "write_file", Semantic: SemanticFileWrite, Claims: claims, Targets: targets, Summary: summarizeTargets(targets), Modifying: true,
 				Effects: effectSet(EffectRead, EffectStat, EffectWrite, EffectCreate, EffectMkdir)}, nil
 		},
 	})
@@ -180,7 +180,7 @@ func buildDescriptorTable() map[string]ToolDescriptor {
 			if err != nil {
 				return PreparedPlan{}, err
 			}
-			return PreparedPlan{Tool: "edit_file", Semantic: SemanticFileEdit, Claims: claims, Targets: targets, Modifying: true,
+			return PreparedPlan{Tool: "edit_file", Semantic: SemanticFileEdit, Claims: claims, Targets: targets, Summary: summarizeTargets(targets), Modifying: true,
 				DeferInitialGrowthRes: true, AddOldBytesToBound: true, Effects: effectSet(EffectRead, EffectStat, EffectWrite)}, nil
 		},
 	})
@@ -204,17 +204,18 @@ func buildDescriptorTable() map[string]ToolDescriptor {
 				if err != nil {
 					return PreparedPlan{}, err
 				}
-				return PreparedPlan{Tool: item.name, Semantic: item.semantic, Claims: claims, Targets: targets, Modifying: true,
+				return PreparedPlan{Tool: item.name, Semantic: item.semantic, Claims: claims, Targets: targets, Summary: summarizeTargets(targets), Modifying: true,
 					DeferInitialGrowthRes: item.deferGrowth, AddSourceBytesToBound: item.sourceBound, Effects: effectSet(eff...)}, nil
 			},
 		})
 	}
 
-	registerDirectoryAndMemoryDescriptors(register)
+	registerDirectoryDescriptors(register)
+	registerMemoryAndProgressDescriptors(register)
 	return table
 }
 
-func registerDirectoryAndMemoryDescriptors(register func(ToolDescriptor)) {
+func registerDirectoryDescriptors(register func(ToolDescriptor)) {
 	register(ToolDescriptor{
 		Name: "list_dir", Semantic: SemanticFileList, Assistant: true, Effects: []Effect{EffectStat, EffectList},
 		Prepare: func(in DescriptorInput) (PreparedPlan, error) {
@@ -222,8 +223,12 @@ func registerDirectoryAndMemoryDescriptors(register func(ToolDescriptor)) {
 			if err != nil {
 				return PreparedPlan{}, err
 			}
+			summary := rel
+			if summary == "" {
+				summary = "."
+			}
 			claims, err := dedupClaims([]ResourceClaim{{Domain: DomainFS, Root: defaultRootID(in.RootID), Key: rel, Coverage: CoverageChildren, Access: AccessShared}})
-			return PreparedPlan{Tool: "list_dir", Semantic: SemanticFileList, Claims: claims, ReadPath: rel, Effects: effectSet(EffectStat, EffectList)}, err
+			return PreparedPlan{Tool: "list_dir", Semantic: SemanticFileList, Claims: claims, ReadPath: rel, Summary: summary, Effects: effectSet(EffectStat, EffectList)}, err
 		},
 	})
 
@@ -234,8 +239,12 @@ func registerDirectoryAndMemoryDescriptors(register func(ToolDescriptor)) {
 			if err != nil {
 				return PreparedPlan{}, err
 			}
+			summary := rel
+			if summary == "" {
+				summary = "."
+			}
 			claims, err := dedupClaims([]ResourceClaim{{Domain: DomainFS, Root: defaultRootID(in.RootID), Key: rel, Coverage: CoverageSubtree, Access: AccessShared}})
-			return PreparedPlan{Tool: "workspace_files.list", Semantic: SemanticFileListMeta, Claims: claims, ReadPath: rel, Effects: effectSet(EffectStat, EffectList)}, err
+			return PreparedPlan{Tool: "workspace_files.list", Semantic: SemanticFileListMeta, Claims: claims, ReadPath: rel, Summary: summary, Effects: effectSet(EffectStat, EffectList)}, err
 		},
 	})
 
@@ -252,12 +261,18 @@ func registerDirectoryAndMemoryDescriptors(register func(ToolDescriptor)) {
 				if err != nil {
 					return PreparedPlan{}, err
 				}
+				summary := ""
+				if rel != "" && rel != "." {
+					summary = rel
+				}
 				claims, err := dedupClaims([]ResourceClaim{{Domain: DomainFS, Root: defaultRootID(in.RootID), Key: rel, Coverage: CoverageSubtree, Access: AccessShared}})
-				return PreparedPlan{Tool: item.name, Semantic: SemanticFileSearch, Claims: claims, ReadPath: rel, Effects: effectSet(eff...)}, err
+				return PreparedPlan{Tool: item.name, Semantic: SemanticFileSearch, Claims: claims, ReadPath: rel, Summary: summary, Effects: effectSet(eff...)}, err
 			},
 		})
 	}
+}
 
+func registerMemoryAndProgressDescriptors(register func(ToolDescriptor)) {
 	register(ToolDescriptor{
 		Name: "memory_get", Semantic: SemanticMemoryGet, Assistant: true, Effects: []Effect{EffectRead, EffectStat},
 		Prepare: func(in DescriptorInput) (PreparedPlan, error) {
@@ -269,7 +284,7 @@ func registerDirectoryAndMemoryDescriptors(register func(ToolDescriptor)) {
 				return PreparedPlan{}, fail("undeclared_target")
 			}
 			claims, err := dedupClaims([]ResourceClaim{{Domain: DomainFS, Root: defaultRootID(in.RootID), Key: rel, Coverage: CoverageExact, Access: AccessShared}})
-			return PreparedPlan{Tool: "memory_get", Semantic: SemanticMemoryGet, Claims: claims, ReadPath: rel, Effects: effectSet(EffectRead, EffectStat)}, err
+			return PreparedPlan{Tool: "memory_get", Semantic: SemanticMemoryGet, Claims: claims, ReadPath: rel, Summary: rel, Effects: effectSet(EffectRead, EffectStat)}, err
 		},
 	})
 

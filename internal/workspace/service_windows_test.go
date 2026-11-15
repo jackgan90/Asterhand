@@ -276,3 +276,99 @@ func TestSearchPagingAndBoundedRead(t *testing.T) {
 		t.Fatal("body leaked into metadata")
 	}
 }
+
+func TestSummarySanitizationFallbackAndBatchRetention(t *testing.T) {
+	s, base := testService(t)
+	scope := Scope{Conversation: "conv-sum", Turn: "turn-sum", Policy: base.Policy}
+	if err := s.AcquireTurnScope(scope); err != nil {
+		t.Fatal(err)
+	}
+
+	opList, err := s.Begin(Begin{ID: "sum-ls", Scope: scope, Tool: "list_dir", Fingerprint: "fp-ls"})
+	if err != nil || opList.Summary != "." {
+		t.Fatalf("list_dir default summary = %+v %v", opList, err)
+	}
+	_, _ = s.End("sum-ls", "completed", "")
+
+	opRead, err := s.Begin(Begin{ID: "sum-read", Scope: scope, Tool: "read_file", Path: "docs/spec.md", Fingerprint: "fp-read"})
+	if err != nil || opRead.Summary != "docs/spec.md" {
+		t.Fatalf("read_file default summary = %+v %v", opRead, err)
+	}
+	_, _ = s.End("sum-read", "completed", "")
+
+	opProg, err := s.Begin(Begin{ID: "sum-read-range", Scope: scope, Tool: "read_file", Path: "docs/spec.md", Fingerprint: "fp-read-range", Summary: "docs/spec.md:10-29"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = s.End("sum-read-range", "completed", "")
+	if opProg.Summary != "docs/spec.md:10-29" {
+		t.Fatalf("explicit range summary override mismatch: %+v", opProg)
+	}
+	opProgEmpty, err := s.Begin(Begin{ID: "sum-prog-none", Scope: scope, Tool: "progress_card", Fingerprint: "fp-prog2"})
+	if err != nil || opProgEmpty.Summary != "" {
+		t.Fatalf("progress_card default summary = %+v %v", opProgEmpty, err)
+	}
+	_, _ = s.End("sum-prog-none", "completed", "")
+
+	if _, err := s.Begin(Begin{ID: "sum-bad", Scope: scope, Tool: "read_file", Path: "a.txt", Summary: "\xff", Fingerprint: "fp-bad"}); Code(err) != "invalid_request" {
+		t.Fatalf("invalid UTF-8 summary = %v, want invalid_request", err)
+	}
+	opLong, err := s.Begin(Begin{
+		ID: "sum-long", Scope: scope, Tool: "read_file", Path: "a.txt", Fingerprint: "fp-long",
+		Summary: "alpha\n\tbeta " + strings.Repeat("z", 220),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = s.End("sum-long", "completed", "")
+	if !strings.HasPrefix(opLong.Summary, "alpha beta z") || len([]rune(opLong.Summary)) > MaxSummaryRunes || len(opLong.Summary) > MaxSummaryBytes {
+		t.Fatalf("long summary not sanitized/clamped: runes=%d bytes=%d val=%q", len([]rune(opLong.Summary)), len(opLong.Summary), opLong.Summary)
+	}
+
+	if _, err := s.Register(Register{ID: "b1", Batch: "sum-batch", Order: 0, Scope: scope, Tool: "edit_file", InputFingerprint: "ifp-1", Summary: "race.md"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Register(Register{ID: "b2", Batch: "sum-batch", Order: 1, Scope: scope, Tool: "write_file", InputFingerprint: "ifp-2"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Register(Register{ID: "b3", Batch: "sum-batch", Order: 2, Scope: scope, Tool: "read_file", InputFingerprint: "ifp-3"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Register(Register{ID: "b4", Batch: "sum-batch", Order: 3, Scope: scope, Tool: "apply_file_patch", InputFingerprint: "ifp-4"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.SealBatch(SealBatch{
+		Batch: "sum-batch",
+		Scope: scope,
+		Items: []SealItem{
+			{ID: "b1", Tool: "edit_file", Targets: []Target{{Path: "race.md"}}, NewBytes: 4, Fingerprint: "fp-b1", Summary: "race.md"},
+			{ID: "b2", Tool: "write_file", Targets: []Target{{Path: "race.md"}}, NewBytes: 4, Fingerprint: "fp-b2", Summary: "race.md"},
+			{ID: "b3", Tool: "read_file", Path: "docs/spec.md", Aborted: true, Reason: "hook_blocked", Summary: "docs/spec.md:1-10"},
+			{ID: "b4", Tool: "apply_file_patch", Targets: []Target{{Path: "x.txt"}, {Path: "y.txt"}, {Path: "z.txt"}, {Path: "w.txt"}}, NewBytes: 8, Fingerprint: "fp-b4"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Acquire(t.Context(), "b1", "fp-b1"); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = s.End("b1", "completed", "")
+	if _, err := s.Acquire(t.Context(), "b4", "fp-b4"); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = s.End("b4", "completed", "")
+
+	op2, err := s.Operation("b2")
+	if err != nil || op2.Summary != "race.md" || op2.Detail != "conflicting_batch_write" {
+		t.Fatalf("conflicting rejected op lost summary: %+v %v", op2, err)
+	}
+	op3, err := s.Operation("b3")
+	if err != nil || op3.Summary != "docs/spec.md:1-10" {
+		t.Fatalf("aborted op lost summary: %+v %v", op3, err)
+	}
+	op4, err := s.Operation("b4")
+	if err != nil || op4.Summary != "x.txt, y.txt, z.txt (+1)" {
+		t.Fatalf("patch default summary mismatch: %+v %v", op4, err)
+	}
+}

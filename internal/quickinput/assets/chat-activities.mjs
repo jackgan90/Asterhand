@@ -7,11 +7,24 @@ const steps={pending:'common.workspace.step.pending',in_progress:'common.workspa
 export function toolActivity(row) {
   const item = document.createElement('div');
   item.className = 'tool-activity';
-  const title = document.createElement('span');
-  item.append(title);
+  const head = document.createElement('div');
+  head.className = 'tool-activity-head';
+  const name = document.createElement('span');
+  name.className = 'tool-activity-name';
+  const target = document.createElement('span');
+  target.className = 'tool-activity-target';
+  const state = document.createElement('span');
+  state.className = 'tool-activity-state';
+  item.append(head);
   let current, signature, label, progress, lines = [];
   item.relocalize = () => {
-    title.textContent = `${current.tool} · ${t(states[current.state] ?? states.unknown)}`;
+    const summary = typeof current.summary === 'string' ? current.summary : '';
+    const stateLabel = t(states[current.state] ?? states.unknown);
+    name.textContent = current.tool;
+    target.textContent = summary;
+    state.textContent = ` · ${stateLabel}`;
+    head.replaceChildren(...(summary ? [name, document.createTextNode(' '), target, state] : [name, state]));
+    head.title = summary ? `${current.tool} ${summary} · ${stateLabel}` : '';
     if (label) label.textContent = t('common.workspace.progress_declared');
     lines.forEach(({node, step}) => { node.textContent = `${step.step} · ${t(steps[step.status] ?? steps.pending)}`; });
   };

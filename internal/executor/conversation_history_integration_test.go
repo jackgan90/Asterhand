@@ -95,7 +95,7 @@ func timelineModel(count int) (*httptest.Server, *atomic.Int32) {
 		} else if index < count {
 			delta = map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{"index": 0,
 				"id": fmt.Sprintf("timeline-%d", index), "type": "function",
-				"function": map[string]any{"name": "ls", "arguments": "{\"path\":\".\"}"}}}}
+				"function": map[string]any{"name": "list_dir", "arguments": "{\"path\":\".\"}"}}}}
 			if index%2 == 0 {
 				delta["content"] = fmt.Sprintf("before tool %02d", index)
 			}
@@ -194,8 +194,8 @@ func assertTimelineOrder(t *testing.T, messages []conversation.Message, toolCoun
 			case "text":
 				actual = append(actual, block.Text)
 			case "tool":
-				if block.Tool == nil || block.Tool.State != "completed" {
-					t.Fatal("tool outcome missing from timeline")
+				if block.Tool == nil || block.Tool.State != "completed" || block.Tool.Summary != "." {
+					t.Fatalf("tool outcome or summary missing from timeline: %+v", block.Tool)
 				}
 				actual = append(actual, "tool:"+block.Tool.Tool)
 			default:
@@ -208,7 +208,7 @@ func assertTimelineOrder(t *testing.T, messages []conversation.Message, toolCoun
 		if index%2 == 0 {
 			expected = append(expected, fmt.Sprintf("before tool %02d", index))
 		}
-		expected = append(expected, "tool:ls")
+		expected = append(expected, "tool:list_dir")
 	}
 	expected = append(expected, "final reply")
 	if !reflect.DeepEqual(actual, expected) {

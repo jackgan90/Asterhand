@@ -147,7 +147,11 @@ func prepareWorkspacePlugin(root string) error {
 			return err
 		}
 	}
-	return nil
+	sharedDisplay, err := chatBridgeFiles.ReadFile("chatbridge/tool-display.mjs")
+	if err != nil {
+		return err
+	}
+	return config.AtomicFile(filepath.Join(destination, "tool-display.mjs"), sharedDisplay, 0600)
 }
 
 func nativeWorkspaceTools() []string {

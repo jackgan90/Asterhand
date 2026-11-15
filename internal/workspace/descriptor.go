@@ -1,11 +1,14 @@
 package workspace
 
 import (
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 type Domain string
@@ -77,11 +80,85 @@ type PreparedPlan struct {
 	Effects               map[Effect]bool
 	Targets               []Target
 	ReadPath              string
+	Summary               string
 	Modifying             bool
 	Indexing              bool
 	DeferInitialGrowthRes bool
 	AddSourceBytesToBound bool
 	AddOldBytesToBound    bool
+}
+
+func sanitizeSummary(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	if !utf8.ValidString(raw) {
+		return "", fail("invalid_request")
+	}
+	var b strings.Builder
+	b.Grow(min(len(raw), MaxSummaryBytes))
+	pendingSpace := false
+	started := false
+	for _, r := range raw {
+		if unicode.IsControl(r) || unicode.IsSpace(r) {
+			if started {
+				pendingSpace = true
+			}
+			continue
+		}
+		if pendingSpace {
+			b.WriteByte(' ')
+			pendingSpace = false
+		}
+		b.WriteRune(r)
+		started = true
+	}
+	cleaned := b.String()
+	if cleaned == "" {
+		return "", nil
+	}
+	if utf8.RuneCountInString(cleaned) <= MaxSummaryRunes && len(cleaned) <= MaxSummaryBytes {
+		return cleaned, nil
+	}
+	const suffix = "…"
+	var out strings.Builder
+	out.Grow(MaxSummaryBytes)
+	runes := 0
+	for _, r := range cleaned {
+		rl := utf8.RuneLen(r)
+		if runes+2 > MaxSummaryRunes || out.Len()+rl+len(suffix) > MaxSummaryBytes {
+			out.WriteString(suffix)
+			break
+		}
+		out.WriteRune(r)
+		runes++
+	}
+	return out.String(), nil
+}
+
+func summarizeTargets(targets []Target) string {
+	if len(targets) == 0 {
+		return ""
+	}
+	limit := min(len(targets), 3)
+	parts := make([]string, 0, limit)
+	for i := 0; i < limit; i++ {
+		if targets[i].Path != "" {
+			parts = append(parts, targets[i].Path)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	joined := strings.Join(parts, ", ")
+	if len(targets) > 3 {
+		joined = fmt.Sprintf("%s (+%d)", joined, len(targets)-3)
+	}
+	out, err := sanitizeSummary(joined)
+	if err != nil {
+		return ""
+	}
+	return out
 }
 
 type DescriptorInput struct {

@@ -1,5 +1,6 @@
 import {createOpenClawCodingTools} from 'openclaw/plugin-sdk/agent-harness';
 import {getActiveMemorySearchManager} from 'openclaw/plugin-sdk/memory-host-search';
+import {toolDisplaySpecs} from './tool-display.mjs';
 
 const codingToolConfig = Object.freeze({
   tools: {
@@ -83,6 +84,7 @@ function createSearchFilesTool(client, coordinator) {
     name: 'search_files',
     label: 'Search files',
     description: 'Find files by name or literal text within a directory subtree. Results and scans are bounded; pass next as cursor to continue.',
+    display: toolDisplaySpecs.search_files,
     parameters: {
       type: 'object',
       properties: {
@@ -116,6 +118,7 @@ function createMemoryTools(api, memory, coordinator) {
       name: 'memory_search',
       label: 'Memory Search',
       description: 'Mandatory recall step: search MEMORY.md, USER.md, and memory/*.md before answering questions about prior work, decisions, dates, people, preferences, or todos.',
+      display: toolDisplaySpecs.memory_search,
       parameters: {
         type: 'object',
         properties: {
@@ -157,6 +160,7 @@ function createMemoryTools(api, memory, coordinator) {
       name: 'memory_get',
       label: 'Memory Get',
       description: 'Safe snippet read from MEMORY.md, USER.md, or memory/*.md with optional from/lines; use after memory_search to pull only the needed lines.',
+      display: toolDisplaySpecs.memory_get,
       parameters: {
         type: 'object',
         properties: {
@@ -184,6 +188,7 @@ function createProgressCardTool(progressProto, coordinator) {
     name: 'progress_card',
     label: progressProto.label ?? 'Progress Card',
     description: progressProto.description,
+    display: toolDisplaySpecs.progress_card,
     parameters: progressProto.parameters,
     ...(typeof progressProto.prepareArguments === 'function'
       ? {prepareArguments: progressProto.prepareArguments.bind(progressProto)}
@@ -219,6 +224,7 @@ export function createWorkspaceTools({api, client, memory, coordinator}) {
       name: mapping.publicName,
       label: mapping.label,
       description: proto.description,
+      display: toolDisplaySpecs[mapping.publicName],
       parameters: proto.parameters,
       ...(typeof proto.prepareArguments === 'function' ? {prepareArguments: proto.prepareArguments.bind(proto)} : {}),
       execute: (toolCallId, params, signal, onUpdate) =>

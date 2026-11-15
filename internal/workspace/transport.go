@@ -40,6 +40,7 @@ type bridgeRequest struct {
 	NewBytes         int64      `json:"new_bytes"`
 	InputFingerprint string     `json:"input_fingerprint"`
 	Fingerprint      string     `json:"fingerprint"`
+	Summary          string     `json:"summary,omitempty"`
 	Items            []SealItem `json:"items"`
 	Path             string     `json:"path"`
 	Data             []byte     `json:"data"`
@@ -168,7 +169,7 @@ func (t *Transport) call(ctx context.Context, req bridgeRequest) (any, error) {
 		}
 		return s.Register(Register{
 			ID: req.ID, Batch: req.Batch, Order: req.Order, Scope: scope, Tool: req.Tool,
-			InputFingerprint: fp, Targets: req.Targets, Path: req.Path, NewBytes: req.NewBytes, Progress: req.Progress,
+			InputFingerprint: fp, Targets: req.Targets, Path: req.Path, NewBytes: req.NewBytes, Summary: req.Summary, Progress: req.Progress,
 		})
 	case "seal":
 		scope, err := t.verifyTurn(req)
@@ -186,7 +187,7 @@ func (t *Transport) call(ctx context.Context, req bridgeRequest) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return s.BeginContext(ctx, Begin{ID: req.ID, Scope: scope, Tool: req.Tool, Targets: req.Targets, Path: req.Path, NewBytes: req.NewBytes, Fingerprint: req.Fingerprint, Progress: req.Progress})
+		return s.BeginContext(ctx, Begin{ID: req.ID, Scope: scope, Tool: req.Tool, Targets: req.Targets, Path: req.Path, NewBytes: req.NewBytes, Fingerprint: req.Fingerprint, Summary: req.Summary, Progress: req.Progress})
 	case "cancel":
 		return map[string]any{"cancelled": true}, s.CancelCall(req.ID, req.Detail)
 	case "end":

@@ -21,6 +21,8 @@ const (
 	MaxActivityBytes  = 64 << 20
 	MaxCalls          = 100
 	MaxOperationBytes = 8 << 10
+	MaxSummaryRunes   = 160
+	MaxSummaryBytes   = 240
 	PageBytes         = 32 << 10
 	PageItems         = 100
 	MissingRevision   = "missing"
@@ -68,6 +70,7 @@ type Begin struct {
 	ID          string   `json:"id"`
 	Scope       Scope    `json:"scope"`
 	Tool        string   `json:"tool"`
+	Summary     string   `json:"summary,omitempty"`
 	Targets     []Target `json:"targets"`
 	Path        string   `json:"path,omitempty"`
 	NewBytes    int64    `json:"new_bytes"`
@@ -82,6 +85,7 @@ type Register struct {
 	Order            int      `json:"order"`
 	Scope            Scope    `json:"scope"`
 	Tool             string   `json:"tool"`
+	Summary          string   `json:"summary,omitempty"`
 	InputFingerprint string   `json:"input_fingerprint"`
 	Targets          []Target `json:"targets,omitempty"`
 	Path             string   `json:"path,omitempty"`
@@ -92,6 +96,7 @@ type Register struct {
 type SealItem struct {
 	ID          string   `json:"id"`
 	Tool        string   `json:"tool"`
+	Summary     string   `json:"summary,omitempty"`
 	Targets     []Target `json:"targets,omitempty"`
 	Path        string   `json:"path,omitempty"`
 	NewBytes    int64    `json:"new_bytes,omitempty"`
@@ -125,6 +130,7 @@ type Operation struct {
 	ID          string    `json:"id"`
 	Scope       Scope     `json:"scope"`
 	Tool        string    `json:"tool"`
+	Summary     string    `json:"summary,omitempty"`
 	Fingerprint string    `json:"fingerprint"`
 	Sequence    int64     `json:"sequence"`
 	Started     time.Time `json:"started"`

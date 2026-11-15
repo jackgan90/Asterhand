@@ -1,5 +1,7 @@
 import {createHash} from 'node:crypto';
+import path from 'node:path';
 import {failure} from './gateway.mjs';
+import {summarizeToolCall} from './tool-display.mjs';
 
 const validID = value => typeof value === 'string' && /^[A-Za-z0-9_-]{16,128}$/.test(value);
 const toolCall = block => block?.type === 'toolCall' && typeof block.id === 'string' &&
@@ -22,8 +24,8 @@ export function combineDisplayRows(messages) {
   return combined;
 }
 
-// Keep the runtime's content order. Hidden reasoning and raw tool arguments are
-// deliberately absent from this display projection.
+// Keep the runtime's content order. Hidden reasoning and raw tool arguments stay
+// absent from this display projection; only allowlisted tool display summaries are kept.
 export function contentSections(native) {
   if (typeof native?.content === 'string') return [{type: 'text', index: 0, text: native.content}];
   const sections = [];
@@ -77,9 +79,10 @@ export function toolResults(history) {
   return results;
 }
 
-export function toolBlock(section, turn, results) {
+export function toolBlock(section, turn, results, workspaceRoot = path.join(process.cwd(), 'workspace')) {
   const call = section.call;
   const id = createHash('sha256').update(`${turn}:${call.id}`).digest('hex');
-  return {type: 'tool', tool: {id, turn_id: turn, tool: call.name,
+  const summary = summarizeToolCall(call.name, call.arguments, workspaceRoot);
+  return {type: 'tool', tool: {id, turn_id: turn, tool: call.name, ...(summary ? {summary} : {}),
     state: results.get(`${turn}:${call.id}`) ?? 'unknown', sequence: 0}};
 }

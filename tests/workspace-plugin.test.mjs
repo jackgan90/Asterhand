@@ -38,12 +38,16 @@ test('readDirectory maps directory and file metadata and marks bootstrap request
 });
 
 test('batch coordinator differentiates equal-length write fingerprints and surfaces conflicting_batch_write', async () => {
+  const registered = [];
   const sealedBatches = [];
   const client = {
     relative: p => p.replaceAll('\\', '/'),
     createBridge: () => ({}),
     request: async (action, payload) => {
-      if (action === 'register') return {id: payload.id};
+      if (action === 'register') {
+        registered.push(payload);
+        return {id: payload.id};
+      }
       if (action === 'seal') {
         sealedBatches.push(payload);
         return {sealed: true};
@@ -77,6 +81,9 @@ test('batch coordinator differentiates equal-length write fingerprints and surfa
   assert.equal(r1.reason.code, 'conflicting_batch_write');
   assert.match(r1.reason.message, /conflicting_batch_write/);
   assert.notEqual(sealedBatches[0].items[0].fingerprint, sealedBatches[0].items[1].fingerprint);
+  assert.deepEqual(registered.map(p => p.summary), ['race.txt', 'race.txt']);
+  assert.deepEqual(sealedBatches[0].items.map(i => i.summary), ['race.txt', 'race.txt']);
+  assert.equal(JSON.stringify({registered, sealedBatches}).includes('WRITER_'), false);
 });
 
 test('batch coordinator does not prematurely seal valid tools when middle tool is hook-blocked during async prepare', async () => {
@@ -146,4 +153,48 @@ test('memoryFiles requires active call context and tracks supervised calls', asy
   const files = await mem.withCall({id: 'call-mem-1', tracker}, () => mem.listFiles('F:/synthetic-workspace'));
   assert.equal(files.length, 2);
   assert.ok(seen.every(entry => entry.id === 'call-mem-1'));
+});
+
+test('batch coordinator registers and seals allowlisted display summaries without leaking private bodies', async () => {
+  const registered = [];
+  const sealedBatches = [];
+  const client = {
+    workspace: 'F:/synthetic-workspace',
+    relative: p => p.replaceAll('\\', '/').replace(/^F:\/synthetic-workspace\/?/i, ''),
+    createBridge: () => ({}),
+    request: async (action, payload) => {
+      if (action === 'register') {
+        registered.push(payload);
+        return {id: payload.id};
+      }
+      if (action === 'seal') {
+        sealedBatches.push(payload);
+        return {sealed: true};
+      }
+      if (action === 'acquire') return {granted: true, operation: {id: payload.id, state: 'started'}};
+      if (action === 'end') return {state: payload.state};
+      throw new Error(`unexpected ${action}`);
+    },
+  };
+  const coord = createBatchCoordinator(client);
+  const ctx = {runId: 'run-summary', sessionKey: 'agent:main:asterhand:conv-sum'};
+  const patchText = '*** Begin Patch\n*** Update File: old.md\n*** Move to: sub/new.md\n@@\n-SECRET_OLD\n+SECRET_NEW\n*** End Patch';
+
+  await coord.beforeToolCall({toolName: 'memory_search', toolCallId: 's0', params: {query: 'deploy plan', corpus: 'sessions'}}, {...ctx, toolCallId: 's0'});
+  await coord.beforeToolCall({toolName: 'read_file', toolCallId: 's1', params: {path: 'F:\\synthetic-workspace\\docs\\a.md', offset: 10, limit: 20}}, {...ctx, toolCallId: 's1'});
+  await coord.beforeToolCall({toolName: 'apply_file_patch', toolCallId: 's2', params: {input: patchText}}, {...ctx, toolCallId: 's2'});
+  await coord.beforeToolCall({toolName: 'progress_card', toolCallId: 's3', params: {markdown: 'SECRET_PROGRESS', plan: [{step: 'one', status: 'pending'}]}}, {...ctx, toolCallId: 's3'});
+
+  await Promise.all([
+    coord.runTool('memory_search', 's0', {query: 'deploy plan', corpus: 'sessions'}, undefined, async () => ({content: [{type: 'text', text: 'ok'}]})),
+    coord.runTool('read_file', 's1', {path: 'F:\\synthetic-workspace\\docs\\a.md', offset: 10, limit: 20}, undefined, async () => ({content: [{type: 'text', text: 'ok'}]})),
+    coord.runTool('apply_file_patch', 's2', {input: patchText}, undefined, async () => ({content: [{type: 'text', text: 'ok'}]})),
+    coord.runTool('progress_card', 's3', {markdown: 'SECRET_PROGRESS', plan: [{step: 'one', status: 'pending'}]}, undefined, async () => ({content: [{type: 'text', text: 'ok'}]})),
+  ]);
+
+  assert.deepEqual(registered.map(r => r.summary ?? ''), ['"deploy plan" · sessions', 'docs/a.md:10-29', 'old.md → sub/new.md', '']);
+  assert.equal(registered[3].summary, undefined);
+  assert.deepEqual(sealedBatches[0].items.map(i => i.summary ?? ''), ['"deploy plan" · sessions', 'docs/a.md:10-29', 'old.md → sub/new.md', '']);
+  assert.equal(sealedBatches[0].items[3].summary, undefined);
+  assert.equal(JSON.stringify({registered, sealedBatches}).includes('SECRET_'), false);
 });

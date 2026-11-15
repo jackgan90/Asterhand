@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
 import {allowedTools, callScope, coded, createTracker, errorCode} from './files.mjs';
+import {summarizeToolCall} from './tool-display.mjs';
 
 function abortError(signal) {
   const reason = signal?.reason;
@@ -8,6 +9,8 @@ function abortError(signal) {
 }
 
 function prepareRecordSealItem(client, record, toolName, params) {
+  const summary = summarizeToolCall(toolName, params, client.workspace ?? '') || record.summary || '';
+  if (summary) record.summary = summary;
   try {
     const scope = callScope(toolName, params, client.relative);
     const execFp = createHash('sha256')
@@ -22,10 +25,17 @@ function prepareRecordSealItem(client, record, toolName, params) {
       targets: scope.targets,
       new_bytes: scope.new_bytes,
       progress: scope.progress,
+      ...(summary ? {summary} : {}),
     };
   } catch (err) {
     record.localError = err;
-    record.sealItem = {id: record.id, tool: toolName, aborted: true, reason: errorCode(err)};
+    record.sealItem = {
+      id: record.id,
+      tool: toolName,
+      aborted: true,
+      reason: errorCode(err),
+      ...(summary ? {summary} : {}),
+    };
   }
 }
 
@@ -120,7 +130,13 @@ function createBatchQueue(client) {
   const sealBatch = batchState => {
     if (batchState.sealPromise) return batchState.sealPromise;
     if (openBatches.get(batchState.run) === batchState) openBatches.delete(batchState.run);
-    const items = batchState.records.map(r => r.sealItem ?? {id: r.id, tool: r.tool, aborted: true, reason: 'cancelled'});
+    const items = batchState.records.map(r => r.sealItem ?? {
+      id: r.id,
+      tool: r.tool,
+      aborted: true,
+      reason: 'cancelled',
+      ...(r.summary ? {summary: r.summary} : {}),
+    });
     batchState.sealPromise = client.request('seal', {
       batch: batchState.id,
       run: batchState.run,
@@ -174,17 +190,19 @@ export function createBatchCoordinator(client) {
     const batchState = q.ensureBatch(run, conversation);
     const id = createHash('sha256').update(`${run}:${nativeID}`).digest('hex');
     const inputFingerprint = createHash('sha256').update(JSON.stringify([event.toolName, event.params])).digest('hex');
+    const summary = summarizeToolCall(event.toolName, event.params, client.workspace ?? '');
     const record = {
       id, run, conversation, sessionKey: context.sessionKey, nativeID, tool: event.toolName,
       batch: batchState, order: batchState.records.length, inputFingerprint, executionFingerprint: '',
-      enteredExecute: false, arrived: false, sealItem: null, localError: null,
+      summary, enteredExecute: false, arrived: false, sealItem: null, localError: null,
     };
     batchState.records.push(record);
     q.recordsByKey.set(`${run}:${nativeID}`, record);
     q.enqueueNative(nativeID, record);
     try {
       await client.request('register', {
-        id, batch: batchState.id, order: record.order, run, conversation, tool: event.toolName, input_fingerprint: inputFingerprint,
+        id, batch: batchState.id, order: record.order, run, conversation, tool: event.toolName,
+        input_fingerprint: inputFingerprint, ...(summary ? {summary} : {}),
       });
       return undefined;
     } catch (error) {
@@ -206,7 +224,13 @@ export function createBatchCoordinator(client) {
     if (!record || record.enteredExecute) return;
     q.dequeueNative(nativeID, record.tool);
     record.arrived = true;
-    record.sealItem = {id: record.id, tool: record.tool, aborted: true, reason: event.error ? 'hook_blocked' : 'cancelled'};
+    record.sealItem = {
+      id: record.id,
+      tool: record.tool,
+      aborted: true,
+      reason: event.error ? 'hook_blocked' : 'cancelled',
+      ...(record.summary ? {summary: record.summary} : {}),
+    };
     void q.maybeSeal(record.batch)?.catch(() => {});
   }
 

@@ -267,6 +267,10 @@ func (s *Service) Register(req Register) (Operation, error) {
 	if err := validateProgress(req.Progress); err != nil {
 		return Operation{}, err
 	}
+	summary, err := sanitizeSummary(req.Summary)
+	if err != nil {
+		return Operation{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if prior, ok := s.records[req.ID]; ok {
@@ -315,7 +319,7 @@ func (s *Service) Register(req Register) (Operation, error) {
 	entry := &schedEntry{
 		id: req.ID, batch: req.Batch, order: req.Order, ticket: s.sched.nextTicket,
 		scope: req.Scope, tool: req.Tool, inputFingerprint: req.InputFingerprint,
-		newBytes: req.NewBytes, progress: req.Progress, phase: PhaseRegistered, waitReason: "batch_seal",
+		newBytes: req.NewBytes, summary: summary, progress: req.Progress, phase: PhaseRegistered, waitReason: "batch_seal",
 	}
 	s.sched.entries[req.ID] = entry
 	b.ids = append(b.ids, req.ID)
@@ -328,7 +332,7 @@ func (s *Service) Register(req Register) (Operation, error) {
 	op := Operation{
 		ID: req.ID, Scope: req.Scope, Tool: req.Tool, Fingerprint: req.InputFingerprint,
 		Sequence: s.sequence, Started: time.Now().UTC(), State: "started", Phase: PhaseRegistered,
-		WaitReason: "batch_seal", Changes: []Change{}, Progress: req.Progress,
+		WaitReason: "batch_seal", Changes: []Change{}, Summary: summary, Progress: req.Progress,
 	}
 	s.records[req.ID] = publicOperation(op)
 	s.recordTrace(req.ID, req.Tool, "registered", "", DefaultRoot, "", "")
@@ -385,6 +389,16 @@ func (s *Service) validateBatchSealHeader(req SealBatch) (map[string]SealItem, b
 	return byID, false, nil
 }
 
+func resolveBatchSummary(itemSummary, planSummary, existing string) string {
+	if s, err := sanitizeSummary(itemSummary); err == nil && s != "" {
+		return s
+	}
+	if planSummary != "" {
+		return planSummary
+	}
+	return existing
+}
+
 func (s *Service) prepareSealPlans(items []SealItem) (map[string]PreparedPlan, map[string]string) {
 	plans := make(map[string]PreparedPlan, len(items))
 	itemFailures := make(map[string]string)
@@ -397,6 +411,10 @@ func (s *Service) prepareSealPlans(items []SealItem) (map[string]PreparedPlan, m
 			continue
 		}
 		if err := validateProgress(item.Progress); err != nil {
+			itemFailures[item.ID] = Code(err)
+			continue
+		}
+		if _, err := sanitizeSummary(item.Summary); err != nil {
 			itemFailures[item.ID] = Code(err)
 			continue
 		}
@@ -423,7 +441,7 @@ func hasPriorBatchMutation(plan PreparedPlan, priorMutated map[string]bool) bool
 }
 
 func (s *Service) commitSealedBatch(batchID string, byID map[string]SealItem, plans map[string]PreparedPlan, itemFailures map[string]string) error {
-	type rejectedItem struct{ id, tool, fp, reason string }
+	type rejectedItem struct{ id, tool, fp, summary, reason string }
 	var rejected []rejectedItem
 
 	s.mu.Lock()
@@ -447,7 +465,7 @@ func (s *Service) commitSealedBatch(batchID string, byID map[string]SealItem, pl
 		}
 		if failReason, bad := itemFailures[id]; bad {
 			s.sched.releaseEntryLocked(e)
-			rejected = append(rejected, rejectedItem{id: id, tool: item.Tool, fp: item.Fingerprint, reason: failReason})
+			rejected = append(rejected, rejectedItem{id: id, tool: item.Tool, fp: item.Fingerprint, summary: resolveBatchSummary(item.Summary, "", ""), reason: failReason})
 			continue
 		}
 		if item.Aborted || e.admissionClosed {
@@ -456,13 +474,13 @@ func (s *Service) commitSealedBatch(batchID string, byID map[string]SealItem, pl
 				reason = e.cancelReason
 			}
 			s.sched.releaseEntryLocked(e)
-			rejected = append(rejected, rejectedItem{id: id, tool: item.Tool, fp: item.Fingerprint, reason: reason})
+			rejected = append(rejected, rejectedItem{id: id, tool: item.Tool, fp: item.Fingerprint, summary: resolveBatchSummary(item.Summary, "", ""), reason: reason})
 			continue
 		}
 		plan := plans[id]
 		if hasPriorBatchMutation(plan, priorMutated) {
 			s.sched.releaseEntryLocked(e)
-			rejected = append(rejected, rejectedItem{id: id, tool: item.Tool, fp: item.Fingerprint, reason: "conflicting_batch_write"})
+			rejected = append(rejected, rejectedItem{id: id, tool: item.Tool, fp: item.Fingerprint, summary: resolveBatchSummary(item.Summary, plan.Summary, e.summary), reason: "conflicting_batch_write"})
 			s.recordTrace(id, item.Tool, "rejected", "", DefaultRoot, "conflicting_batch_write", "")
 			continue
 		}
@@ -472,12 +490,13 @@ func (s *Service) commitSealedBatch(batchID string, byID map[string]SealItem, pl
 			}
 		}
 		s.sched.applyClaimFaults(&plan)
-		e.tool, e.plan, e.fingerprint, e.newBytes, e.progress = item.Tool, plan, item.Fingerprint, item.NewBytes, item.Progress
+		sum := resolveBatchSummary(item.Summary, plan.Summary, e.summary)
+		e.tool, e.plan, e.fingerprint, e.newBytes, e.summary, e.progress = item.Tool, plan, item.Fingerprint, item.NewBytes, sum, item.Progress
 		e.sealed, e.waitReason = true, ""
 		if op, ok := s.records[id]; ok {
 			s.sequence++
 			op.Sequence = s.sequence
-			op.Tool, op.Fingerprint, op.Progress, op.WaitReason = item.Tool, item.Fingerprint, item.Progress, ""
+			op.Tool, op.Fingerprint, op.Summary, op.Progress, op.WaitReason = item.Tool, item.Fingerprint, sum, item.Progress, ""
 			s.records[id] = op
 		}
 		s.recordTrace(id, item.Tool, "sealed", "", DefaultRoot, "", "")
@@ -493,6 +512,9 @@ func (s *Service) commitSealedBatch(batchID string, byID map[string]SealItem, pl
 			}
 			if r.fp != "" {
 				op.Fingerprint = r.fp
+			}
+			if r.summary != "" {
+				op.Summary = r.summary
 			}
 			s.records[r.id] = op
 		}

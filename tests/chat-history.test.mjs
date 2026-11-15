@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {historyPage, historyCursor, visibleHistory, fragmentBytes, byteSize} from '../internal/executor/chatbridge/projection.mjs';
 import {readHistoryPage} from '../internal/executor/chatbridge/history.mjs';
 import {messageSelection, selectedMessageText} from '../internal/executor/chatbridge/timeline.mjs';
+import {summarizeToolCall, validateToolDisplaySpec} from '../internal/executor/chatbridge/tool-display.mjs';
 
 const native = (id, content, role = 'assistant', run = 'run-0000000000001') => ({role, content,
   __openclaw: {id, runId: run}});
@@ -49,7 +50,9 @@ test('visible text and tools keep content order while secrets and raw outputs st
     {type: 'thinking', thinking: 'SECRET-THOUGHT'},
     {type: 'toolCall', id: 'call-a', name: 'ls', arguments: {secret: 'SECRET-ARGUMENT'}},
     {type: 'text', text: 'after first tool'},
-    {type: 'toolCall', id: 'call-b', name: 'read', arguments: {path: 'SECRET-PATH'}},
+    {type: 'toolCall', id: 'call-b', name: 'edit', arguments: {
+      path: 'notes/plan.md', edits: [{oldText: 'SECRET-OLD', newText: 'SECRET-NEW'}], secret: 'SECRET-EXTRA',
+    }},
     {type: 'text', text: 'after second tool'},
   ]);
   const result = {...native('tool-result-00001', 'SECRET-RESULT', 'toolResult'), toolCallId: 'call-a', isError: true};
@@ -57,7 +60,9 @@ test('visible text and tools keep content order while secrets and raw outputs st
   assert.equal(page.messages.length, 1);
   assert.deepEqual(page.messages[0].blocks.map(block => block.type), ['tool', 'text', 'tool', 'text']);
   assert.equal(page.messages[0].blocks[0].tool.state, 'failed');
+  assert.equal(page.messages[0].blocks[0].tool.summary, '.');
   assert.equal(page.messages[0].blocks[2].tool.state, 'unknown');
+  assert.equal(page.messages[0].blocks[2].tool.summary, 'notes/plan.md');
   assert.doesNotMatch(JSON.stringify(page), /SECRET|arguments|thinking/);
   assert.equal(selectedMessageText(source, messageSelection(page.messages[0].blocks[1].id)), 'after first tool');
   assert.equal(selectedMessageText(source, messageSelection(page.messages[0].blocks[3].id)), 'after second tool');
@@ -115,4 +120,56 @@ test('a native page boundary that starts on the tool row recovers its omitted co
   assert.deepEqual(page.messages[0].blocks.map(block => block.type), ['text', 'tool']);
   assert.equal(page.messages[0].blocks[0].text, 'before boundary');
   await assert.rejects(visibleHistory({messages: [tool]}, async () => null), {code: 'unavailable'});
+});
+
+test('tool display specs summarize registered tools and legacy aliases while redacting bodies and outside paths', () => {
+  const root = 'F:\\Asterhand\\work';
+  assert.equal(summarizeToolCall('list_dir', {}, root), '.');
+  assert.equal(summarizeToolCall('ls', '{"path":"docs\\\\sub"}', root), 'docs/sub');
+  assert.equal(summarizeToolCall('read_file', {path: 'F:\\Asterhand\\work\\README.md', offset: 10, limit: 25}, root), 'README.md:10-34');
+  assert.equal(summarizeToolCall('read', {path: 'README.md', offset: 120}, root), 'README.md:120+');
+  assert.equal(summarizeToolCall('read_file', {path: 'README.md', offset: 1}, root), 'README.md');
+  assert.equal(summarizeToolCall('write_file', {path: 'a\\b.txt', content: 'SECRET_BODY'}, root), 'a/b.txt');
+  assert.equal(summarizeToolCall('write', {file_path: 'legacy.txt', content: 'SECRET_BODY'}, root), 'legacy.txt');
+  assert.equal(summarizeToolCall('edit_file', {path: 'src/app.mjs', edits: [{oldText: 'OLD', newText: 'NEW'}]}, root), 'src/app.mjs');
+  const patch = [
+    '*** Begin Patch',
+    '*** Update File: a.txt',
+    '@@',
+    '-SECRET_PATCH_OLD',
+    '+SECRET_PATCH_NEW',
+    '*** Add File: b.txt',
+    '*** Update File: old.txt',
+    '*** Move to: new.txt',
+    '*** Delete File: dead.txt',
+    '*** End Patch',
+  ].join('\n');
+  assert.equal(summarizeToolCall('apply_file_patch', {input: patch}, root), 'a.txt, b.txt, old.txt → new.txt (+1)');
+  assert.equal(summarizeToolCall('apply_patch', {input: '*** Begin Patch\n*** Update File: only.txt\n*** End Patch'}, root), 'only.txt');
+  assert.equal(summarizeToolCall('search_files', {query: 'alpha\nbeta', path: '.'}, root), '"alpha beta"');
+  assert.equal(summarizeToolCall('search_files', {query: 'needle', path: 'docs/web'}, root), '"needle" · docs/web');
+  assert.equal(summarizeToolCall('memory_search', {query: 'deploy host', corpus: 'memory'}, root), '"deploy host"');
+  assert.equal(summarizeToolCall('memory_search', {query: 'deploy host', corpus: 'sessions'}, root), '"deploy host" · sessions');
+  assert.equal(summarizeToolCall('memory_get', {path: 'memory/2026-11-15.md', from: 12, lines: 8}, root), 'memory/2026-11-15.md:12-19');
+  assert.equal(summarizeToolCall('progress_card', {markdown: 'SECRET_MD', plan: [{step: 'x', status: 'pending'}]}, root), '');
+  assert.equal(summarizeToolCall('read_file', {path: 'C:\\Users\\Other\\secret\\token.txt'}, root), 'token.txt');
+  assert.equal(summarizeToolCall('read_file', {path: '../outside/secret.env'}, root), 'secret.env');
+  const longPath = `${'nested/'.repeat(20)}target-file.md`;
+  const clamped = summarizeToolCall('read_file', {path: longPath, offset: 5, limit: 10}, root);
+  assert.ok(clamped.includes('…/target-file.md:5-14'));
+  assert.ok(clamped.length <= 96);
+  assert.equal(validateToolDisplaySpec({name: 'bad', display: {kind: 'path', pathParams: ['nope']}, parameters: {properties: {path: {}}}}).ok, false);
+});
+
+test('historyPage projects tool summaries and drops summary metadata before failing page budget', () => {
+  const repeatedTools = Array.from({length: 250}, (_, i) => ({
+    type: 'toolCall',
+    id: `call-${i}`,
+    name: 'read_file',
+    arguments: {path: `docs/very-long-directory-segment-${'x'.repeat(50)}/file-${i}.md`},
+  }));
+  const source = native('big-tool-page', [{type: 'text', text: 'x'.repeat(28000)}, ...repeatedTools]);
+  const page = historyPage({messages: [source]});
+  assert.ok(byteSize(page) <= 64 * 1024);
+  assert.ok(page.messages[0].blocks.some(b => b.type === 'tool' && b.tool.summary === undefined));
 });

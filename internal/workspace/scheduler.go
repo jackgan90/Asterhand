@@ -29,6 +29,7 @@ type schedEntry struct {
 	ticket           int64
 	scope            Scope
 	tool             string
+	summary          string
 	inputFingerprint string
 	fingerprint      string
 	plan             PreparedPlan

@@ -102,3 +102,44 @@ test('expanding a text segment preserves neighboring tools and text within the w
   firstCall.tool.state = secondCall.tool.state = 'completed';
   assert.equal(window.pendingTools(), false);
 });
+
+test('toolActivity renders Option A target summaries, tooltips, in-place updates, and relocalization', t => {
+  rendererDocument(t); setLocale('zh-CN');
+  const container = new RenderNode('main');
+  const render = messageRenderer(container, {copy() {}, expand() {}});
+  const msg = {
+    id: 'summary-msg',
+    role: 'assistant',
+    blocks: [
+      {type: 'text', id: 'txt-1', text: 'checking files'},
+      {type: 'tool', tool: {id: 'c-read', tool: 'read_file', state: 'started', summary: 'docs/plan.md:1-40'}},
+      {type: 'tool', tool: {id: 'c-prog', tool: 'progress_card', state: 'completed'}},
+    ],
+  };
+  render([msg]);
+  const heads = withClass(container, 'tool-activity-head');
+  assert.equal(heads.length, 2);
+  assert.equal(heads[0].textContent, 'read_file docs/plan.md:1-40 · 执行中');
+  assert.equal(heads[0].title, 'read_file docs/plan.md:1-40 · 执行中');
+  assert.equal(withClass(heads[0], 'tool-activity-target')[0].textContent, 'docs/plan.md:1-40');
+  assert.equal(heads[1].textContent, 'progress_card · 已完成');
+  assert.equal(heads[1].title, '');
+  assert.equal(withClass(heads[1], 'tool-activity-target').length, 0);
+
+  const body = withClass(container, 'chat-message-body')[0];
+  const [textNode, readNode, progNode] = body.children;
+  msg.blocks[1].tool = {id: 'c-read', tool: 'read_file', state: 'completed', summary: 'docs/plan.md:1-60'};
+  render([msg]);
+  assert.equal(body.children[0], textNode);
+  assert.equal(body.children[1], readNode);
+  assert.equal(body.children[2], progNode);
+  assert.equal(heads[0].textContent, 'read_file docs/plan.md:1-60 · 已完成');
+  assert.equal(heads[0].title, 'read_file docs/plan.md:1-60 · 已完成');
+
+  setLocale('en-US'); render.relocalize();
+  assert.equal(heads[0].textContent, 'read_file docs/plan.md:1-60 · Completed');
+  assert.equal(heads[0].title, 'read_file docs/plan.md:1-60 · Completed');
+  assert.equal(heads[1].textContent, 'progress_card · Completed');
+  assert.equal(heads[1].title, '');
+  render.dispose(); setLocale('zh-CN');
+});

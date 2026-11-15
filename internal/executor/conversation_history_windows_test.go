@@ -139,3 +139,63 @@ func TestHistoryToolEnrichmentMapsQueuedPhase(t *testing.T) {
 	}
 	_, _ = files.End("queued-call", "completed", "")
 }
+
+func TestHistoryToolEnrichmentFillsAndBoundsSummary(t *testing.T) {
+	scope := workspace.Scope{Conversation: "summary-conv", Turn: "summary-turn", Policy: "summary-policy"}
+	root := t.TempDir()
+	files, err := workspace.Open(filepath.Join(root, "files"), filepath.Join(root, "journal"), "summary-workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { files.RuntimeStopped() })
+	if err := files.Configure(true, scope.Policy); err != nil {
+		t.Fatal(err)
+	}
+	if err := files.AcquireTurnScope(scope); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := files.Begin(workspace.Begin{
+		ID: "call-fill", Scope: scope, Tool: "read_file", Path: "docs/plan.md",
+		Summary: "docs/plan.md:10-29", Fingerprint: "fp-fill",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := files.End("call-fill", "completed", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := files.Begin(workspace.Begin{
+		ID: "call-long", Scope: scope, Tool: "read_file", Path: "docs/very-long.md",
+		Summary: strings.Repeat("p", 120), Fingerprint: "fp-long",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	page := conversation.Page{Messages: []conversation.Message{{ID: "m1", Turn: scope.Turn, Blocks: []conversation.Block{
+		{Type: "tool", Tool: &wire.ToolActivity{ID: "call-fill", Turn: scope.Turn, Tool: "read_file", State: "unknown"}},
+		{Type: "tool", Tool: &wire.ToolActivity{ID: "call-keep", Turn: scope.Turn, Tool: "write_file", State: "completed", Summary: "kept.txt"}},
+	}}}}
+	enrichHistoryTools(&page, scope.Conversation, files)
+	if got := page.Messages[0].Blocks[0].Tool; got.Summary != "docs/plan.md:10-29" || got.State != "completed" {
+		t.Fatalf("unexpected backfilled activity: %+v", got)
+	}
+	if got := page.Messages[0].Blocks[1].Tool; got.Summary != "kept.txt" {
+		t.Fatalf("existing summary was overwritten: %+v", got)
+	}
+
+	tight := conversation.Page{Messages: []conversation.Message{{ID: "m2", Turn: scope.Turn, Blocks: []conversation.Block{
+		{Type: "text", Text: "x"},
+		{Type: "tool", Tool: &wire.ToolActivity{ID: "call-long", Turn: scope.Turn, Tool: "read_file", State: "unknown"}},
+	}}}}
+	baseBytes, _ := json.Marshal(tight)
+	roomForStateOnly := len(baseBytes) + 20
+	if padding := conversation.PageBytes - roomForStateOnly - 4*1024; padding > 0 {
+		tight.Messages[0].Blocks[0].Text = strings.Repeat("x", padding)
+	}
+	enrichHistoryTools(&tight, scope.Conversation, files)
+	data, _ := json.Marshal(tight)
+	got := tight.Messages[0].Blocks[1].Tool
+	if len(data) > conversation.PageBytes-4*1024 || got.State != "started" || got.Summary != "" {
+		t.Fatalf("tight budget failed to drop op summary while preserving state: bytes=%d tool=%+v", len(data), got)
+	}
+	_, _ = files.End("call-long", "completed", "")
+}

@@ -23,9 +23,16 @@ func (s *Service) BeginContext(ctx context.Context, req Begin) (Operation, error
 	if err := validateProgress(req.Progress); err != nil {
 		return Operation{}, err
 	}
+	summary, err := sanitizeSummary(req.Summary)
+	if err != nil {
+		return Operation{}, err
+	}
 	plan, err := PrepareTool(req.Tool, DescriptorInput{WorkspaceRoot: s.root, Targets: req.Targets, Path: req.Path, NewBytes: req.NewBytes})
 	if err != nil {
 		return Operation{}, err
+	}
+	if summary == "" {
+		summary = plan.Summary
 	}
 
 	s.mu.Lock()
@@ -74,7 +81,7 @@ func (s *Service) BeginContext(ctx context.Context, req Begin) (Operation, error
 	entry := &schedEntry{
 		id: req.ID, batch: "single-" + req.ID, order: 0, ticket: s.sched.nextTicket,
 		scope: req.Scope, tool: req.Tool, inputFingerprint: req.Fingerprint, fingerprint: req.Fingerprint,
-		plan: plan, newBytes: req.NewBytes, progress: req.Progress, phase: PhaseRegistered, sealed: true,
+		plan: plan, newBytes: req.NewBytes, summary: summary, progress: req.Progress, phase: PhaseRegistered, sealed: true,
 	}
 	s.sched.entries[req.ID] = entry
 	s.sched.mu.Unlock()
@@ -90,7 +97,7 @@ func (s *Service) BeginContext(ctx context.Context, req Begin) (Operation, error
 	op := Operation{
 		ID: req.ID, Scope: req.Scope, Tool: req.Tool, Fingerprint: req.Fingerprint,
 		Sequence: s.sequence, Started: time.Now().UTC(), State: "started", Phase: PhaseRegistered,
-		Changes: []Change{}, Progress: req.Progress,
+		Changes: []Change{}, Summary: summary, Progress: req.Progress,
 	}
 	s.records[req.ID] = publicOperation(op)
 	s.mu.Unlock()
@@ -209,6 +216,7 @@ func (s *Service) prepareGrantedCall(entry *schedEntry) (Operation, error) {
 	}
 	baseOp.Tool = entry.tool
 	baseOp.Fingerprint = entry.fingerprint
+	baseOp.Summary = entry.summary
 	baseOp.Progress = entry.progress
 	baseOp.Phase = PhasePreparing
 	baseOp.WaitReason = ""

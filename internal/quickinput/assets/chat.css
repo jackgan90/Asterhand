@@ -80,6 +80,7 @@ main:has(#command-panel:not([hidden])) .chat-actions:has(#chat-status[data-idle=
 @media (forced-colors: active) {
   button { border: 1px solid ButtonText; }
   #chat-send { background: ButtonFace; color: ButtonText; }
+  .tool-activity-name, .tool-activity-target, .tool-activity-state { color: CanvasText; }
 }
 
 .chat-delivery-status { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
@@ -87,5 +88,8 @@ main:has(#command-panel:not([hidden])) .chat-actions:has(#chat-status[data-idle=
 .tool-activity { padding: 6px 10px; margin-block: 5px; border-left: 2px solid var(--line); color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .tool-activity[data-state=started] { border-left-color: var(--accent); }
 .tool-activity[data-state=failed], .tool-activity[data-state=unknown] { border-left-style: dashed; }
+.tool-activity-head { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; line-height: 1.4; }
+.tool-activity-name { color: var(--fg); font-weight: 500; }
+.tool-activity-target { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 11.5px; margin-inline-start: 2px; }
 .tool-activity small { display: block; opacity: .7; }
 .tool-activity ul { margin: 4px 0; padding-left: 20px; }

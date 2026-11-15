@@ -135,6 +135,7 @@ func startChatProcess(ctx context.Context, c config.Config, options openClawOpti
 		plan.Application = plan.Application.Fallback("unconfirmed")
 	}
 	access, _ := ctx.Value(workspaceTransportKey{}).(*workspace.Transport)
+	wsToken := ""
 	if c.LocalTools.Enabled {
 		if access == nil {
 			return nil, workspaceError(workspaceUnavailable())
@@ -142,6 +143,7 @@ func startChatProcess(ctx context.Context, c config.Config, options openClawOpti
 		if err := prepareWorkspacePlugin(root); err != nil {
 			return nil, err
 		}
+		wsToken = access.Token
 	}
 	data, err := conversationConfig(c, options, provider, root, port, promptEnabled, access)
 	if err != nil {
@@ -151,7 +153,7 @@ func startChatProcess(ctx context.Context, c config.Config, options openClawOpti
 		return nil, err
 	}
 	cmd := exec.Command(options.NodePath, filepath.Join(root, "bridge", "main.mjs"))
-	cmd.Dir, cmd.Env = root, conversationEnvironment(root, options.NodePath, provider.KeyEnv, key, token)
+	cmd.Dir, cmd.Env = root, conversationEnvironment(root, options.NodePath, provider.KeyEnv, key, token, wsToken)
 	process, err := launchChatProcess(cmd, diagnostic)
 	if err != nil {
 		diagnostic.finish("launch_failed")

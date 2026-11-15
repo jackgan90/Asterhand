@@ -18,3 +18,4 @@
 
 - [ADR-AST-010：跨 harness 工具能力与本机优先](010-local-runtime-capability-boundaries.md)。
 - [ADR-AST-011：默认开启受限助手工具](011-default-assistant-tools.md)。
+- [ADR-AST-012：本机工作区受限脚本执行、敏感目录保护与统一中断边界](012-workspace-script-execution-boundary.md)。

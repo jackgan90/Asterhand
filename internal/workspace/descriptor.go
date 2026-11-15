@@ -5,6 +5,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode"
@@ -18,6 +19,7 @@ const (
 	DomainMemorySources Domain = "memory_sources"
 	DomainMemoryIndex   Domain = "memory_index"
 	DomainProgress      Domain = "progress"
+	DomainExec          Domain = "exec"
 )
 
 type Coverage string
@@ -63,6 +65,8 @@ const (
 	SemanticMemoryGet      = "memory.get"
 	SemanticMemorySearch   = "memory.search"
 	SemanticTurnProgress   = "turn.progress"
+	SemanticExec           = "exec.run"
+	SemanticControl        = "exec.control"
 )
 
 type ResourceClaim struct {
@@ -88,6 +92,79 @@ type PreparedPlan struct {
 	AddOldBytesToBound    bool
 }
 
+var (
+	cmdBearerPattern   = regexp.MustCompile(`(?i)\bBearer\s+[^\s"';&|]+`)
+	cmdKeyValPattern   = regexp.MustCompile(`(?i)([a-z0-9_.-]*(?:token|password|passwd|secret|api[_-]?key|apikey|access[_-]?key|auth)[a-z0-9_.-]*\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s"';&|]+)`)
+	cmdFlagArgPattern  = regexp.MustCompile(`(?i)((?:^|[\s"'(\[;|&])--?[a-z0-9_.-]*(?:token|password|passwd|secret|api[_-]?key|apikey|access[_-]?key|auth(?:orization)?)\s+)("[^"]*"|'[^']*'|[^\s"';&|]+)`)
+	cmdUserFlagPattern = regexp.MustCompile(`(?i)((?:^|[\s"'(\[;|&])(?:-u|--user)(?:=|\s+))(?:"([^":\r\n]+):[^"]*"|'([^':\r\n]+):[^']*'|([^\s"':;&|]+):[^\s"';&|]+)`)
+	cmdURLPassPattern  = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://[^/\s:@]+:)[^@\s/]+@`)
+)
+
+func replaceCommandSecrets(text string, re *regexp.Regexp) string {
+	matches := re.FindAllStringSubmatchIndex(text, -1)
+	if len(matches) == 0 {
+		return text
+	}
+	var b strings.Builder
+	b.Grow(len(text))
+	last := 0
+	for _, m := range matches {
+		b.WriteString(text[last:m[0]])
+		prefix, val, rest := text[m[2]:m[3]], text[m[4]:m[5]], text[m[5]:]
+		if strings.EqualFold(val, "bearer") && len(rest) > 0 && (rest[0] == ' ' || rest[0] == '\t') {
+			b.WriteString(text[m[0]:m[1]])
+		} else {
+			b.WriteString(prefix)
+			b.WriteString("[REDACTED]")
+		}
+		last = m[1]
+	}
+	b.WriteString(text[last:])
+	return b.String()
+}
+
+func replaceCommandUserFlag(text string) string {
+	matches := cmdUserFlagPattern.FindAllStringSubmatchIndex(text, -1)
+	if len(matches) == 0 {
+		return text
+	}
+	var b strings.Builder
+	b.Grow(len(text))
+	last := 0
+	for _, m := range matches {
+		b.WriteString(text[last:m[0]])
+		user := ""
+		for _, pair := range [][2]int{{m[4], m[5]}, {m[6], m[7]}, {m[8], m[9]}} {
+			if pair[0] >= 0 && pair[1] >= pair[0] {
+				user = text[pair[0]:pair[1]]
+				break
+			}
+		}
+		b.WriteString(text[m[2]:m[3]])
+		b.WriteString(user)
+		b.WriteString(":[REDACTED]")
+		last = m[1]
+	}
+	b.WriteString(text[last:])
+	return b.String()
+}
+
+func redactCommandSummary(raw string) string {
+	if raw == "" || !utf8.ValidString(raw) {
+		return ""
+	}
+	cleaned := normalizeSummarySpace(raw, 4096)
+	if cleaned == "" {
+		return ""
+	}
+	text := cmdBearerPattern.ReplaceAllString(cleaned, "Bearer [REDACTED]")
+	text = replaceCommandSecrets(text, cmdKeyValPattern)
+	text = replaceCommandSecrets(text, cmdFlagArgPattern)
+	text = replaceCommandUserFlag(text)
+	text = cmdURLPassPattern.ReplaceAllString(text, "${1}[REDACTED]@")
+	return truncateSummary(text)
+}
+
 func sanitizeSummary(raw string) (string, error) {
 	if raw == "" {
 		return "", nil
@@ -95,8 +172,20 @@ func sanitizeSummary(raw string) (string, error) {
 	if !utf8.ValidString(raw) {
 		return "", fail("invalid_request")
 	}
+	cleaned := normalizeSummarySpace(raw, 0)
+	if cleaned == "" {
+		return "", nil
+	}
+	return truncateSummary(cleaned), nil
+}
+
+func normalizeSummarySpace(raw string, maxBytes int) string {
+	capHint := len(raw)
+	if maxBytes > 0 && capHint > maxBytes {
+		capHint = maxBytes
+	}
 	var b strings.Builder
-	b.Grow(min(len(raw), MaxSummaryBytes))
+	b.Grow(capHint)
 	pendingSpace := false
 	started := false
 	for _, r := range raw {
@@ -106,6 +195,15 @@ func sanitizeSummary(raw string) (string, error) {
 			}
 			continue
 		}
+		if maxBytes > 0 {
+			add := utf8.RuneLen(r)
+			if pendingSpace {
+				add++
+			}
+			if b.Len()+add > maxBytes {
+				break
+			}
+		}
 		if pendingSpace {
 			b.WriteByte(' ')
 			pendingSpace = false
@@ -113,12 +211,12 @@ func sanitizeSummary(raw string) (string, error) {
 		b.WriteRune(r)
 		started = true
 	}
-	cleaned := b.String()
-	if cleaned == "" {
-		return "", nil
-	}
+	return b.String()
+}
+
+func truncateSummary(cleaned string) string {
 	if utf8.RuneCountInString(cleaned) <= MaxSummaryRunes && len(cleaned) <= MaxSummaryBytes {
-		return cleaned, nil
+		return cleaned
 	}
 	const suffix = "…"
 	var out strings.Builder
@@ -133,7 +231,7 @@ func sanitizeSummary(raw string) (string, error) {
 		out.WriteRune(r)
 		runes++
 	}
-	return out.String(), nil
+	return out.String()
 }
 
 func summarizeTargets(targets []Target) string {
@@ -190,6 +288,8 @@ func AssistantToolNames() []string {
 		"memory_search",
 		"memory_get",
 		"progress_card",
+		"exec_command",
+		"process_control",
 	}
 }
 
@@ -200,7 +300,7 @@ func IsMemorySourcePath(rel string) bool {
 
 func ValidClaim(c ResourceClaim) bool {
 	switch c.Domain {
-	case DomainFS, DomainMemorySources, DomainMemoryIndex, DomainProgress:
+	case DomainFS, DomainMemorySources, DomainMemoryIndex, DomainProgress, DomainExec:
 	default:
 		return false
 	}

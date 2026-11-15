@@ -10,10 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unsafe"
 
+	"github.com/jackgan90/Asterhand/internal/platform/sandbox"
 	"golang.org/x/sys/windows"
 )
+
+var reinheritHandleDACL = sandbox.ReinheritHandleDACL
 
 // Every ancestor is pinned without FILE_SHARE_DELETE. Relative handle lookups
 // reject a directory turned into a reparse point even while it remains pinned.
@@ -22,13 +26,14 @@ import (
 // new hard links even under an exclusive handle. Replacement content is prepared
 // privately, then published with a non-overwriting handle rename.
 type heldFile struct {
-	file    *os.File
-	parents []*os.File
-	name    string
-	removed bool
-	staging string
-	retired []stagedFile
-	missing []string
+	file      *os.File
+	parents   []*os.File
+	name      string
+	removed   bool
+	aclFailed bool
+	staging   string
+	retired   []stagedFile
+	missing   []string
 }
 
 type stagedFile struct {
@@ -284,6 +289,9 @@ func (h *heldFile) bytes(limit int64) ([]byte, error) {
 }
 
 func (h *heldFile) observe() (string, bool, error) {
+	if h.aclFailed {
+		return "unknown", true, fail("acl_reinherit_failed")
+	}
 	if h.removed {
 		return MissingRevision, false, nil
 	}
@@ -323,7 +331,7 @@ func (h *heldFile) write(data []byte) error {
 		return err
 	}
 	name := filepath.Join(h.staging, rand.Text()+".new")
-	f, err := openHandle(name, windows.GENERIC_READ|windows.GENERIC_WRITE|windows.DELETE, 0, windows.CREATE_NEW)
+	f, err := openHandle(name, windows.GENERIC_READ|windows.GENERIC_WRITE|windows.DELETE|windows.WRITE_DAC, 0, windows.CREATE_NEW)
 	if err != nil {
 		return fmt.Errorf("create staged content: %w", err)
 	}
@@ -356,6 +364,10 @@ func (h *heldFile) write(data []byte) error {
 		return fmt.Errorf("publish staged content: %w", err)
 	}
 	h.file, f = f, nil
+	if err = reinheritHandleDACL(h.file); err != nil {
+		h.aclFailed = true
+		return fail("acl_reinherit_failed")
+	}
 	return nil
 }
 
@@ -425,3 +437,72 @@ func directory(root, name string) (*heldFile, error) {
 }
 
 func platformSupported() bool { return true }
+
+func hasReparseAttribute(info os.FileInfo) bool {
+	if info == nil {
+		return false
+	}
+	if sys, ok := info.Sys().(*syscall.Win32FileAttributeData); ok {
+		return sys.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0
+	}
+	return false
+}
+
+func scanUnsafeWorkspaceLinks(root string) (bool, error) {
+	visited := 0
+	var walk func(dir string) (bool, error)
+	walk = func(dir string) (bool, error) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		for _, item := range entries {
+			visited++
+			if visited > MaxWorkspaceFiles*2 {
+				return false, fail("workspace_limit")
+			}
+			if item.Type()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+				return true, nil
+			}
+			full := filepath.Join(dir, item.Name())
+			if info, infoErr := item.Info(); infoErr == nil && hasReparseAttribute(info) {
+				return true, nil
+			}
+			p, err := windows.UTF16PtrFromString(extendedPath(full))
+			if err != nil {
+				return true, nil
+			}
+			h, openErr := windows.CreateFile(p, windows.FILE_READ_ATTRIBUTES, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+			if openErr != nil {
+				if os.IsNotExist(openErr) {
+					continue
+				}
+				return false, openErr
+			}
+			var bh windows.ByHandleFileInformation
+			statErr := windows.GetFileInformationByHandle(h, &bh)
+			_ = windows.CloseHandle(h)
+			if statErr != nil {
+				return false, statErr
+			}
+			if bh.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+				return true, nil
+			}
+			isDir := bh.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0
+			if !isDir && bh.NumberOfLinks > 1 {
+				return true, nil
+			}
+			if isDir {
+				found, walkErr := walk(full)
+				if walkErr != nil || found {
+					return found, walkErr
+				}
+			}
+		}
+		return false, nil
+	}
+	return walk(root)
+}

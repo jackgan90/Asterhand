@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackgan90/Asterhand/internal/config"
+	"github.com/jackgan90/Asterhand/internal/platform/sandbox"
 )
 
 type call struct {
@@ -53,6 +54,10 @@ type Service struct {
 	reservedVersionBytes  int64
 	reservedActivityBytes int64
 	blocked               bool
+	overQuota             bool
+	homeRoot              string
+	bundledNodeDir        string
+	exec                  *execManager
 
 	traceMu      sync.Mutex
 	traceEnabled bool
@@ -68,7 +73,7 @@ func Open(root, journal, id string) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, p := range []string{root, journal, filepath.Join(journal, "staging")} {
+	for _, p := range []string{root, journal, filepath.Join(journal, "staging"), filepath.Join(journal, "sandbox-temp")} {
 		if err := os.MkdirAll(p, 0700); err != nil {
 			return nil, err
 		}
@@ -94,6 +99,13 @@ func Open(root, journal, id string) (*Service, error) {
 		records:        map[string]Operation{},
 		journalSizes:   map[string]int64{},
 		pinnedJournals: map[string]int{},
+	}
+	s.exec = newExecManager(s, sandbox.NewBackend(), filepath.Join(journal, "sandbox-temp"))
+	if err := s.exec.PrepareAndClean(); err != nil {
+		return nil, err
+	}
+	if _, _, qErr := s.measureWorkspaceDisk(0, 0); Code(qErr) == "workspace_limit" {
+		s.overQuota = true
 	}
 	entries, err := os.ReadDir(journal)
 	if err != nil {
@@ -155,21 +167,32 @@ func (s *Service) busyLocked() bool {
 	s.sched.mu.Lock()
 	active := s.sched.hasNonTerminalLocked()
 	s.sched.mu.Unlock()
-	return active || len(s.callsByID) > 0 || s.turn != "" || s.publicMutating
+	return active || len(s.callsByID) > 0 || s.turn != "" || s.publicMutating || s.sched.activeExec.Load() > 0
 }
 
 func (s *Service) Status() Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	caps := []string{"files.read", "files.mutate", "files.discover", "memory.search", "progress", "artifacts.read", "versions.restore"}
+	limits := map[string]int64{
+		"file_bytes": MaxFileBytes, "batch_bytes": MaxBatchBytes, "batch_targets": MaxTargets,
+		"workspace_bytes": MaxWorkspaceBytes, "workspace_files": MaxWorkspaceFiles, "turn_calls": MaxCalls,
+		"page_bytes": PageBytes, "active_calls": MaxActiveCalls, "modifying_calls": MaxModifyingCalls, "queued_calls": MaxQueuedCalls,
+	}
+	if s.exec != nil && s.exec.Supported() {
+		caps = append(caps, "scripts.execute")
+		limits["exec_timeout_seconds"] = DefaultExecTimeoutSec
+		limits["exec_max_timeout_seconds"] = MaxExecTimeoutSec
+		limits["exec_output_bytes"] = MaxExecSessionBytes
+		limits["exec_sessions_per_turn"] = MaxExecSessionsPerTurn
+		limits["sandbox_temp_bytes"] = MaxSandboxTempBytes
+		limits["sandbox_temp_files"] = MaxSandboxTempFiles
+	}
 	state := Status{
 		ID: s.id, Supported: platformSupported(), Authorized: s.enabled, Policy: s.policy,
 		Ready: platformSupported() && s.enabled && !s.blocked, Busy: s.busyLocked(), Enforcement: "restricted_service",
-		Capabilities: []string{"files.read", "files.mutate", "files.discover", "memory.search", "progress", "artifacts.read", "versions.restore"},
-		Limits: map[string]int64{
-			"file_bytes": MaxFileBytes, "batch_bytes": MaxBatchBytes, "batch_targets": MaxTargets,
-			"workspace_bytes": MaxWorkspaceBytes, "workspace_files": MaxWorkspaceFiles, "turn_calls": MaxCalls,
-			"page_bytes": PageBytes, "active_calls": MaxActiveCalls, "modifying_calls": MaxModifyingCalls, "queued_calls": MaxQueuedCalls,
-		},
+		Capabilities: caps,
+		Limits:       limits,
 	}
 	if !state.Supported {
 		state.Reason = "unsupported_platform"
@@ -197,29 +220,68 @@ func (s *Service) AcquireTurn(turn, policy string) error {
 
 func (s *Service) AcquireTurnScope(scope Scope) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	turn := scope.Turn
 	if !s.enabled || scope.Policy != s.policy || !platformSupported() {
+		s.mu.Unlock()
 		return fail("not_authorized")
 	}
 	if s.blocked {
+		s.mu.Unlock()
 		return fail("reconciliation_required")
 	}
 	if s.turn == turn && turn != "" {
+		s.mu.Unlock()
 		return nil
 	}
 	if !validStrictID(turn) || s.turn != "" || s.publicMutating || len(s.callsByID) > 0 {
+		s.mu.Unlock()
 		return fail("busy")
 	}
 	s.turn, s.scope, s.calls = turn, scope, 0
+	execMgr := s.exec
+	s.mu.Unlock()
+
+	if execMgr != nil {
+		execMgr.clearTurnForStart(turn)
+		if err := execMgr.PrepareAndClean(); err != nil {
+			s.mu.Lock()
+			if s.turn == turn {
+				s.turn = ""
+			}
+			s.mu.Unlock()
+			return err
+		}
+	}
 	return nil
 }
 
 // ReleaseTurn requires a trusted adapter's proof of native termination.
 func (s *Service) ReleaseTurn(turn string, stopped bool) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.turn != turn {
+		s.mu.Unlock()
+		return nil
+	}
+	if !stopped {
+		s.mu.Unlock()
+		return fail("cleanup_pending")
+	}
+	execMgr := s.exec
+	s.mu.Unlock()
+
+	var settleErr error
+	if execMgr != nil {
+		execMgr.InitiateTurnStop(turn, "cancelled")
+		var settled bool
+		settled, settleErr = execMgr.TurnSettled(turn)
+		if !settled {
+			return fail("cleanup_pending")
+		}
+	}
+
+	s.mu.Lock()
+	if s.turn != turn {
+		s.mu.Unlock()
 		return nil
 	}
 	s.sched.mu.Lock()
@@ -231,8 +293,23 @@ func (s *Service) ReleaseTurn(turn string, stopped bool) error {
 		}
 	}
 	s.sched.mu.Unlock()
-	if !stopped || hasActive || len(s.callsByID) > 0 {
+	if hasActive || len(s.callsByID) > 0 {
+		s.mu.Unlock()
 		return fail("cleanup_pending")
+	}
+	scope := s.scope
+	s.mu.Unlock()
+
+	_, _, recErr := s.reconcileAfterExec(turn, true)
+	var relErr error
+	if execMgr != nil {
+		relErr = execMgr.ReleaseTurnSessions(turn)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.turn != turn {
+		return nil
 	}
 	s.sched.mu.Lock()
 	for id, b := range s.sched.batches {
@@ -241,8 +318,49 @@ func (s *Service) ReleaseTurn(turn string, stopped bool) error {
 		}
 	}
 	s.sched.mu.Unlock()
+	if settleErr != nil || recErr != nil || relErr != nil {
+		s.recordReleaseUnknownLocked(turn, scope, settleErr, recErr, relErr)
+	}
 	s.turn = ""
 	return nil
+}
+
+func (s *Service) recordReleaseUnknownLocked(turn string, scope Scope, errs ...error) {
+	s.blocked = true
+	for _, op := range s.records {
+		if op.Scope.Turn == turn && op.State == "unknown" {
+			return
+		}
+	}
+	code := "io_error"
+	for _, err := range errs {
+		if err != nil {
+			code = Code(err)
+			break
+		}
+	}
+	id := "rel_" + turn
+	if len(id) > 150 {
+		id = id[:150]
+	}
+	s.sequence++
+	op := Operation{
+		ID:          id,
+		Scope:       scope,
+		Tool:        "exec_command",
+		Fingerprint: "release:" + turn,
+		Sequence:    s.sequence,
+		Started:     time.Now().UTC(),
+		Finished:    time.Now().UTC(),
+		State:       "unknown",
+		Phase:       PhaseTerminal,
+		Detail:      code,
+		Changes:     []Change{},
+	}
+	if raw, err := s.persist(op); err == nil {
+		s.journalSizes[id] = int64(len(raw))
+	}
+	s.records[id] = publicOperation(op)
 }
 
 func validateProgress(steps []Step) error {

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/jackgan90/Asterhand/internal/platform/sandbox"
 )
 
 const (
@@ -32,6 +34,17 @@ const (
 	MaxIndexCalls     = 1
 	MaxQueuedCalls    = 64
 	DefaultRoot       = "workspace"
+
+	MaxExecSessionsPerTurn = 8
+	DefaultExecYieldMs     = 10000
+	MaxExecYieldMs         = 30000
+	MaxExecHttpPollMs      = 2500
+	DefaultExecTimeoutSec  = 120
+	MaxExecTimeoutSec      = 600
+	MaxExecPollBytes       = 64 << 10
+	MaxExecSessionBytes    = 256 << 10
+	MaxSandboxTempBytes    = 256 << 20
+	MaxSandboxTempFiles    = 10000
 )
 
 type Error struct {
@@ -50,6 +63,10 @@ func Code(err error) string {
 	var e *Error
 	if errors.As(err, &e) {
 		return e.Code
+	}
+	var se *sandbox.Error
+	if errors.As(err, &se) && se.Code != "" {
+		return se.Code
 	}
 	return "io_error"
 }
@@ -214,3 +231,66 @@ func publicOperation(op Operation) Operation {
 	return op
 }
 func artifactID(op string, index int) string { return fmt.Sprintf("%s.%d", op, index) }
+
+// ExecStartRequest starts a sandboxed script session owned by an active exec_command call.
+type ExecStartRequest struct {
+	CallID     string            `json:"id"`
+	Command    string            `json:"command"`
+	Workdir    string            `json:"workdir,omitempty"`
+	Env        map[string]string `json:"env,omitempty"`
+	YieldMs    *int              `json:"yield_ms,omitempty"`
+	TimeoutSec int               `json:"timeout_sec,omitempty"`
+}
+
+// ExecPollRequest polls output/status for a background or finished script session.
+type ExecPollRequest struct {
+	CallID    string `json:"id"`
+	SessionID string `json:"session_id"`
+	Offset    *int64 `json:"offset,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
+	WaitMs    *int   `json:"wait_ms,omitempty"`
+}
+
+// ExecControlRequest queries status, logs, or lists sessions for process_control.
+type ExecControlRequest struct {
+	CallID    string `json:"id"`
+	Action    string `json:"subaction"`
+	SessionID string `json:"session_id,omitempty"`
+	Offset    int64  `json:"offset"`
+	Limit     int    `json:"limit,omitempty"`
+}
+
+// ExecKillRequest terminates either a session by session_id or the foreground session for call id.
+type ExecKillRequest struct {
+	CallID    string `json:"id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	Reason    string `json:"detail,omitempty"`
+}
+
+// ExecSessionSummary describes public status of one script execution session.
+type ExecSessionSummary struct {
+	SessionID  string `json:"session_id"`
+	Status     string `json:"status"`
+	ExitCode   int    `json:"exit_code,omitempty"`
+	DurationMs int64  `json:"duration_ms,omitempty"`
+	TotalBytes int64  `json:"total_bytes"`
+	Truncated  bool   `json:"truncated,omitempty"`
+	TLSHint    string `json:"tls_hint,omitempty"`
+	Warning    string `json:"warning,omitempty"`
+}
+
+// ExecResult is returned to the OpenClaw workspace plugin for exec_command and process_control.
+type ExecResult struct {
+	Status     string               `json:"status"`
+	SessionID  string               `json:"session_id,omitempty"`
+	Output     string               `json:"output,omitempty"`
+	NextOffset int64                `json:"next_offset,omitempty"`
+	TotalBytes int64                `json:"total_bytes,omitempty"`
+	Truncated  bool                 `json:"truncated,omitempty"`
+	ExitCode   int                  `json:"exit_code,omitempty"`
+	DurationMs int64                `json:"duration_ms,omitempty"`
+	Reason     string               `json:"reason,omitempty"`
+	TLSHint    string               `json:"tls_hint,omitempty"`
+	Warning    string               `json:"warning,omitempty"`
+	Sessions   []ExecSessionSummary `json:"sessions,omitempty"`
+}

@@ -584,6 +584,8 @@
   "err.tasks.approval_local_only": "审批必须在执行节点本机处理",
   "err.tasks.answer_already_answered": "问题已经回答",
   "err.tasks.attempt_state_changed": "当前 attempt 状态已改变",
+  "err.textcodec.invalid_cursor": "无效的日志读取游标",
+  "err.textcodec.invalid_encoding": "不支持的文本编码",
   "err.executor.missing_credential": "请在本机设置中配置所选模型的凭据",
   "err.executor.openclaw_missing": "OpenClaw 运行环境未安装，请运行 repair",
   "err.executor.openclaw_invalid_output": "OpenClaw 未返回有效结果: {err}; {detail}",

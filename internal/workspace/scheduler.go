@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -73,7 +74,24 @@ type scheduler struct {
 	maxModifying  int
 	maxIndex      int
 	maxQueued     int
+	activeExec    atomic.Int32
 	faults        *mutationFaultHooks
+}
+
+func (sc *scheduler) wake() {
+	sc.mu.Lock()
+	sc.broadcastLocked()
+	sc.mu.Unlock()
+}
+
+func (e *schedEntry) isAdmissionClosed(sc *scheduler) bool {
+	if sc == nil || e == nil {
+		return false
+	}
+	sc.mu.Lock()
+	closed := e.admissionClosed
+	sc.mu.Unlock()
+	return closed
 }
 
 func newScheduler() *scheduler {
@@ -179,6 +197,9 @@ func (sc *scheduler) canGrantLocked(e *schedEntry) (bool, string) {
 	}
 	if e.plan.Modifying && sc.modifyCalls >= sc.maxModifying {
 		return false, "modifying_limit"
+	}
+	if e.plan.Modifying && e.tool != "exec_command" && sc.activeExec.Load() > 0 {
+		return false, "exec_active"
 	}
 	if e.plan.Indexing && sc.indexCalls >= sc.maxIndex {
 		return false, "index_limit"

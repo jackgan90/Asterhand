@@ -92,3 +92,7 @@
 ### 工具轮内并发与活动阶段读取
 
 [工作区工具细粒度并发](../development/features/workspace-tool-concurrency/plan.md)不增加独立调度设置页。`workspace_files.list/search/read`、`artifacts.read` 与内置助手工具共用同一资源调度器，与不冲突的模型工具并发执行并在目标冲突时公平等待；`workspace_files.mutate`、`workspace_versions.restore` 保留现有轮次门禁，进入后同样按目标登记资源与调用身份。`workspace.Operation` 同步暴露可选 `phase` 与 `wait_reason` 并接入 CLI/MCP 机器 schema，`turn_activities.list/get`、`workspace_operations.get` 提供等价等待与排空收尾信息，聊天消息时间线保持原生工具顺序。
+
+### 本机工作区受限脚本与命令执行（第一阶段）
+
+[工作区脚本与命令执行计划（第一阶段）](../development/features/workspace-script-execution/plan.md)由内置助手在既有“允许助手调用工具”权限控制下调用 `exec_command` 与 `process_control`，不引入新的人类独立对话框或设置开关，也不开放通过 CLI/MCP 绕过会话权限任意执行外部模型沙箱脚本的入口（人类本机预注册脚本继续由 `commands.*` 管理）。第一阶段新增的 `scripts.execute` 能力声明、`exec_timeout_seconds`/`exec_output_bytes`/`exec_sessions_per_turn`/`sandbox_temp_bytes` 限制以及 `exec_command`/`process_control` 工具活动摘要和收据均直接通过既有公共操作（`workspaces.get`、`conversations.capabilities`、`turn_activities.list/get`、`workspace_operations.get`、`messages.list`）保持 UI/CLI/MCP 一致读取；开启/撤销权限继续按人工例外规则保留在“设置 → 助手”。

@@ -4,7 +4,6 @@ package localcommands
 
 import (
 	"path/filepath"
-	"slices"
 	"strings"
 	"unicode/utf16"
 
@@ -50,14 +49,4 @@ func cmdEscape(value string) string {
 		result.WriteRune(c)
 	}
 	return result.String()
-}
-
-func environmentBlock(environment []string) []uint16 {
-	slices.SortFunc(environment, func(a, b string) int { return strings.Compare(strings.ToUpper(a), strings.ToUpper(b)) })
-	var block []uint16
-	for _, entry := range environment {
-		block = append(block, utf16.Encode([]rune(entry))...)
-		block = append(block, 0)
-	}
-	return append(block, 0)
 }

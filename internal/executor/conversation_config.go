@@ -43,7 +43,7 @@ func conversationConfig(c config.Config, options openClawOptions, provider provi
 	return json.MarshalIndent(value, "", "  ")
 }
 
-func conversationEnvironment(root, node, keyName, key, token string) []string {
+func conversationEnvironment(root, node, keyName, key, token string, workspaceTokens ...string) []string {
 	var environment []string
 	for _, name := range []string{"SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT"} {
 		if value := os.Getenv(name); value != "" {
@@ -61,6 +61,9 @@ func conversationEnvironment(root, node, keyName, key, token string) []string {
 		"PATH="+filepath.Dir(node)+string(os.PathListSeparator)+filepath.Join(os.Getenv("SYSTEMROOT"), "System32"),
 		"OPENCLAW_STATE_DIR="+filepath.Join(root, "state"), "OPENCLAW_CONFIG_PATH="+filepath.Join(root, "openclaw.json"),
 		"OPENCLAW_GATEWAY_TOKEN="+token, "OPENCLAW_NO_RESPAWN=1", "NODE_DISABLE_COMPILE_CACHE=1", "NO_COLOR=1")
+	if len(workspaceTokens) > 0 && workspaceTokens[0] != "" {
+		environment = append(environment, "ASTERHAND_WORKSPACE_TOKEN="+workspaceTokens[0])
+	}
 	if key != "" {
 		environment = append(environment, keyName+"="+key)
 	}

@@ -70,7 +70,7 @@ export function memoryFiles(client, signal) {
     if (!ctx?.id || !ctx?.tracker) {
       return Promise.reject(coded('missing_call_identity', 'Memory access requires an active tool call'));
     }
-    return ctx.tracker.track(client.request(action, {...payload, id: ctx.id}));
+    return ctx.tracker.track(client.request(action, {...payload, id: ctx.id}, 12000, ctx.signal));
   };
   const text = async file => {
     const relative = permitted(file);
@@ -82,7 +82,10 @@ export function memoryFiles(client, signal) {
   };
   return {
     withCall: (ctx, fn) => callStore.run(ctx, fn),
-    assertCurrent: () => signal.throwIfAborted(),
+    assertCurrent: () => {
+      signal?.throwIfAborted();
+      callStore.getStore()?.signal?.throwIfAborted();
+    },
     listFiles: (_workspace, extraPaths = [], multimodal) =>
       listMemoryFiles(client.workspace, permitted, runRequest, extraPaths, multimodal),
     async inspectFile(file) {

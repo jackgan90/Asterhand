@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {fileClient, createTracker} from '../internal/executor/workspaceplugin/files.mjs';
+import {fileClient, createTracker, callScope} from '../internal/executor/workspaceplugin/files.mjs';
 import {createBatchCoordinator} from '../internal/executor/workspaceplugin/batch.mjs';
+import {createExecTools} from '../internal/executor/workspaceplugin/exec.mjs';
 import {memoryFiles} from '../internal/executor/workspaceplugin/memory.mjs';
 
 test('readDirectory maps directory and file metadata and marks bootstrap requests', async () => {
@@ -184,17 +185,98 @@ test('batch coordinator registers and seals allowlisted display summaries withou
   await coord.beforeToolCall({toolName: 'read_file', toolCallId: 's1', params: {path: 'F:\\synthetic-workspace\\docs\\a.md', offset: 10, limit: 20}}, {...ctx, toolCallId: 's1'});
   await coord.beforeToolCall({toolName: 'apply_file_patch', toolCallId: 's2', params: {input: patchText}}, {...ctx, toolCallId: 's2'});
   await coord.beforeToolCall({toolName: 'progress_card', toolCallId: 's3', params: {markdown: 'SECRET_PROGRESS', plan: [{step: 'one', status: 'pending'}]}}, {...ctx, toolCallId: 's3'});
+  await coord.beforeToolCall({toolName: 'exec_command', toolCallId: 's4', params: {command: 'node run.mjs --api-key=SECRET_KEY'}}, {...ctx, toolCallId: 's4'});
+  await coord.beforeToolCall({toolName: 'process_control', toolCallId: 's5', params: {action: 'poll', sessionId: 'sess-9'}}, {...ctx, toolCallId: 's5'});
 
   await Promise.all([
     coord.runTool('memory_search', 's0', {query: 'deploy plan', corpus: 'sessions'}, undefined, async () => ({content: [{type: 'text', text: 'ok'}]})),
     coord.runTool('read_file', 's1', {path: 'F:\\synthetic-workspace\\docs\\a.md', offset: 10, limit: 20}, undefined, async () => ({content: [{type: 'text', text: 'ok'}]})),
     coord.runTool('apply_file_patch', 's2', {input: patchText}, undefined, async () => ({content: [{type: 'text', text: 'ok'}]})),
     coord.runTool('progress_card', 's3', {markdown: 'SECRET_PROGRESS', plan: [{step: 'one', status: 'pending'}]}, undefined, async () => ({content: [{type: 'text', text: 'ok'}]})),
+    coord.runTool('exec_command', 's4', {command: 'node run.mjs --api-key=SECRET_KEY'}, undefined, async () => ({content: [{type: 'text', text: 'ok'}]})),
+    coord.runTool('process_control', 's5', {action: 'poll', sessionId: 'sess-9'}, undefined, async () => ({content: [{type: 'text', text: 'ok'}]})),
   ]);
 
-  assert.deepEqual(registered.map(r => r.summary ?? ''), ['"deploy plan" · sessions', 'docs/a.md:10-29', 'old.md → sub/new.md', '']);
+  assert.deepEqual(registered.map(r => r.summary ?? ''), ['"deploy plan" · sessions', 'docs/a.md:10-29', 'old.md → sub/new.md', '', 'node run.mjs --api-key=[REDACTED]', 'poll sess-9']);
   assert.equal(registered[3].summary, undefined);
-  assert.deepEqual(sealedBatches[0].items.map(i => i.summary ?? ''), ['"deploy plan" · sessions', 'docs/a.md:10-29', 'old.md → sub/new.md', '']);
+  assert.deepEqual(sealedBatches[0].items.map(i => i.summary ?? ''), ['"deploy plan" · sessions', 'docs/a.md:10-29', 'old.md → sub/new.md', '', 'node run.mjs --api-key=[REDACTED]', 'poll sess-9']);
   assert.equal(sealedBatches[0].items[3].summary, undefined);
   assert.equal(JSON.stringify({registered, sealedBatches}).includes('SECRET_'), false);
+});
+
+test('fileClient resolves ASTERHAND_WORKSPACE_TOKEN placeholder and rejects empty env token', async () => {
+  const originalFetch = globalThis.fetch;
+  const hadEnv = Object.hasOwn(process.env, 'ASTERHAND_WORKSPACE_TOKEN');
+  const prevToken = process.env.ASTERHAND_WORKSPACE_TOKEN;
+  try {
+    delete process.env.ASTERHAND_WORKSPACE_TOKEN;
+    assert.throws(
+      () => fileClient({workspace: 'F:/synthetic-workspace', endpoint: 'http://127.0.0.1:19876/', token: '${ASTERHAND_WORKSPACE_TOKEN}', policy: 'rev-1'}),
+      /Invalid private workspace service/,
+    );
+    process.env.ASTERHAND_WORKSPACE_TOKEN = 'env-resolved-token';
+    globalThis.fetch = async (_url, req) => {
+      assert.equal(req.headers.Authorization, 'Bearer env-resolved-token');
+      return {ok: true, json: async () => ({value: {ok: true}})};
+    };
+    const client = fileClient({workspace: 'F:/synthetic-workspace', endpoint: 'http://127.0.0.1:19876/', token: '${ASTERHAND_WORKSPACE_TOKEN}', policy: 'rev-1'});
+    assert.deepEqual(await client.request('status', {}), {ok: true});
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (hadEnv) process.env.ASTERHAND_WORKSPACE_TOKEN = prevToken;
+    else delete process.env.ASTERHAND_WORKSPACE_TOKEN;
+  }
+});
+
+test('callScope validates exec_command and process_control arguments', () => {
+  const relative = p => p;
+  assert.throws(() => callScope('exec_command', {command: '   '}, relative), {code: 'invalid_command'});
+  assert.deepEqual(callScope('exec_command', {command: 'echo hi'}, relative), {path: '', targets: [], new_bytes: 0, progress: []});
+  assert.throws(() => callScope('process_control', {action: 'restart'}, relative), {code: 'invalid_action'});
+  assert.throws(() => callScope('process_control', {action: 'poll'}, relative), {code: 'invalid_session'});
+  assert.deepEqual(callScope('process_control', {action: 'list'}, relative), {path: '', targets: [], new_bytes: 0, progress: []});
+  assert.deepEqual(callScope('process_control', {action: 'poll', session_id: 's1'}, relative), {path: '', targets: [], new_bytes: 0, progress: []});
+});
+
+test('exec_command sends best-effort exec/kill without aborted signal when cancelled', async () => {
+  const calls = [];
+  let releaseStart;
+  const client = {
+    workspace: 'F:/synthetic-workspace',
+    relative: p => p.replaceAll('\\', '/'),
+    createBridge: () => ({}),
+    request: async (action, payload, _timeoutMs, signal) => {
+      calls.push({action, payload, signalAborted: signal?.aborted, hasSignal: Boolean(signal)});
+      if (action === 'register') return {id: payload.id};
+      if (action === 'seal') return {sealed: true};
+      if (action === 'acquire') return {granted: true, operation: {id: payload.id, state: 'started'}};
+      if (action === 'exec/start') {
+        return await new Promise((_resolve, reject) => {
+          releaseStart = () => reject(Object.assign(new Error('Aborted'), {name: 'AbortError'}));
+          signal?.addEventListener('abort', releaseStart, {once: true});
+        });
+      }
+      if (action === 'cancel' || action === 'exec/kill') return {killed: true};
+      if (action === 'end') return {state: payload.state};
+      throw new Error(`unexpected ${action}`);
+    },
+  };
+  const coord = createBatchCoordinator(client);
+  const [execTool] = createExecTools(client, coord);
+  const ctx = {runId: 'run-abort', sessionKey: 'agent:main:asterhand:conv-abort', toolCallId: 'a1'};
+  await coord.beforeToolCall({toolName: 'exec_command', toolCallId: 'a1', params: {command: 'node slow.mjs'}}, ctx);
+
+  const ac = new AbortController();
+  const pending = execTool.execute('a1', {command: 'node slow.mjs'}, ac.signal);
+  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
+  ac.abort();
+
+  await assert.rejects(pending, err => err?.name === 'AbortError');
+  const cancelCall = calls.find(c => c.action === 'cancel');
+  const killCall = calls.find(c => c.action === 'exec/kill');
+  const endCall = calls.find(c => c.action === 'end');
+  assert.ok(cancelCall && !cancelCall.hasSignal);
+  assert.ok(killCall && !killCall.hasSignal && killCall.payload.detail === 'cancelled');
+  assert.equal(endCall?.payload?.state, 'cancelled');
 });

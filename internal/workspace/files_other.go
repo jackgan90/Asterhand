@@ -22,3 +22,5 @@ func (h *heldFile) observe() (string, bool, error)       { return "", false, fai
 func hold(string, string, bool, bool) (*heldFile, error) { return nil, fail("unsupported_platform") }
 func directory(string, string) (*heldFile, error)        { return nil, fail("unsupported_platform") }
 func platformSupported() bool                            { return false }
+func hasReparseAttribute(os.FileInfo) bool               { return false }
+func scanUnsafeWorkspaceLinks(string) (bool, error)      { return false, nil }

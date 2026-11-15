@@ -4,7 +4,7 @@ export const MAX_SUMMARY_UNITS = 96;
 export const MAX_SUMMARY_BYTES = 240;
 
 const encoder = new TextEncoder();
-const validKinds = new Set(['path', 'patch', 'query', 'none']);
+const validKinds = new Set(['path', 'patch', 'query', 'command', 'process', 'none']);
 
 export const toolDisplaySpecs = Object.freeze({
   read_file: Object.freeze({
@@ -51,6 +51,15 @@ export const toolDisplaySpecs = Object.freeze({
     rangeParams: Object.freeze(['from', 'lines']),
   }),
   progress_card: Object.freeze({kind: 'none'}),
+  exec_command: Object.freeze({
+    kind: 'command',
+    commandParam: 'command',
+  }),
+  process_control: Object.freeze({
+    kind: 'process',
+    actionParam: 'action',
+    sessionParam: 'sessionId',
+  }),
 });
 
 export const legacyToolAliases = Object.freeze({
@@ -99,6 +108,9 @@ export function validateToolDisplaySpec(tool) {
     display.queryParam,
     display.pathParam,
     display.scopeParam,
+    display.commandParam,
+    display.actionParam,
+    display.sessionParam,
   ].filter(name => typeof name === 'string' && name.length > 0);
   for (const paramName of schemaParams) {
     if (!Object.hasOwn(props, paramName)) {
@@ -295,6 +307,36 @@ function summarizeQuerySpec(spec, args, workspaceRoot) {
   return truncateText(parts.join(' · '), MAX_SUMMARY_UNITS, MAX_SUMMARY_BYTES);
 }
 
+export function redactCommandSummary(raw) {
+  if (typeof raw !== 'string') return '';
+  let text = raw.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  text = text.replace(/\bBearer\s+[^\s"';&|]+/gi, 'Bearer [REDACTED]');
+  text = text.replace(/([a-z0-9_.-]*(?:token|password|passwd|secret|api[_-]?key|apikey|access[_-]?key|auth)[a-z0-9_.-]*\s*[:=]\s*)(?!Bearer\s+\S)(?:"[^"]*"|'[^']*'|[^\s"';&|]+)/gi, '$1[REDACTED]');
+  text = text.replace(/((?:^|[\s"'(\[;|&])--?[a-z0-9_.-]*(?:token|password|passwd|secret|api[_-]?key|apikey|access[_-]?key|auth(?:orization)?)\s+)(?!Bearer\s+\S)(?:"[^"]*"|'[^']*'|[^\s"';&|]+)/gi, '$1[REDACTED]');
+  text = text.replace(/((?:^|[\s"'(\[;|&])(?:-u|--user)(?:=|\s+))(?:"([^":\r\n]+):[^"]*"|'([^':\r\n]+):[^']*'|([^\s"':;&|]+):[^\s"';&|]+)/gi, (_m, prefix, qUser, sUser, bUser) => {
+    const user = qUser ?? sUser ?? bUser ?? '';
+    return `${prefix}${user}:[REDACTED]`;
+  });
+  text = text.replace(/([a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:)[^@\s/]+@/gi, '$1[REDACTED]@');
+  return truncateText(text, MAX_SUMMARY_UNITS, MAX_SUMMARY_BYTES);
+}
+
+function summarizeCommandSpec(spec, args) {
+  return redactCommandSummary(args[spec.commandParam]);
+}
+
+function summarizeProcessSpec(spec, args) {
+  const actionRaw = typeof args[spec.actionParam] === 'string' ? args[spec.actionParam] : '';
+  const action = actionRaw.replace(/[\x00-\x1f\x7f]+/g, ' ').trim();
+  if (!action) return '';
+  const sessionRaw = typeof args[spec.sessionParam] === 'string'
+    ? args[spec.sessionParam]
+    : (typeof args.session_id === 'string' ? args.session_id : '');
+  const session = sessionRaw.replace(/[\x00-\x1f\x7f]+/g, ' ').trim();
+  return truncateText(session ? `${action} ${session}` : action, MAX_SUMMARY_UNITS, MAX_SUMMARY_BYTES);
+}
+
 export function summarizeToolCall(toolName, rawArgs, workspaceRoot = '') {
   const spec = resolveToolDisplaySpec(toolName);
   if (!spec || spec.kind === 'none') return '';
@@ -302,5 +344,7 @@ export function summarizeToolCall(toolName, rawArgs, workspaceRoot = '') {
   if (spec.kind === 'path') return summarizePathSpec(spec, args, workspaceRoot);
   if (spec.kind === 'patch') return summarizePatchSpec(spec, args, workspaceRoot);
   if (spec.kind === 'query') return summarizeQuerySpec(spec, args, workspaceRoot);
+  if (spec.kind === 'command') return summarizeCommandSpec(spec, args);
+  if (spec.kind === 'process') return summarizeProcessSpec(spec, args);
   return '';
 }

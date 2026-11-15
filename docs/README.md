@@ -2,6 +2,8 @@
 
 [本机持续会话工具能力计划](development/features/local-runtime-tools/plan.md)：首批本机文件、搜索、记忆、进度与文件恢复已交付并通过用户验收；采用[正式文件 I/O 桥接](development/features/local-runtime-tools/preflight.md)，未设置过工具权限时默认开启，可在“设置 → 助手”关闭。工程覆盖与专项验证边界见[验证说明](development/features/local-runtime-tools/validation.md)。先逐步完善本机能力，再评估远程聊天。
 
+[工作区脚本与命令执行计划（第一阶段）](development/features/workspace-script-execution/plan.md)：面向持续聊天开放受限工作区零审批脚本与命令执行（`exec_command` / `process_control`）、Asterhand 秘密与常见用户凭据保护、四级统一聊天“停止”响应及跨平台 `SandboxBackend` 边界（Windows 首期实施，macOS/Linux 对齐契约）；工程实现、[验证说明](development/features/workspace-script-execution/validation.md)、独立审计修复复审与本机真实模型用户验收已完成，架构取舍见 [ADR-AST-012](assistant/adr/012-workspace-script-execution-boundary.md)。
+
 [工作区工具细粒度并发计划](development/features/workspace-tool-concurrency/plan.md)：保留同工作区工具轮次串行，通过[公开插件 SDK 委托与离线预检](development/features/workspace-tool-concurrency/preflight.md)接管九项统一工具，按资源声明调度轮内并行、同批冲突检测与公平等待，具备逐次 I/O 授权校验、原子预算与排空收尾；工程实现、[组合及变异验证](development/features/workspace-tool-concurrency/validation.md)、独立审计修复复审与本机用户验收已完成。
 
 [聊天历史顺序与分页修复](development/features/chat-history-timeline/plan.md)：文字与工具调用按发生顺序显示，修复空助手气泡和静止会话翻页重置；工程验证及本机用户验收完成。

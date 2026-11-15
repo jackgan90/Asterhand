@@ -317,4 +317,35 @@ func registerMemoryAndProgressDescriptors(register func(ToolDescriptor)) {
 			return PreparedPlan{Tool: "progress_card", Semantic: SemanticTurnProgress, Claims: claims, Effects: map[Effect]bool{}}, err
 		},
 	})
+
+	execEff := []Effect{EffectRead, EffectWrite, EffectCreate, EffectRemove, EffectMkdir}
+	register(ToolDescriptor{
+		Name: "exec_command", Semantic: SemanticExec, Assistant: true, Modifying: true, Effects: execEff,
+		Prepare: func(in DescriptorInput) (PreparedPlan, error) {
+			if len(in.Targets) > 0 {
+				return PreparedPlan{}, fail("batch_limit")
+			}
+			root := defaultRootID(in.RootID)
+			claims, err := dedupClaims([]ResourceClaim{
+				{Domain: DomainFS, Root: root, Key: "", Coverage: CoverageSubtree, Access: AccessExclusive},
+				{Domain: DomainMemorySources, Root: root, Key: "sources", Coverage: CoverageExact, Access: AccessExclusive},
+			})
+			sum, _ := sanitizeSummary(in.Path)
+			return PreparedPlan{Tool: "exec_command", Semantic: SemanticExec, Claims: claims, Summary: sum, Modifying: true, Effects: effectSet(execEff...)}, err
+		},
+	})
+
+	register(ToolDescriptor{
+		Name: "process_control", Semantic: SemanticControl, Assistant: true,
+		Prepare: func(in DescriptorInput) (PreparedPlan, error) {
+			if len(in.Targets) > 0 {
+				return PreparedPlan{}, fail("batch_limit")
+			}
+			claims, err := dedupClaims([]ResourceClaim{
+				{Domain: DomainExec, Root: defaultRootID(in.RootID), Key: "control", Coverage: CoverageExact, Access: AccessShared},
+			})
+			sum, _ := sanitizeSummary(in.Path)
+			return PreparedPlan{Tool: "process_control", Semantic: SemanticControl, Claims: claims, Summary: sum, Effects: map[Effect]bool{}}, err
+		},
+	})
 }

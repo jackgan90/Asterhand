@@ -33,10 +33,11 @@ func (r *ConversationRuntime) Workspace() (*workspace.Service, error) {
 	if r.workspace == nil {
 		root := filepath.Join(r.config.Home, "conversations", "runtime-"+chatBindingID())
 		var err error
-		r.workspace, err = workspace.Open(filepath.Join(root, "workspace"), filepath.Join(root, "file-versions"), model.Digest([]byte(c.NodeID + ":" + chatBindingID()))[:32])
+		r.workspace, err = workspace.Open(filepath.Join(root, "workspace"), filepath.Join(root, "file-versions"), model.Digest([]byte(c.NodeID+":"+chatBindingID()))[:32])
 		if err != nil {
 			return nil, err
 		}
+		r.workspace.SetHomeRoot(r.config.Home)
 	}
 	state := r.workspace.Status()
 	if state.Authorized != c.LocalTools.Enabled || state.Policy != c.LocalTools.Revision {
@@ -54,6 +55,10 @@ func (r *ConversationRuntime) startWithWorkspace(ctx context.Context, c config.C
 	files, err := r.Workspace()
 	if err != nil {
 		return nil, err
+	}
+	files.SetHomeRoot(r.config.Home)
+	if options.NodePath != "" {
+		files.SetBundledNodeDir(filepath.Dir(options.NodePath))
 	}
 	if !files.Status().Supported {
 		return nil, workspaceUnavailable()
@@ -184,7 +189,7 @@ func configureWorkspace(value map[string]any, c config.Config, root string, acce
 		entry["config"].(map[string]any)["toolsAllow"] = tools
 	}
 	entries[workspacePlugin] = map[string]any{"enabled": true, "hooks": map[string]any{"allowConversationAccess": true, "allowPromptInjection": true},
-		"config": map[string]any{"workspace": workspaceRoot, "endpoint": access.URL, "token": access.Token, "policy": c.LocalTools.Revision}}
+		"config": map[string]any{"workspace": workspaceRoot, "endpoint": access.URL, "token": "${ASTERHAND_WORKSPACE_TOKEN}", "policy": c.LocalTools.Revision}}
 	entries["memory-core"] = map[string]any{"enabled": true, "config": map[string]any{"dreaming": map[string]any{"enabled": false}}}
 	value["memory"] = map[string]any{"search": map[string]any{"provider": "none", "sources": []string{"memory"},
 		"rememberAcrossConversations": false, "extraPaths": []string{}, "experimental": map[string]any{"sessionMemory": false},

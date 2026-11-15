@@ -13,12 +13,15 @@
     "internal/launch",
     "internal/llm",
     "internal/localcommands",
+    "internal/platform/sandbox",
+    "internal/platform/textcodec",
     "internal/platform/userprocess",
     "internal/network",
     "internal/peer",
     "internal/quickinput",
     "internal/store",
-    "internal/tasks"
+    "internal/tasks",
+    "internal/workspace"
   ],
   "js_checked_dirs": [
     "web",

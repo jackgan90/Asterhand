@@ -154,11 +154,43 @@ test('tool display specs summarize registered tools and legacy aliases while red
   assert.equal(summarizeToolCall('progress_card', {markdown: 'SECRET_MD', plan: [{step: 'x', status: 'pending'}]}, root), '');
   assert.equal(summarizeToolCall('read_file', {path: 'C:\\Users\\Other\\secret\\token.txt'}, root), 'token.txt');
   assert.equal(summarizeToolCall('read_file', {path: '../outside/secret.env'}, root), 'secret.env');
+  const authSummary = summarizeToolCall('exec_command', {command: 'curl -H "Authorization: Bearer TOPSECRET" https://a.test'}, root);
+  assert.equal(authSummary.includes('Bearer [REDACTED]'), true);
+  assert.equal(authSummary.includes('TOPSECRET'), false);
+  const envFlagSummary = summarizeToolCall('exec_command', {command: 'app --token=tok123 --api-key="k1" OPENAI_API_KEY=sk-live'}, root);
+  assert.equal(envFlagSummary.includes('--token=[REDACTED]'), true);
+  assert.equal(envFlagSummary.includes('--api-key=[REDACTED]'), true);
+  assert.equal(envFlagSummary.includes('OPENAI_API_KEY=[REDACTED]'), true);
+  for (const leaked of ['tok123', 'k1', 'sk-live']) {
+    assert.equal(envFlagSummary.includes(leaked), false);
+  }
+  const urlSummary = summarizeToolCall('exec_command', {command: 'git clone https://user:pw123@example.com/repo.git'}, root);
+  assert.equal(urlSummary.includes('https://user:[REDACTED]@example.com/repo.git'), true);
+  assert.equal(urlSummary.includes('pw123'), false);
+  const spaceFlagsSummary = summarizeToolCall('exec_command', {command: 'app --token tok123 --api-key sk-live -u alice:pw99 https://a.test'}, root);
+  assert.equal(spaceFlagsSummary.includes('--token [REDACTED]'), true);
+  assert.equal(spaceFlagsSummary.includes('--api-key [REDACTED]'), true);
+  assert.equal(spaceFlagsSummary.includes('-u alice:[REDACTED]'), true);
+  for (const leaked of ['tok123', 'sk-live', 'pw99']) {
+    assert.equal(spaceFlagsSummary.includes(leaked), false);
+  }
+  const quotedSubcmdSummary = summarizeToolCall('exec_command', {command: 'powershell -c "--token tok123 -u alice:secret99"'}, root);
+  assert.equal(quotedSubcmdSummary.includes('--token [REDACTED]'), true);
+  assert.equal(quotedSubcmdSummary.includes('-u alice:[REDACTED]'), true);
+  assert.equal(quotedSubcmdSummary.includes('tok123'), false);
+  assert.equal(quotedSubcmdSummary.includes('secret99'), false);
+  assert.equal(summarizeToolCall('process_control', {action: 'poll', sessionId: 'sess-1'}, root), 'poll sess-1');
+  assert.equal(summarizeToolCall('process_control', {action: 'list'}, root), 'list');
+  assert.equal(summarizeToolCall('process_control', {action: 'kill', session_id: 'sess-2'}, root), 'kill sess-2');
   const longPath = `${'nested/'.repeat(20)}target-file.md`;
   const clamped = summarizeToolCall('read_file', {path: longPath, offset: 5, limit: 10}, root);
   assert.ok(clamped.includes('…/target-file.md:5-14'));
   assert.ok(clamped.length <= 96);
   assert.equal(validateToolDisplaySpec({name: 'bad', display: {kind: 'path', pathParams: ['nope']}, parameters: {properties: {path: {}}}}).ok, false);
+  assert.equal(validateToolDisplaySpec({name: 'exec_command', display: {kind: 'command', commandParam: 'command'}, parameters: {properties: {command: {}}}}).ok, true);
+  assert.equal(validateToolDisplaySpec({name: 'exec_command', display: {kind: 'command', commandParam: 'missing'}, parameters: {properties: {command: {}}}}).ok, false);
+  assert.equal(validateToolDisplaySpec({name: 'process_control', display: {kind: 'process', actionParam: 'action', sessionParam: 'sessionId'}, parameters: {properties: {action: {}, sessionId: {}}}}).ok, true);
+  assert.equal(validateToolDisplaySpec({name: 'process_control', display: {kind: 'process', actionParam: 'action', sessionParam: 'sessionId'}, parameters: {properties: {action: {}}}}).ok, false);
 });
 
 test('historyPage projects tool summaries and drops summary metadata before failing page budget', () => {

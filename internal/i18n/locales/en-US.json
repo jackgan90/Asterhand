@@ -584,6 +584,8 @@
   "err.tasks.approval_local_only": "Approvals must be handled locally on the executing node",
   "err.tasks.answer_already_answered": "Question has already been answered",
   "err.tasks.attempt_state_changed": "Active attempt state has changed",
+  "err.textcodec.invalid_cursor": "Invalid log read cursor",
+  "err.textcodec.invalid_encoding": "Unsupported text encoding",
   "err.executor.missing_credential": "Configure the credential for the selected model in local Settings",
   "err.executor.openclaw_missing": "OpenClaw runtime environment is not installed; run repair",
   "err.executor.openclaw_invalid_output": "OpenClaw did not return a valid result: {err}; {detail}",

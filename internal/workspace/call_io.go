@@ -274,12 +274,18 @@ func (s *Service) CancelCall(id, reason string) error {
 		s.records[id] = publicOperation(c.op)
 	}
 	s.mu.Unlock()
+	if s.exec != nil {
+		s.exec.CancelForegroundCall(id, reason)
+	}
 	return nil
 }
 
 func (s *Service) CancelTurn(turn string) {
 	if turn == "" {
 		return
+	}
+	if s.exec != nil {
+		s.exec.InitiateTurnStop(turn, "cancelled")
 	}
 	s.sched.mu.Lock()
 	var ids []string
@@ -324,6 +330,9 @@ func (s *Service) End(id, state, detail string) (Operation, error) {
 	s.fireEndHook(id, "after_drain")
 
 	observeAndFinalizeCall(c, violation, state, detail)
+	if e.plan.Modifying && e.tool != "exec_command" {
+		s.refreshOverQuotaIfNeeded()
+	}
 
 	s.mu.Lock()
 	s.sequence++
@@ -457,6 +466,10 @@ func (s *Service) closeOtherModifyingAdmissionsLocked(exceptID string) {
 
 // RuntimeStopped is called only after the owned process tree has exited.
 func (s *Service) RuntimeStopped() error {
+	var execStopErr error
+	if s.exec != nil {
+		execStopErr = s.exec.StopAll(3 * time.Second)
+	}
 	s.sched.mu.Lock()
 	var ungranted []string
 	for id, e := range s.sched.entries {
@@ -496,16 +509,21 @@ func (s *Service) RuntimeStopped() error {
 	s.mu.Unlock()
 
 	var firstErr error
+	if execStopErr != nil {
+		firstErr = execStopErr
+	}
 	for _, id := range activeIDs {
 		if _, err := s.End(id, "unknown", "runtime_stopped"); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
+	s.markInterruptedExecUnknown()
 	s.mu.Lock()
 	s.sched.mu.Lock()
 	s.sched.entries = map[string]*schedEntry{}
 	s.sched.batches = map[string]*schedBatch{}
 	s.sched.activeCalls, s.sched.modifyCalls, s.sched.indexCalls = 0, 0, 0
+	s.sched.activeExec.Store(0)
 	s.sched.broadcastLocked()
 	s.sched.mu.Unlock()
 	s.turn = ""
@@ -514,6 +532,40 @@ func (s *Service) RuntimeStopped() error {
 	s.reservedVersionBytes = 0
 	s.mu.Unlock()
 	return firstErr
+}
+
+func (s *Service) markInterruptedExecUnknown() {
+	s.mu.Lock()
+	var pending []Operation
+	for _, op := range s.records {
+		if op.State == "unknown" {
+			s.blocked = true
+			continue
+		}
+		if op.State == "started" {
+			op.State = "unknown"
+			op.Phase = PhaseTerminal
+			op.WaitReason = ""
+			op.Detail = "runtime_stopped"
+			op.Finished = time.Now().UTC()
+			s.sequence++
+			op.Sequence = s.sequence
+			pending = append(pending, op)
+			s.blocked = true
+		}
+	}
+	s.mu.Unlock()
+	for _, op := range pending {
+		raw, err := s.persist(op)
+		s.mu.Lock()
+		if err == nil {
+			s.journalSizes[op.ID] = int64(len(raw))
+		}
+		s.records[op.ID] = publicOperation(op)
+		s.unpinJournalLocked(op.ID)
+		s.blocked = true
+		s.mu.Unlock()
+	}
 }
 
 func (s *Service) simulateAbruptCrashForTest() {

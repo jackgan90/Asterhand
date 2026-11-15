@@ -29,33 +29,42 @@ type Transport struct {
 }
 
 type bridgeRequest struct {
-	Action           string     `json:"action"`
-	ID               string     `json:"id"`
-	Batch            string     `json:"batch"`
-	Order            int        `json:"order"`
-	Run              string     `json:"run"`
-	Conversation     string     `json:"conversation"`
-	Tool             string     `json:"tool"`
-	Targets          []Target   `json:"targets"`
-	NewBytes         int64      `json:"new_bytes"`
-	InputFingerprint string     `json:"input_fingerprint"`
-	Fingerprint      string     `json:"fingerprint"`
-	Summary          string     `json:"summary,omitempty"`
-	Items            []SealItem `json:"items"`
-	Path             string     `json:"path"`
-	Data             []byte     `json:"data"`
-	State            string     `json:"state"`
-	Detail           string     `json:"detail"`
-	Query            string     `json:"query"`
-	Cursor           string     `json:"cursor"`
-	Content          bool       `json:"content"`
-	Progress         []Step     `json:"progress"`
-	WaitMs           int        `json:"wait_ms"`
-	Bootstrap        bool       `json:"bootstrap"`
+	Action           string            `json:"action"`
+	ID               string            `json:"id"`
+	Batch            string            `json:"batch"`
+	Order            int               `json:"order"`
+	Run              string            `json:"run"`
+	Conversation     string            `json:"conversation"`
+	Tool             string            `json:"tool"`
+	Targets          []Target          `json:"targets"`
+	NewBytes         int64             `json:"new_bytes"`
+	InputFingerprint string            `json:"input_fingerprint"`
+	Fingerprint      string            `json:"fingerprint"`
+	Summary          string            `json:"summary,omitempty"`
+	Items            []SealItem        `json:"items"`
+	Path             string            `json:"path"`
+	Data             []byte            `json:"data"`
+	State            string            `json:"state"`
+	Detail           string            `json:"detail"`
+	Query            string            `json:"query"`
+	Cursor           string            `json:"cursor"`
+	Content          bool              `json:"content"`
+	Progress         []Step            `json:"progress"`
+	WaitMs           *int              `json:"wait_ms"`
+	Bootstrap        bool              `json:"bootstrap"`
+	Command          string            `json:"command"`
+	Workdir          string            `json:"workdir"`
+	Env              map[string]string `json:"env"`
+	YieldMs          *int              `json:"yield_ms"`
+	TimeoutSec       int               `json:"timeout_sec"`
+	SessionID        string            `json:"session_id"`
+	Subaction        string            `json:"subaction"`
+	Offset           *int64            `json:"offset"`
+	Limit            int               `json:"limit"`
 }
 
 func Serve(service *Service) (*Transport, error) {
-	return ServeWithSlots(service, 12, 16, 8)
+	return ServeWithSlots(service, 12, 24, 12)
 }
 
 func ServeWithSlots(service *Service, ioCap, waitCap, controlCap int) (*Transport, error) {
@@ -72,7 +81,7 @@ func ServeWithSlots(service *Service, ioCap, waitCap, controlCap int) (*Transpor
 		waitSlots:    make(chan struct{}, waitCap),
 		controlSlots: make(chan struct{}, controlCap),
 	}
-	t.server = &http.Server{Handler: t, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 15 * time.Second, MaxHeaderBytes: 4096}
+	t.server = &http.Server{Handler: t, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 45 * time.Second, IdleTimeout: 15 * time.Second, MaxHeaderBytes: 4096}
 	go func() { _ = t.server.Serve(listener) }()
 	return t, nil
 }
@@ -80,7 +89,7 @@ func ServeWithSlots(service *Service, ioCap, waitCap, controlCap int) (*Transpor
 func (t *Transport) Close() error { return t.server.Close() }
 
 func isControlAction(action string) bool {
-	return action == "register" || action == "seal" || action == "cancel" || action == "end"
+	return action == "register" || action == "seal" || action == "cancel" || action == "end" || action == "exec/kill"
 }
 
 func (t *Transport) acquirePool(action string) (func(), bool) {
@@ -88,7 +97,7 @@ func (t *Transport) acquirePool(action string) (func(), bool) {
 	switch {
 	case isControlAction(action):
 		pool = t.controlSlots
-	case action == "acquire":
+	case action == "acquire" || action == "exec/start" || action == "exec/poll":
 		pool = t.waitSlots
 	default:
 		pool = t.ioSlots
@@ -181,7 +190,11 @@ func (t *Transport) call(ctx context.Context, req bridgeRequest) (any, error) {
 		if _, err := t.verifyTurn(req); err != nil {
 			return nil, err
 		}
-		return s.acquireBoundedPoll(ctx, req.ID, req.Fingerprint, req.WaitMs)
+		waitMs := 0
+		if req.WaitMs != nil {
+			waitMs = *req.WaitMs
+		}
+		return s.acquireBoundedPoll(ctx, req.ID, req.Fingerprint, waitMs)
 	case "begin":
 		scope, err := t.verifyTurn(req)
 		if err != nil {
@@ -220,7 +233,7 @@ func (t *Transport) call(ctx context.Context, req bridgeRequest) (any, error) {
 		if req.ID == "" {
 			return nil, fail("invalid_call")
 		}
-		return s.SearchWithCall(req.ID, req.Path, req.Query, req.Cursor, req.Content, true)
+		return s.SearchWithCallContext(ctx, req.ID, req.Path, req.Query, req.Cursor, req.Content, true)
 	case "write":
 		return s.Write(req.ID, req.Path, req.Data, false)
 	case "create":
@@ -229,9 +242,32 @@ func (t *Transport) call(ctx context.Context, req bridgeRequest) (any, error) {
 		return nil, s.Remove(req.ID, req.Path)
 	case "mkdir":
 		return nil, s.Mkdir(req.ID, req.Path)
+	case "exec/start":
+		return s.StartExec(ctx, ExecStartRequest{
+			CallID: req.ID, Command: req.Command, Workdir: req.Workdir, Env: req.Env, YieldMs: req.YieldMs, TimeoutSec: req.TimeoutSec,
+		})
+	case "exec/poll":
+		return s.PollExec(ctx, ExecPollRequest{
+			CallID: req.ID, SessionID: req.SessionID, Offset: req.Offset, Limit: req.Limit, WaitMs: req.WaitMs,
+		})
+	case "exec/control":
+		return s.ControlExec(ExecControlRequest{
+			CallID: req.ID, Action: req.Subaction, SessionID: req.SessionID, Offset: max(int64(0), derefInt64(req.Offset)), Limit: req.Limit,
+		})
+	case "exec/kill":
+		return s.KillExec(ExecKillRequest{
+			CallID: req.ID, SessionID: req.SessionID, Reason: req.Detail,
+		})
 	default:
 		return nil, fail("unsupported")
 	}
+}
+
+func derefInt64(p *int64) int64 {
+	if p == nil {
+		return 0
+	}
+	return *p
 }
 
 func (s *Service) checkImmediatePollLocked(id, fingerprint string) (map[string]any, error) {

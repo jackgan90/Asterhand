@@ -10,6 +10,8 @@ export const allowedTools = Object.freeze([
   'memory_search',
   'memory_get',
   'progress_card',
+  'exec_command',
+  'process_control',
 ]);
 
 export function coded(code, message) {
@@ -47,15 +49,24 @@ export function createTracker() {
 export function fileClient(config) {
   const workspace = path.resolve(config.workspace);
   const endpoint = new URL(config.endpoint);
-  if (endpoint.protocol !== 'http:' || endpoint.hostname !== '127.0.0.1' || !config.token || !config.policy) {
+  const rawToken = typeof config.token === 'string' ? config.token.trim() : '';
+  const tokenEnvMatch = rawToken.match(/^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/);
+  const token = tokenEnvMatch
+    ? String(process.env[tokenEnvMatch[1]] ?? '').trim()
+    : rawToken && !rawToken.startsWith('${')
+      ? rawToken
+      : String(process.env.ASTERHAND_WORKSPACE_TOKEN ?? '').trim();
+  if (endpoint.protocol !== 'http:' || endpoint.hostname !== '127.0.0.1' || !token || !config.policy) {
     throw new Error('Invalid private workspace service');
   }
-  const request = async (action, payload = {}, timeoutMs = 12000) => {
+  const request = async (action, payload = {}, timeoutMs = 12000, signal = undefined) => {
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const fetchSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
     const response = await fetch(endpoint, {
       method: 'POST',
-      headers: {'Content-Type': 'application/json', Authorization: `Bearer ${config.token}`},
+      headers: {'Content-Type': 'application/json', Authorization: `Bearer ${token}`},
       body: JSON.stringify({action, ...payload}),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: fetchSignal,
     });
     if (!response.ok) throw coded('service_unavailable', 'Workspace service unavailable');
     const result = await response.json();
@@ -167,6 +178,23 @@ export function callScope(tool, params, relative) {
       ? raw.plan.map(item => ({step: String(item?.step ?? ''), status: String(item?.status ?? '')}))
       : [];
     return {path: '', targets: [], new_bytes: 0, progress};
+  }
+  if (tool === 'exec_command') {
+    const command = typeof raw.command === 'string' ? raw.command.trim() : '';
+    if (!command) throw coded('invalid_command', 'Command is required');
+    return {path: '', targets: [], new_bytes: 0, progress: []};
+  }
+  if (tool === 'process_control') {
+    const action = typeof raw.action === 'string' ? raw.action.trim() : '';
+    if (!['poll', 'status', 'log', 'list', 'kill'].includes(action)) {
+      throw coded('invalid_action', `Unsupported process action: ${action}`);
+    }
+    const rawSessionId = raw.sessionId ?? raw.session_id;
+    const sessionId = typeof rawSessionId === 'string' ? rawSessionId.trim() : '';
+    if (action !== 'list' && !sessionId) {
+      throw coded('invalid_session', 'Session ID is required');
+    }
+    return {path: '', targets: [], new_bytes: 0, progress: []};
   }
   const targets = [];
   let newBytes = 0;

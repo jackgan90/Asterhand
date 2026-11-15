@@ -34,7 +34,7 @@ func testTurnService(t *testing.T, seed ...Mutation) (*Service, Scope) {
 func TestDescriptorRegistryAndValidation(t *testing.T) {
 	want := []string{
 		"read_file", "write_file", "edit_file", "apply_file_patch", "list_dir",
-		"search_files", "memory_search", "memory_get", "progress_card",
+		"search_files", "memory_search", "memory_get", "progress_card", "exec_command", "process_control",
 	}
 	got := AssistantToolNames()
 	if !reflect.DeepEqual(got, want) {
@@ -175,6 +175,10 @@ func makePairInput(root, tool, variant string) DescriptorInput {
 		return DescriptorInput{WorkspaceRoot: root, Path: "memory/notes.md"}
 	case "progress_card":
 		return DescriptorInput{WorkspaceRoot: root}
+	case "exec_command":
+		return DescriptorInput{WorkspaceRoot: root, Path: "echo hi"}
+	case "process_control":
+		return DescriptorInput{WorkspaceRoot: root, Path: "poll"}
 	default:
 		panic(tool)
 	}
@@ -203,8 +207,11 @@ func TestOrderedToolPairMatrix(t *testing.T) {
 		return name == "write_file" || name == "edit_file" || name == "apply_file_patch"
 	}
 
-	// 1. Disjoint scopes: every pair should be non-conflicting EXCEPT memory_search vs memory_search (index X)
-	// and memory_get vs memory_get (both read memory/notes.md S -> non-conflicting!).
+	// 1. Disjoint scopes: every pair should be non-conflicting EXCEPT memory_search vs memory_search (index X),
+	// progress_card vs progress_card, and foreground exec_command (FS subtree X + memory_sources X vs FS/memory tools).
+	fsOrMem := func(name string) bool {
+		return name != "progress_card" && name != "process_control"
+	}
 	for _, tA := range tools {
 		for _, tB := range tools {
 			inA := makePairInput(root, tA, "same")
@@ -218,7 +225,10 @@ func TestOrderedToolPairMatrix(t *testing.T) {
 				t.Fatalf("%s: %v", tB, err)
 			}
 			got := plansConflict(pA, pB)
-			want := (tA == "memory_search" && tB == "memory_search") || (tA == "progress_card" && tB == "progress_card")
+			want := (tA == "memory_search" && tB == "memory_search") ||
+				(tA == "progress_card" && tB == "progress_card") ||
+				(tA == "exec_command" && fsOrMem(tB)) ||
+				(tB == "exec_command" && fsOrMem(tA))
 			if got != want {
 				t.Fatalf("disjoint (%s, %s): conflict=%v, want %v (claimsA=%+v claimsB=%+v)", tA, tB, got, want, pA.Claims, pB.Claims)
 			}
@@ -227,7 +237,7 @@ func TestOrderedToolPairMatrix(t *testing.T) {
 
 	// 2. Same scope ("dir/a.txt" / "dir"): writers on dir/a.txt conflict with read_file(dir/a.txt), writers(dir/a.txt), list_dir(dir), search_files(dir).
 	fsScoped := func(name string) bool {
-		return name != "memory_search" && name != "memory_get" && name != "progress_card"
+		return name != "memory_search" && name != "memory_get" && name != "progress_card" && name != "process_control"
 	}
 	for _, tA := range tools {
 		for _, tB := range tools {
@@ -242,6 +252,8 @@ func TestOrderedToolPairMatrix(t *testing.T) {
 			got := plansConflict(pA, pB)
 			want := (tA == "memory_search" && tB == "memory_search") ||
 				(tA == "progress_card" && tB == "progress_card") ||
+				(tA == "exec_command" && fsOrMem(tB)) ||
+				(tB == "exec_command" && fsOrMem(tA)) ||
 				(fsScoped(tA) && fsScoped(tB) && (isWriter(tA) || isWriter(tB)))
 			if got != want {
 				t.Fatalf("same-scope (%s, %s): conflict=%v, want %v", tA, tB, got, want)

@@ -283,7 +283,7 @@ func (s *Service) directoryEntries(name string, limit int) ([]Entry, error) {
 	}
 	entries := make([]Entry, 0, len(items))
 	for _, item := range items {
-		if item.Type()&os.ModeSymlink != 0 {
+		if item.Type()&(os.ModeSymlink|os.ModeIrregular) != 0 {
 			continue
 		}
 		child := path.Join(name, item.Name())
@@ -293,6 +293,9 @@ func (s *Service) directoryEntries(name string, limit int) ([]Entry, error) {
 		info, err := item.Info()
 		if err != nil {
 			return nil, err
+		}
+		if hasReparseAttribute(info) {
+			continue
 		}
 		entries = append(entries, *entry(child, info))
 	}
@@ -322,12 +325,21 @@ func (s *Service) SearchContext(ctx context.Context, base, query, cursor string,
 	}
 	defer release()
 	s.fireIOHook("", tool, EffectSearch, rel)
-	return s.searchInternal(rel, query, cursor, content, recursive)
+	return s.searchInternal(rel, query, cursor, content, recursive, func() error {
+		if ctx != nil && ctx.Err() != nil {
+			return fail("cancelled")
+		}
+		return nil
+	})
 }
 
 func (s *Service) SearchWithCall(id, base, query, cursor string, content, recursive bool) (Page, error) {
+	return s.SearchWithCallContext(context.Background(), id, base, query, cursor, content, recursive)
+}
+
+func (s *Service) SearchWithCallContext(ctx context.Context, id, base, query, cursor string, content, recursive bool) (Page, error) {
 	if id == "" {
-		return s.SearchContext(context.Background(), base, query, cursor, content, recursive)
+		return s.SearchContext(ctx, base, query, cursor, content, recursive)
 	}
 	rel, err := relative(base, true)
 	if err != nil {
@@ -342,10 +354,44 @@ func (s *Service) SearchWithCall(id, base, query, cursor string, content, recurs
 	}
 	defer s.leaveCallIO(e, EffectSearch, DefaultRoot, rel)
 	s.fireIOHook(c.op.ID, c.op.Tool, EffectSearch, rel)
-	return s.searchInternal(rel, query, cursor, content, recursive)
+	return s.searchInternal(rel, query, cursor, content, recursive, func() error {
+		if ctx != nil && ctx.Err() != nil {
+			return fail("cancelled")
+		}
+		if e != nil && e.isAdmissionClosed(s.sched) {
+			return fail("cancelled")
+		}
+		return nil
+	})
 }
 
-func (s *Service) searchInternal(base, query, cursor string, content, recursive bool) (Page, error) {
+func matchFileContent(root string, item *Entry, needle string, checkCancelled func() error) (bool, int64, error) {
+	if item.Type != "file" || item.Size > MaxFileBytes {
+		return false, 0, nil
+	}
+	if checkCancelled != nil {
+		if err := checkCancelled(); err != nil {
+			return false, 0, err
+		}
+	}
+	h, readErr := hold(root, item.Path, false, false)
+	if readErr != nil {
+		return false, 0, nil
+	}
+	defer h.close()
+	if h.file == nil {
+		return false, 0, nil
+	}
+	data, dataErr := h.bytes(MaxFileBytes)
+	if dataErr != nil {
+		return false, int64(len(data)), nil
+	}
+	matched := strings.Contains(strings.ToLower(string(data)), needle)
+	item.Revision = revision(data)
+	return matched, int64(len(data)), nil
+}
+
+func (s *Service) searchInternal(base, query, cursor string, content, recursive bool, checkCancelled func() error) (Page, error) {
 	var checkpoint struct {
 		Base, Query, After string
 		Content, Recursive bool
@@ -369,6 +415,11 @@ func (s *Service) searchInternal(base, query, cursor string, content, recursive 
 	}
 	var visit func(string) error
 	visit = func(dir string) error {
+		if checkCancelled != nil {
+			if err := checkCancelled(); err != nil {
+				return err
+			}
+		}
 		entries, err := s.directoryEntries(dir, MaxWorkspaceFiles+1)
 		if err != nil {
 			if dir != base && os.IsNotExist(err) {
@@ -378,6 +429,11 @@ func (s *Service) searchInternal(base, query, cursor string, content, recursive 
 		}
 		sort.Slice(entries, func(i, j int) bool { return scanKey(entries[i]) < scanKey(entries[j]) })
 		for _, item := range entries {
+			if checkCancelled != nil {
+				if err := checkCancelled(); err != nil {
+					return err
+				}
+			}
 			key := scanKey(item)
 			if key > checkpoint.After {
 				if scanned >= MaxWorkspaceFiles || scannedBytes >= 64<<20 || time.Now().After(deadline) {
@@ -387,20 +443,12 @@ func (s *Service) searchInternal(base, query, cursor string, content, recursive 
 				scanned++
 				match := strings.Contains(strings.ToLower(item.Path), needle)
 				if content {
-					match = false
-					if item.Type == "file" && item.Size <= MaxFileBytes {
-						h, readErr := hold(s.root, item.Path, false, false)
-						if readErr == nil {
-							if h.file != nil {
-								data, dataErr := h.bytes(MaxFileBytes)
-								scannedBytes += int64(len(data))
-								if dataErr == nil {
-									match = strings.Contains(strings.ToLower(string(data)), needle)
-									item.Revision = revision(data)
-								}
-							}
-							h.close()
-						}
+					var readBytes int64
+					var matchErr error
+					match, readBytes, matchErr = matchFileContent(s.root, &item, needle, checkCancelled)
+					scannedBytes += readBytes
+					if matchErr != nil {
+						return matchErr
 					}
 				}
 				if match {

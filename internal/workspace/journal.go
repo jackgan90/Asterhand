@@ -110,6 +110,10 @@ func (s *Service) measureWorkspaceDisk(needBytes int64, needFiles int) (int64, i
 
 func (s *Service) reserveForCall(c *call, newBytes int64, newFiles int, snapshotBytes int64) error {
 	s.mu.Lock()
+	if s.overQuota && (newBytes > 0 || newFiles > 0) {
+		s.mu.Unlock()
+		return fail("workspace_limit")
+	}
 	nonAtomic := s.sched.faults != nil && s.sched.faults.nonAtomicQuotaCheck
 	s.mu.Unlock()
 
@@ -121,6 +125,11 @@ func (s *Service) reserveForCall(c *call, newBytes int64, newFiles int, snapshot
 
 			diskBytes, diskFiles, err := s.measureWorkspaceDisk(newBytes, newFiles)
 			if err != nil {
+				if Code(err) == "workspace_limit" {
+					s.mu.Lock()
+					s.overQuota = true
+					s.mu.Unlock()
+				}
 				return err
 			}
 
@@ -135,6 +144,7 @@ func (s *Service) reserveForCall(c *call, newBytes int64, newFiles int, snapshot
 				otherBytes, otherFiles = s.totalUnsettledLocked(c)
 			}
 			if diskFiles+otherFiles+newFiles > MaxWorkspaceFiles || diskBytes+otherBytes+newBytes > MaxWorkspaceBytes {
+				s.overQuota = true
 				s.mu.Unlock()
 				return fail("workspace_limit")
 			}
@@ -166,6 +176,12 @@ func (s *Service) checkDynamicWriteQuota(c *call, growth int64, newFiles int) er
 	if growth == 0 && newFiles == 0 {
 		return nil
 	}
+	s.mu.Lock()
+	over := s.overQuota
+	s.mu.Unlock()
+	if over {
+		return fail("workspace_limit")
+	}
 	extraBytes := max(0, growth-c.unsettledBytes)
 	extraFiles := max(0, newFiles-c.unsettledFiles)
 	if extraBytes == 0 && extraFiles == 0 {
@@ -179,6 +195,11 @@ func (s *Service) checkDynamicWriteQuota(c *call, growth int64, newFiles int) er
 
 		diskBytes, diskFiles, err := s.measureWorkspaceDisk(extraBytes, extraFiles)
 		if err != nil {
+			if Code(err) == "workspace_limit" {
+				s.mu.Lock()
+				s.overQuota = true
+				s.mu.Unlock()
+			}
 			return err
 		}
 		s.mu.Lock()
@@ -193,6 +214,7 @@ func (s *Service) checkDynamicWriteQuota(c *call, growth int64, newFiles int) er
 		needB := max(c.unsettledBytes, growth)
 		needF := max(c.unsettledFiles, newFiles)
 		if diskFiles+otherFiles+needF > MaxWorkspaceFiles || diskBytes+otherBytes+needB > MaxWorkspaceBytes {
+			s.overQuota = true
 			s.mu.Unlock()
 			return fail("workspace_limit")
 		}

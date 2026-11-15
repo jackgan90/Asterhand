@@ -58,6 +58,6 @@ executor 层统一提供 `capabilities.chat` 与 `capabilities.model_tasks`，�
 
 ## 本机工具能力
 
-[能力设计](runtime-capabilities.md)定义当前工作区授权、原生工具适配、文件版本、执行观察与恢复。会话正文仍由原生 Gateway 保存；节点只新增有界活动和文件修改日志。工具授权保存在节点配置，独立于模型提示词、旧任务授权目录和外部自动化凭据。
+[能力设计](runtime-capabilities.md)定义当前工作区授权、原生工具适配、受限工作区脚本沙箱、文件版本、执行观察与恢复。会话正文仍由原生 Gateway 保存；节点只新增有界活动和文件修改日志。工具授权保存在节点配置，独立于模型提示词、旧任务授权目录和外部自动化凭据。
 
-共享服务位于 internal/workspace，会话通过可选 WorkspaceRuntime 接口取得能力；UI、CLI、MCP 和原生文件桥使用同一修改、修订及恢复规则。Windows 文件 I/O 拒绝不安全路径和链接，未知修改阻止后续写入直到显式核对。工具轮次占有工作区直到原生终态与文件操作均收尾，停止保留已经产生的文件。
+共享服务位于 internal/workspace，跨平台脚本沙箱后端位于 internal/platform/sandbox，会话通过可选 WorkspaceRuntime 接口取得能力；UI、CLI、MCP 和原生文件桥使用同一修改、修订、执行调度及恢复规则。Windows 文件 I/O 拒绝不安全路径和链接，同卷重命名发布后恢复工作区继承 ACL，未知修改阻止后续写入直到显式核对。脚本由 Go 服务经独立 `execManager` 在清理环境与内核写隔离下经纪启动并受 Turn 级 Job Object 约束；任何工具轮次在原生终态、脚本子进程树并行排空、`sandbox-temp` 配额清理与工作区对账完成前保持占用，停止保留已经产生的文件。

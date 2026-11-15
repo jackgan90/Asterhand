@@ -279,6 +279,8 @@ func startNativeWorkspaceFixture(t *testing.T, root, node, entry, endpoint strin
 	if err = files.Configure(true, "fixture-policy"); err != nil {
 		t.Fatal(err)
 	}
+	files.SetHomeRoot(filepath.Join(root, "state"))
+	files.SetBundledNodeDir(filepath.Dir(node))
 	if err = seedNativeWorkspace(files, entry, "fixture-policy"); err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +331,7 @@ func startNativeWorkspaceFixture(t *testing.T, root, node, entry, endpoint strin
 	}
 	token := model.ID()
 	cmd := exec.Command(node, filepath.Join(root, "bridge", "main.mjs"))
-	cmd.Dir, cmd.Env = root, conversationEnvironment(root, node, "FIXTURE_KEY", "", token)
+	cmd.Dir, cmd.Env = root, conversationEnvironment(root, node, "FIXTURE_KEY", "", token, access.Token)
 	// Isolated fixture diagnostics contain only synthetic inputs/credentials.
 	diagnostic, err := os.Create(filepath.Join(root, "gateway.log"))
 	if err != nil {

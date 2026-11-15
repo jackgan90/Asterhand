@@ -4,9 +4,9 @@ package localcommands
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
-	"runtime"
 	"sync"
 	"time"
 	"unsafe"
@@ -89,11 +89,6 @@ func (e *windowsExecution) Wait(ctx context.Context) (ExitEvidence, error) {
 	}
 }
 
-func jobName(run string) *uint16 {
-	name, _ := windows.UTF16PtrFromString("Local\\Asterhand.Command." + run)
-	return name
-}
-
 func (windowsBackend) Reconcile(run string) (bool, error) {
 	return userprocess.JobStopped("Local\\Asterhand.Command." + run)
 }
@@ -106,7 +101,7 @@ func (windowsBackend) Start(c ScriptSpec, run string) (Execution, error) {
 	if token != 0 {
 		defer token.Close()
 	}
-	job, err := windows.CreateJobObject(nil, jobName(run))
+	job, err := userprocess.NewKillOnCloseJob("Local\\Asterhand.Command."+run, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -126,11 +121,6 @@ func (windowsBackend) Start(c ScriptSpec, run string) (Execution, error) {
 			}
 		}
 	}()
-	var limits windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
-	limits.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-	if _, err = windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits))); err != nil {
-		return nil, err
-	}
 	var outWrite, errWrite *os.File
 	if e.stdout, outWrite, err = os.Pipe(); err != nil {
 		return nil, err
@@ -158,31 +148,6 @@ func (windowsBackend) Start(c ScriptSpec, run string) (Execution, error) {
 }
 
 func (e *windowsExecution) create(c ScriptSpec, token windows.Token, in, out, stderr *os.File) error {
-	handles := []windows.Handle{windows.Handle(in.Fd()), windows.Handle(out.Fd()), windows.Handle(stderr.Fd())}
-	for _, h := range handles {
-		if err := windows.SetHandleInformation(h, windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT); err != nil {
-			return err
-		}
-	}
-	attributes, err := windows.NewProcThreadAttributeList(2)
-	if err != nil {
-		return err
-	}
-	defer attributes.Delete()
-	if err = attributes.Update(windows.PROC_THREAD_ATTRIBUTE_HANDLE_LIST, unsafe.Pointer(&handles[0]), uintptr(len(handles))*unsafe.Sizeof(handles[0])); err != nil {
-		return err
-	}
-	jobs := []windows.Handle{e.job}
-	const jobList = 0x0002000d
-	if err = attributes.Update(jobList, unsafe.Pointer(&jobs[0]), unsafe.Sizeof(jobs[0])); err != nil {
-		return err
-	}
-	startup := windows.StartupInfoEx{ProcThreadAttributeList: attributes.List()}
-	startup.Cb = uint32(unsafe.Sizeof(startup))
-	startup.Flags = windows.STARTF_USESTDHANDLES
-	startup.StdInput = handles[0]
-	startup.StdOutput = handles[1]
-	startup.StdErr = handles[2]
 	system, err := windows.GetSystemDirectory()
 	if err != nil {
 		return err
@@ -199,46 +164,28 @@ func (e *windowsExecution) create(c ScriptSpec, token windows.Token, in, out, st
 	if err != nil {
 		return err
 	}
-	name, err := windows.UTF16PtrFromString(path)
-	if err != nil {
-		return err
-	}
-	args, err := windows.UTF16FromString(line)
-	if err != nil || len(args) > 32767 {
+	res, err := userprocess.SpawnAttachedJob(userprocess.SpawnConfig{
+		Job:         e.job,
+		Token:       token,
+		Executable:  path,
+		CommandLine: line,
+		WorkingDir:  c.WorkingDirectory(),
+		Environment: env,
+		Stdin:       windows.Handle(in.Fd()),
+		Stdout:      windows.Handle(out.Fd()),
+		Stderr:      windows.Handle(stderr.Fd()),
+		AfterSuspended: func(process windows.Handle) error {
+			var actual windows.Token
+			if tokErr := windows.OpenProcessToken(process, windows.TOKEN_QUERY, &actual); tokErr != nil {
+				return tokErr
+			}
+			defer actual.Close()
+			return userprocess.VerifyToken(actual)
+		},
+	})
+	e.process = res.Process
+	if errors.Is(err, userprocess.ErrCmdLineTooLong) {
 		return problem("invalid", "err.localcmd.cmdline_too_long")
-	}
-	directory, err := windows.UTF16PtrFromString(c.WorkingDirectory())
-	if err != nil {
-		return err
-	}
-	block := environmentBlock(env)
-	flags := uint32(windows.EXTENDED_STARTUPINFO_PRESENT | windows.CREATE_UNICODE_ENVIRONMENT | windows.CREATE_SUSPENDED | windows.CREATE_NO_WINDOW)
-	var info windows.ProcessInformation
-	if token == 0 {
-		err = windows.CreateProcess(name, &args[0], nil, nil, true, flags, &block[0], directory, &startup.StartupInfo, &info)
-	} else {
-		err = windows.CreateProcessAsUser(token, name, &args[0], nil, nil, true, flags, &block[0], directory, &startup.StartupInfo, &info)
-	}
-	runtime.KeepAlive(block)
-	runtime.KeepAlive(jobs)
-	runtime.KeepAlive(handles)
-	if err != nil {
-		return err
-	}
-	e.process = info.Process
-	defer windows.CloseHandle(info.Thread)
-	var actual windows.Token
-	err = windows.OpenProcessToken(info.Process, windows.TOKEN_QUERY, &actual)
-	if err == nil {
-		err = userprocess.VerifyToken(actual)
-		actual.Close()
-	}
-	if err == nil {
-		_, err = windows.ResumeThread(info.Thread)
-	}
-	if err != nil {
-		_ = windows.TerminateJobObject(e.job, 1)
-		_, _ = windows.WaitForSingleObject(info.Process, 5000)
 	}
 	return err
 }

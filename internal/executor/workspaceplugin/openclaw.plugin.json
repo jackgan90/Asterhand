@@ -12,7 +12,9 @@
       "search_files",
       "memory_search",
       "memory_get",
-      "progress_card"
+      "progress_card",
+      "exec_command",
+      "process_control"
     ]
   },
   "configSchema": {

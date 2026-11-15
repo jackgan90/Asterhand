@@ -1,5 +1,6 @@
 import {createOpenClawCodingTools} from 'openclaw/plugin-sdk/agent-harness';
 import {getActiveMemorySearchManager} from 'openclaw/plugin-sdk/memory-host-search';
+import {createExecTools} from './exec.mjs';
 import {toolDisplaySpecs} from './tool-display.mjs';
 
 const codingToolConfig = Object.freeze({
@@ -99,13 +100,18 @@ function createSearchFilesTool(client, coordinator) {
     execute: (toolCallId, params, signal) =>
       coordinator.runTool('search_files', toolCallId, params, signal, async ctx => {
         const result = await ctx.tracker.track(
-          client.request('search', {
-            id: ctx.id,
-            path: client.relative(params.path ?? '.'),
-            query: params.query,
-            content: params.content === true,
-            cursor: params.cursor ?? '',
-          }),
+          client.request(
+            'search',
+            {
+              id: ctx.id,
+              path: client.relative(params.path ?? '.'),
+              query: params.query,
+              content: params.content === true,
+              cursor: params.cursor ?? '',
+            },
+            12000,
+            ctx.signal,
+          ),
         );
         return {content: [{type: 'text', text: JSON.stringify(result)}]};
       }),
@@ -135,7 +141,7 @@ function createMemoryTools(api, memory, coordinator) {
         coordinator.runTool('memory_search', toolCallId, params, signal, async ctx => {
           const {manager} = await getActiveMemorySearchManager({cfg: api.config, agentId: 'main', purpose: 'default'});
           if (!manager?.sync || !manager?.search) throw new Error('Native memory index is unavailable');
-          const results = await memory.withCall({id: ctx.id, tracker: ctx.tracker}, async () => {
+          const results = await memory.withCall({id: ctx.id, tracker: ctx.tracker, signal: ctx.signal}, async () => {
             await manager.sync({reason: 'memory_search', force: true});
             ctx.signal?.throwIfAborted();
             return manager.search(params.query.trim(), {
@@ -174,7 +180,7 @@ function createMemoryTools(api, memory, coordinator) {
       },
       execute: (toolCallId, params, signal) =>
         coordinator.runTool('memory_get', toolCallId, params, signal, async ctx => {
-          const excerpt = await memory.withCall({id: ctx.id, tracker: ctx.tracker}, () =>
+          const excerpt = await memory.withCall({id: ctx.id, tracker: ctx.tracker, signal: ctx.signal}, () =>
             memory.readFile({relPath: params.path, from: params.from, lines: params.lines}),
           );
           return {content: [{type: 'text', text: JSON.stringify(excerpt, null, 2)}], details: excerpt};
@@ -240,5 +246,6 @@ export function createWorkspaceTools({api, client, memory, coordinator}) {
   tools.push(createSearchFilesTool(client, coordinator));
   tools.push(...createMemoryTools(api, memory, coordinator));
   tools.push(createProgressCardTool(progressProto, coordinator));
+  tools.push(...createExecTools(client, coordinator));
   return tools;
 }

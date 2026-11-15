@@ -58,7 +58,7 @@ Windows 快捷输入使用同版本的独立 GUI 宿主 AsterhandInputHost.exe�
 
 README 提供 `irm <官方固定入口> -ErrorAction Stop | iex` 一行命令，下载失败立即停止，成功后在内存执行同一 install.ps1，不创建临时脚本文件或改变执行策略。指定版本等参数时用 ScriptBlock.Create 编译同一下载内容，再通过调用运算符传参，保留交互提示与安装契约。
 
-本地 install-local.cmd 通过 PowerShell 7 默认执行 Fast，Full 显式选择完整 ZIP。两者共享三个 EXE、图标、宿主清单、插件及许可证的应用组装；Fast 输出应用目录收据，Full 输出 release manifest、ZIP 与 latest-build 记录，二者不能互作完成证据。输入指纹遍历仓库第一方文件，按实际内容与路径覆盖根文件、新增顶层包、全部内嵌资源、脚本、文档及依赖描述/锁，包含未提交、新增、删除与重命名，不依赖目录或扩展名白名单、Git HEAD。仅跳过明确保留的生成目录、仓库/编辑器状态与本地数据目录（例如 out、dist、node_modules、.git、data），这些位置不得存放应用构建输入；第一方文档改动也使缓存失效。固定编译环境，拒绝外部覆盖；构建期间变更时拒绝登记。
+本地 install-local.cmd 通过 PowerShell 7 默认执行 Fast，Full 显式选择完整 ZIP。两者共享三个 EXE、图标、宿主清单、插件及许可证的应用组装；Fast 输出应用目录收据，Full 输出 release manifest、ZIP 与 latest-build 记录，二者不能互作完成证据。输入指纹遍历仓库第一方文件，按实际内容与路径覆盖根文件、新增顶层包、全部内嵌资源、脚本、文档及依赖描述/锁，包含未提交、新增、删除与重命名，不依赖目录或扩展名白名单、Git HEAD。仅跳过明确保留的生成目录、仓库/编辑器/本地助手状态与本地数据目录（例如 out、dist、node_modules、.git、.codex、.gemini、.claude、.cursor、data），这些位置不得存放应用构建输入；第一方文档改动也使缓存失效。固定编译环境，拒绝外部覆盖；构建期间变更时拒绝登记。
 
 Fast 的运行时位于安装目录 local-runtimes 中，以依赖 key 和独立 generation 识别；由正式安装器先检查目录归属与程序/数据实际路径分离，再由开发 helper 在目标缓存锁内准备。第一次导入检查锁、全部已安装包 metadata 和重解析点，保留完整运行时及许可证；热命中只核对收据、Node/根锁/直接组件 metadata 与入口/原生模块摘要，安装时继续 bundle-check 和真实原生模块加载。热命中不遍历全部传递依赖。显式修复或关键缓存损坏时绕过旧 prepared 目录，重新按锁准备新 generation；RepairDependencies 与 PreparedPath 互斥。
 

@@ -14,6 +14,9 @@
 
 # Local settings, node data and credentials
 /.codex/
+/.gemini/
+/.claude/
+/.cursor/
 .env
 .env.*
 !.env.example

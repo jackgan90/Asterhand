@@ -57,7 +57,16 @@ try {
     Write-Text (Join-Path $sourceRoot 'web/node_modules/generated.js')
     Write-Text (Join-Path $sourceRoot 'out/build/application.exe')
     Write-Text (Join-Path $sourceRoot '.git/index')
-    Assert ((Get-SourceFingerprint $sourceRoot) -eq $baseline) 'Generated dependencies entered source fingerprint.'
+    foreach ($agentDir in @('.codex','.agents','.gemini','.claude','.cursor')) {
+        Write-Text (Join-Path $sourceRoot "$agentDir/skills/example.md")
+    }
+    $agentLink = Join-Path $sourceRoot '.gemini/linked-skills'
+    New-Item -ItemType Junction -Path $agentLink -Target (Join-Path $sourceRoot '.codex/skills') | Out-Null
+    Assert ((Get-SourceFingerprint $sourceRoot) -eq $baseline) 'Generated dependencies or excluded agent directories entered source fingerprint.'
+    $sourceLink = Join-Path $sourceRoot 'internal/reparse-input'
+    New-Item -ItemType Junction -Path $sourceLink -Target (Join-Path $sourceRoot '.codex/skills') | Out-Null
+    try { Expect-Failure { Get-SourceFingerprint $sourceRoot } 'reparse point' }
+    finally { [IO.Directory]::Delete($sourceLink) }
     Write-Text (Join-Path $sourceRoot 'go.mod') 'replace example.test/module => ../external'
     Expect-Failure { Get-SourceFingerprint $sourceRoot } 'Local Go replacements'
     $checks.Add('real-input-fingerprint-txt-web-go-plugin-untracked-rename-delete-and-external-replace')

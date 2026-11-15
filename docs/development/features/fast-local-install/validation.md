@@ -33,7 +33,7 @@ New-LocalApplicationReceipt (Resolve-Path $application).Path $source (Get-LocalR
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/test-install-lifecycle.ps1 -PackageDirectory (Join-Path $validation 'full') -OutputDirectory (Join-Path $validation 'ps5-lifecycle')
 ```
 
-- [边界回归](../../../../scripts/test-fast-local-install.ps1)直接调用真实指纹、缓存与安装校验函数，验证 txt/Go/Web/插件、根 Go 文件、新增顶层包与资源、删除/重命名、生成目录排除、本地 Go replace 拒绝、陌生根目录、实际路径重叠、安装锁、损坏收据、版本/源码身份不匹配、路径越界及同源码 runtime generation 换代。运行时准备为受控替身，文件、摘要与 junction 为真实操作。
+- [边界回归](../../../../scripts/test-fast-local-install.ps1)直接调用真实指纹、缓存与安装校验函数，验证 txt/Go/Web/插件、根 Go 文件、新增顶层包与资源、删除/重命名、生成目录与本地工具目录（含重解析点）排除、第一方重解析点与本地 Go replace 拒绝、陌生根目录、实际路径重叠、安装锁、损坏收据、版本/源码身份不匹配、路径越界及同源码 runtime generation 换代。运行时准备为受控替身，文件、摘要与 junction 为真实操作。
 - [开发入口回归](../../../../scripts/test-local-install-entry.ps1)覆盖 Full 原有复用与失败保护、默认 Fast 构建/复用及安装器内部源码变化。源码 guard 必须在独立脚本作用域仍可调用，并在变化时阻止激活。
 - [真实目录候选回归](../../../../scripts/test-local-candidate.ps1)使用真实程序、固定运行时、native module load、基础节点、标准启动器和正常退出；验证自定义数据、身份/token/文件与快捷方式状态保留、无效候选/收据版本或源码伪造/源码 guard 不停止旧节点，以及新 generation 的实际链接切换。提供 PackageDirectory 时验证 Fast→Full→Fast，省略时明确记 skipped。系统组件安装被拒绝，Known Folders 使用替代目录，浏览器被抑制。
 - [源码重建与性能回归](../../../../scripts/test-local-source-rebuild.ps1)只接受已通过上述隔离生命周期的目录，复制源码后运行真实默认入口，再只修改副本中的内嵌 txt 并重复执行。检查 source_sha256 改变、应用重建、运行时持续命中，以及不变源码的应用复用；每次真实启动后校验源码并记录阶段和总耗时，结束正常停止测试节点。

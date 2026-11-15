@@ -5,7 +5,7 @@ function Get-SourceFingerprint([string]$Repository) {
     $files = [Collections.Generic.List[IO.FileInfo]]::new()
     # Reserve generated/local-state directories, but include every first-party
     # directory and root file so newly imported packages and embeds invalidate it.
-    $excluded = @('.git','.codex','.agents','.aws','.idea','.vscode','.playwright-cli',
+    $excluded = @('.git','.codex','.agents','.gemini','.claude','.cursor','.aws','.idea','.vscode','.playwright-cli',
         'bin','dist','out','work','coverage','test-results','playwright-report','output/playwright',
         'node_modules','web/node_modules','web/dist','local','data','artifacts','secrets')
     $pending = [Collections.Generic.Stack[IO.DirectoryInfo]]::new()

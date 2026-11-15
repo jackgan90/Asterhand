@@ -46,16 +46,16 @@ func TestNativeWorkspaceTools(t *testing.T) {
 	}
 	prefix := strings.Repeat("padding line\n", 300)
 	steps := []nativeToolStep{
-		{"write", map[string]any{"path": "target.txt", "content": prefix + "old\n"}},
-		{"read", map[string]any{"path": "target.txt"}},
-		{"edit", map[string]any{"path": "target.txt", "edits": []any{map[string]any{"oldText": "old", "newText": "new"}}}},
-		{"apply_patch", map[string]any{"input": "*** Begin Patch\n*** Update File: target.txt\n*** Move to: moved.txt\n@@\n-new\n+moved\n*** Add File: second.txt\n+second\n*** End Patch"}},
-		{"workspace_search", map[string]any{"query": "moved", "content": true}},
-		{"write", map[string]any{"path": "memory/facts.md", "content": "# Facts\nAsterhand fixture favorite instrument is a celesta.\n"}},
+		{"write_file", map[string]any{"path": "target.txt", "content": prefix + "old\n"}},
+		{"read_file", map[string]any{"path": "target.txt"}},
+		{"edit_file", map[string]any{"path": "target.txt", "edits": []any{map[string]any{"oldText": "old", "newText": "new"}}}},
+		{"apply_file_patch", map[string]any{"input": "*** Begin Patch\n*** Update File: target.txt\n*** Move to: moved.txt\n@@\n-new\n+moved\n*** Add File: second.txt\n+second\n*** End Patch"}},
+		{"search_files", map[string]any{"query": "moved", "content": true}},
+		{"write_file", map[string]any{"path": "memory/facts.md", "content": "# Facts\nAsterhand fixture favorite instrument is a celesta.\n"}},
 		{"memory_search", map[string]any{"query": "celesta"}},
 		{"memory_get", map[string]any{"path": "memory/facts.md"}},
 		{"progress_card", map[string]any{"plan": []any{map[string]any{"step": "Prepare files", "status": "completed"}}}},
-		{"apply_patch", map[string]any{"input": "*** Begin Patch\n*** Delete File: second.txt\n*** End Patch"}},
+		{"apply_file_patch", map[string]any{"input": "*** Begin Patch\n*** Delete File: second.txt\n*** End Patch"}},
 	}
 	var mu sync.Mutex
 	var schemas [][]string
@@ -187,9 +187,9 @@ func TestNativeWorkspaceTools(t *testing.T) {
 	mu.Lock()
 	steps = []nativeToolStep{
 		{"memory_search", map[string]any{"query": "celesta"}},
-		{"read", map[string]any{"path": "../outside.txt"}},
-		{"write", map[string]any{"path": "../outside.txt", "content": "overwritten"}},
-		{"write", map[string]any{"path": "scripts/example.ps1", "content": "Write-Output 'script text only'"}},
+		{"read_file", map[string]any{"path": "../outside.txt"}},
+		{"write_file", map[string]any{"path": "../outside.txt", "content": "overwritten"}},
+		{"write_file", map[string]any{"path": "scripts/example.ps1", "content": "Write-Output 'script text only'"}},
 		{"exec", map[string]any{"command": "echo forbidden > executed.txt"}},
 	}
 	inputs = nil

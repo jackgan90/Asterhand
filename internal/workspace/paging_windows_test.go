@@ -73,7 +73,7 @@ func TestSearchCursorVisitsNestedSiblingsExactlyOnce(t *testing.T) {
 
 func TestActivityCursorDeliversTerminalAndReconciledUpdates(t *testing.T) {
 	s, scope := testService(t)
-	start, err := s.Begin(Begin{ID: "activity", Scope: scope, Tool: "read", Fingerprint: "one"})
+	start, err := s.Begin(Begin{ID: "activity", Scope: scope, Tool: "read_file", Path: "note.txt", Fingerprint: "one"})
 	if err != nil {
 		t.Fatal(err)
 	}

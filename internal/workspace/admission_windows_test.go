@@ -79,7 +79,7 @@ func TestExternalOverCapacityAllowsShrinkButRejectsGrowth(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(s.root, "small.txt"), []byte("old"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Begin(Begin{ID: "native-edit", Scope: scope, Tool: "edit", Targets: []Target{{Path: "small.txt"}}, NewBytes: 10, Fingerprint: "edit"}); err != nil {
+	if _, err = s.Begin(Begin{ID: "native-edit", Scope: scope, Tool: "edit_file", Targets: []Target{{Path: "small.txt"}}, NewBytes: 10, Fingerprint: "edit"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = s.Write("native-edit", "small.txt", []byte("larger"), false); Code(err) != "workspace_limit" {
@@ -103,7 +103,7 @@ func TestNativePatchMoveAccountsForSourceContent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(s.root, "source.txt"), []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := s.Begin(Begin{ID: "move", Scope: scope, Tool: "apply_patch", Fingerprint: "move", NewBytes: 92,
+	_, err := s.Begin(Begin{ID: "move", Scope: scope, Tool: "apply_file_patch", Fingerprint: "move", NewBytes: 92,
 		Targets: []Target{{Path: "source.txt", Remove: true}, {Path: "destination.txt"}}})
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +135,7 @@ func TestStoppedRuntimeReleasesTurnWhenTerminalPersistenceFails(t *testing.T) {
 	if err := s.AcquireTurnScope(scope); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Begin(Begin{ID: "unfinished", Scope: scope, Tool: "write", Targets: []Target{{Path: "file"}}, NewBytes: 1, Fingerprint: "one"}); err != nil {
+	if _, err := s.Begin(Begin{ID: "unfinished", Scope: scope, Tool: "write_file", Targets: []Target{{Path: "file"}}, NewBytes: 1, Fingerprint: "one"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Write("unfinished", "file", []byte("x"), false); err != nil {
@@ -179,7 +179,7 @@ func TestParentChangedToJunctionCannotRedirectIO(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("outside"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Begin(Begin{ID: "race", Scope: scope, Tool: "write", Targets: []Target{{Path: "guarded/escaped.txt"}}, NewBytes: 3, Fingerprint: "one"}); err != nil {
+	if _, err := s.Begin(Begin{ID: "race", Scope: scope, Tool: "write_file", Targets: []Target{{Path: "guarded/escaped.txt"}}, NewBytes: 3, Fingerprint: "one"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := makeJunctionInPlace(parent, outside); err != nil {

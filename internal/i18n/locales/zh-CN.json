@@ -966,6 +966,7 @@
   "err.workspace.busy": "工作区正在使用，请先停止回复并等待文件操作结束。",
   "err.workspace.unsupported": "当前运行环境不支持工作区工具。",
   "common.workspace.progress_declared": "助手声明的进度",
+  "common.workspace.state.queued": "排队中",
   "common.workspace.state.started": "执行中",
   "common.workspace.state.completed": "已完成",
   "common.workspace.state.failed": "失败",

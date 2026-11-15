@@ -106,7 +106,7 @@ func TestNativeCallHoldsSnapshotAndParentThroughMutation(t *testing.T) {
 	if err := os.WriteFile(name, []byte("old"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := s.Begin(Begin{ID: "native-call", Scope: scope, Tool: "write", Targets: []Target{{Path: "item.txt"}}, NewBytes: 3, Fingerprint: "one"})
+	_, err := s.Begin(Begin{ID: "native-call", Scope: scope, Tool: "write_file", Targets: []Target{{Path: "item.txt"}}, NewBytes: 3, Fingerprint: "one"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestNativeCallHoldsSnapshotAndParentThroughMutation(t *testing.T) {
 
 func TestConcurrentCreateDoesNotOverwrite(t *testing.T) {
 	s, scope := testService(t)
-	_, err := s.Begin(Begin{ID: "native-call", Scope: scope, Tool: "write", Targets: []Target{{Path: "item.txt"}}, NewBytes: 3, Fingerprint: "one"})
+	_, err := s.Begin(Begin{ID: "native-call", Scope: scope, Tool: "write_file", Targets: []Target{{Path: "item.txt"}}, NewBytes: 3, Fingerprint: "one"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,16 +177,14 @@ func TestCrashRequiresExplicitReconciliation(t *testing.T) {
 		t.Fatal(err)
 	}
 	scope.Turn = "turn"
-	if _, err := s.Begin(Begin{ID: "unfinished", Scope: scope, Tool: "write", Targets: []Target{{Path: "item"}}, NewBytes: 3, Fingerprint: "one"}); err != nil {
+	if _, err := s.Begin(Begin{ID: "unfinished", Scope: scope, Tool: "write_file", Targets: []Target{{Path: "item"}}, NewBytes: 3, Fingerprint: "one"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Write("unfinished", "item", []byte("new"), false); err != nil {
 		t.Fatal(err)
 	}
 	// Abrupt process death leaves the durable started journal. Close handles only.
-	closeCall(s.active)
-	s.active = nil
-	s.turn = ""
+	s.simulateAbruptCrashForTest()
 	reopened, err := Open(s.root, s.journal, s.id)
 	if err != nil {
 		t.Fatal(err)

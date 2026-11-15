@@ -289,6 +289,12 @@ func (r *ConversationRuntime) Message(ctx context.Context, binding conversation.
 }
 
 func (r *ConversationRuntime) Cancel(ctx context.Context, binding conversation.Binding, request string) error {
+	r.workspaceMu.Lock()
+	files := r.workspace
+	r.workspaceMu.Unlock()
+	if files != nil {
+		files.CancelTurn(request)
+	}
 	return r.invoke(ctx, binding, chatCommand{Action: "cancel", Run: request}, nil)
 }
 

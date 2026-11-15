@@ -1,5 +1,5 @@
 import {t} from './i18n.mjs';
-const states={started:'common.workspace.state.started',completed:'common.workspace.state.completed',failed:'common.workspace.state.failed',cancelled:'common.workspace.state.cancelled',unknown:'common.workspace.state.unknown',reconciled:'common.workspace.state.reconciled'};
+const states={queued:'common.workspace.state.queued',started:'common.workspace.state.started',completed:'common.workspace.state.completed',failed:'common.workspace.state.failed',cancelled:'common.workspace.state.cancelled',unknown:'common.workspace.state.unknown',reconciled:'common.workspace.state.reconciled'};
 const steps={pending:'common.workspace.step.pending',in_progress:'common.workspace.step.in_progress',completed:'common.workspace.step.completed'};
 
 // The owning history message fixes this node's position. A result refresh only

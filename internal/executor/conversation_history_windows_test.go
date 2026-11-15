@@ -85,3 +85,57 @@ func TestHistoryToolProgressCannotExceedPageBudget(t *testing.T) {
 		t.Fatalf("unbounded tool progress or lost state: bytes=%d state=%s steps=%d", len(data), activity.State, len(activity.Progress))
 	}
 }
+
+func TestHistoryToolEnrichmentMapsQueuedPhase(t *testing.T) {
+	scope := workspace.Scope{Conversation: "queued-conv", Turn: "queued-turn", Policy: "queued-policy"}
+	files := historyWorkspace(t, scope, nil)
+	if _, err := files.Register(workspace.Register{
+		ID: "queued-call", Batch: "queued-batch", Order: 0, Scope: scope,
+		Tool: "progress_card", InputFingerprint: "qfp",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := files.SealBatch(workspace.SealBatch{
+		Batch: "queued-batch", Scope: scope,
+		Items: []workspace.SealItem{{ID: "queued-call", Tool: "progress_card", Fingerprint: "qfp"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Force queued-call into PhaseQueued behind active history-call (both hold progress card X).
+	tr, err := workspace.Serve(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+	if _, err := files.Operation("queued-call"); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = files.Acquire(t.Context(), "queued-call", "qfp")
+	}()
+	for {
+		op, err := files.Operation("queued-call")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if op.Phase == workspace.PhaseQueued {
+			break
+		}
+	}
+	page := conversation.Page{Messages: []conversation.Message{{ID: "m1", Turn: scope.Turn,
+		Blocks: []conversation.Block{{Type: "tool", Tool: &wire.ToolActivity{
+			ID: "queued-call", Turn: scope.Turn, Tool: "progress_card", State: "started"}}}}}}
+	enrichHistoryTools(&page, scope.Conversation, files)
+	if got := page.Messages[0].Blocks[0].Tool.State; got != "queued" {
+		t.Fatalf("expected enriched state queued while PhaseQueued, got %q", got)
+	}
+	_, _ = files.End("history-call", "completed", "")
+	<-done
+	enrichHistoryTools(&page, scope.Conversation, files)
+	if got := page.Messages[0].Blocks[0].Tool.State; got != "started" {
+		t.Fatalf("expected enriched state started once granted, got %q", got)
+	}
+	_, _ = files.End("queued-call", "completed", "")
+}

@@ -9,30 +9,72 @@ import (
 	"time"
 )
 
-func (s *Service) reserveLocked(newBytes int64, newFiles int, snapshotBytes int64) error {
-	if err := s.reserveWorkspaceLocked(newBytes, newFiles); err != nil {
+func (s *Service) pinJournalLocked(id string) {
+	if id != "" {
+		s.pinnedJournals[id]++
+	}
+}
+
+func (s *Service) unpinJournalLocked(id string) {
+	if n := s.pinnedJournals[id]; n <= 1 {
+		delete(s.pinnedJournals, id)
+	} else {
+		s.pinnedJournals[id] = n - 1
+	}
+}
+
+func (s *Service) totalUnsettledLocked(exclude *call) (int64, int) {
+	var b int64
+	f := 0
+	for _, c := range s.callsByID {
+		if c == exclude {
+			continue
+		}
+		b += c.unsettledBytes
+		f += c.unsettledFiles
+	}
+	return b, f
+}
+
+func (s *Service) storedVersionBytesLocked() int64 {
+	var total int64
+	for id := range s.records {
+		if sz, ok := s.journalSizes[id]; ok {
+			total += sz
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(s.journal, id+".json")); err == nil {
+			s.journalSizes[id] = info.Size()
+			total += info.Size()
+		}
+	}
+	return total
+}
+
+func (s *Service) storedActivityBytesLocked() int64 {
+	var total int64
+	for id, op := range s.records {
+		if op.State == "started" && s.callsByID[id] == nil {
+			// Still covered by s.reservedActivityBytes (MaxOperationBytes).
+			continue
+		}
+		data, _ := json.Marshal(publicOperation(op))
+		total += int64(len(data))
+	}
+	return total
+}
+
+func (s *Service) pruneAndReserveActivityLocked(extra int64) error {
+	if err := s.pruneLocked(); err != nil {
 		return err
 	}
-	var stored int64
-	for _, op := range s.records {
-		info, err := os.Stat(filepath.Join(s.journal, op.ID+".json"))
-		if err != nil {
-			return err
-		}
-		stored += info.Size()
-	}
-	if stored+snapshotBytes > MaxVersionBytes {
-		return fail("version_limit")
+	if s.storedActivityBytesLocked()+s.reservedActivityBytes+extra > MaxActivityBytes {
+		return fail("activity_limit")
 	}
 	return nil
 }
 
-func (s *Service) reserveWorkspaceLocked(newBytes int64, newFiles int) error {
-	// Known non-growing changes can release space even when an external writer
-	// has exceeded the workspace quota or directory enumeration limit.
-	if newBytes == 0 && newFiles == 0 {
-		return nil
-	}
+func (s *Service) measureWorkspaceDisk(needBytes int64, needFiles int) (int64, int, error) {
 	var bytes int64
 	files := 0
 	deadline := time.Now().Add(5 * time.Second)
@@ -44,7 +86,7 @@ func (s *Service) reserveWorkspaceLocked(newBytes int64, newFiles int) error {
 		}
 		for _, item := range entries {
 			files++
-			if files+newFiles > MaxWorkspaceFiles || time.Now().After(deadline) {
+			if files+needFiles > MaxWorkspaceFiles || time.Now().After(deadline) {
 				return fail("workspace_limit")
 			}
 			if item.Type == "directory" {
@@ -54,27 +96,158 @@ func (s *Service) reserveWorkspaceLocked(newBytes int64, newFiles int) error {
 			} else {
 				bytes += item.Size
 			}
-			if files+newFiles > MaxWorkspaceFiles || bytes+newBytes > MaxWorkspaceBytes {
+			if files+needFiles > MaxWorkspaceFiles || bytes+needBytes > MaxWorkspaceBytes {
 				return fail("workspace_limit")
 			}
 		}
 		return nil
 	}
 	if err := visit(""); err != nil {
-		return err
+		return 0, 0, err
 	}
+	return bytes, files, nil
+}
+
+func (s *Service) reserveForCall(c *call, newBytes int64, newFiles int, snapshotBytes int64) error {
+	s.mu.Lock()
+	nonAtomic := s.sched.faults != nil && s.sched.faults.nonAtomicQuotaCheck
+	s.mu.Unlock()
+
+	if newBytes > 0 || newFiles > 0 {
+		for attempt := 0; attempt < 8; attempt++ {
+			s.mu.Lock()
+			gen := s.publishGen
+			s.mu.Unlock()
+
+			diskBytes, diskFiles, err := s.measureWorkspaceDisk(newBytes, newFiles)
+			if err != nil {
+				return err
+			}
+
+			s.mu.Lock()
+			if !nonAtomic && s.publishGen != gen && attempt < 7 {
+				s.mu.Unlock()
+				continue
+			}
+			var otherBytes int64
+			otherFiles := 0
+			if !nonAtomic {
+				otherBytes, otherFiles = s.totalUnsettledLocked(c)
+			}
+			if diskFiles+otherFiles+newFiles > MaxWorkspaceFiles || diskBytes+otherBytes+newBytes > MaxWorkspaceBytes {
+				s.mu.Unlock()
+				return fail("workspace_limit")
+			}
+			c.unsettledBytes = newBytes
+			c.unsettledFiles = newFiles
+			if s.storedVersionBytesLocked()+s.reservedVersionBytes+snapshotBytes > MaxVersionBytes {
+				c.unsettledBytes, c.unsettledFiles = 0, 0
+				s.mu.Unlock()
+				return fail("version_limit")
+			}
+			c.resVersion = snapshotBytes
+			s.reservedVersionBytes += snapshotBytes
+			s.mu.Unlock()
+			return nil
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.storedVersionBytesLocked()+s.reservedVersionBytes+snapshotBytes > MaxVersionBytes {
+		return fail("version_limit")
+	}
+	c.resVersion = snapshotBytes
+	s.reservedVersionBytes += snapshotBytes
 	return nil
 }
 
+func (s *Service) checkDynamicWriteQuota(c *call, growth int64, newFiles int) error {
+	if growth == 0 && newFiles == 0 {
+		return nil
+	}
+	extraBytes := max(0, growth-c.unsettledBytes)
+	extraFiles := max(0, newFiles-c.unsettledFiles)
+	if extraBytes == 0 && extraFiles == 0 {
+		return nil
+	}
+	for attempt := 0; attempt < 8; attempt++ {
+		s.mu.Lock()
+		gen := s.publishGen
+		nonAtomic := s.sched.faults != nil && s.sched.faults.nonAtomicQuotaCheck
+		s.mu.Unlock()
+
+		diskBytes, diskFiles, err := s.measureWorkspaceDisk(extraBytes, extraFiles)
+		if err != nil {
+			return err
+		}
+		s.mu.Lock()
+		if !nonAtomic && s.publishGen != gen && attempt < 7 {
+			s.mu.Unlock()
+			continue
+		}
+		otherBytes, otherFiles := s.totalUnsettledLocked(c)
+		if nonAtomic {
+			otherBytes, otherFiles = 0, 0
+		}
+		needB := max(c.unsettledBytes, growth)
+		needF := max(c.unsettledFiles, newFiles)
+		if diskFiles+otherFiles+needF > MaxWorkspaceFiles || diskBytes+otherBytes+needB > MaxWorkspaceBytes {
+			s.mu.Unlock()
+			return fail("workspace_limit")
+		}
+		c.unsettledBytes = needB
+		c.unsettledFiles = needF
+		s.mu.Unlock()
+		return nil
+	}
+	return fail("workspace_limit")
+}
+
+func (s *Service) recordCallPublished(c *call, growth int64, newFiles int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c.unsettledBytes = max(0, c.unsettledBytes-growth)
+	c.unsettledFiles = max(0, c.unsettledFiles-newFiles)
+	s.publishGen++
+}
+
+func (s *Service) bumpPublishGen() {
+	s.mu.Lock()
+	s.publishGen++
+	s.mu.Unlock()
+}
+
+func (s *Service) releaseCallReservationLocked(c *call) {
+	c.unsettledBytes = 0
+	c.unsettledFiles = 0
+	if c.resVersion > 0 {
+		if s.reservedVersionBytes >= c.resVersion {
+			s.reservedVersionBytes -= c.resVersion
+		} else {
+			s.reservedVersionBytes = 0
+		}
+		c.resVersion = 0
+	}
+	if c.resActivity > 0 {
+		if s.reservedActivityBytes >= c.resActivity {
+			s.reservedActivityBytes -= c.resActivity
+		} else {
+			s.reservedActivityBytes = 0
+		}
+		c.resActivity = 0
+	}
+}
+
 func (s *Service) pruneLocked() error {
+	skipPin := s.sched.faults != nil && s.sched.faults.skipPinActiveJournals
 	ops := s.sortedLocked()
 	sort.Slice(ops, func(i, j int) bool { return ops[i].Started.Before(ops[j].Started) })
 	counts := map[string]int{}
 	cutoff := time.Now().Add(-30 * 24 * time.Hour)
-	var metadata int64
 	for i := len(ops) - 1; i >= 0; i-- {
 		op := ops[i]
-		pinned := op.State == "started" || op.State == "unknown"
+		pinned := (!skipPin && s.pinnedJournals[op.ID] > 0) || (!skipPin && op.State == "started") || op.State == "unknown"
 		keep := pinned || op.Started.After(cutoff)
 		expire := map[string]bool{}
 		for _, change := range op.Changes {
@@ -84,10 +257,11 @@ func (s *Service) pruneLocked() error {
 			}
 		}
 		if !keep {
-			if err := os.Remove(filepath.Join(s.journal, op.ID+".json")); err != nil {
+			if err := os.Remove(filepath.Join(s.journal, op.ID+".json")); err != nil && !os.IsNotExist(err) {
 				return err
 			}
 			delete(s.records, op.ID)
+			delete(s.journalSizes, op.ID)
 			continue
 		}
 		if len(expire) > 0 {
@@ -101,16 +275,13 @@ func (s *Service) pruneLocked() error {
 					op.Changes[i].Restorable = false
 				}
 			}
-			if err := s.persist(op); err != nil {
+			raw, err := s.persist(op)
+			if err != nil {
 				return err
 			}
+			s.journalSizes[op.ID] = int64(len(raw))
 			s.records[op.ID] = publicOperation(op)
 		}
-		data, _ := json.Marshal(publicOperation(op))
-		metadata += int64(len(data))
-	}
-	if metadata+MaxOperationBytes > MaxActivityBytes {
-		return fail("activity_limit")
 	}
 	return nil
 }
@@ -181,7 +352,7 @@ func (s *Service) Resolution(request string) (Operation, error) {
 func (s *Service) ResolveRequest(request, id, evidence string) (Operation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.active != nil || s.turn != "" {
+	if s.busyLocked() {
 		return Operation{}, fail("busy")
 	}
 	if strings.TrimSpace(evidence) == "" || len(evidence) > 2048 {
@@ -201,7 +372,6 @@ func (s *Service) ResolveRequest(request, id, evidence string) (Operation, error
 	if err != nil || json.Unmarshal(data, &op) != nil {
 		return Operation{}, fail("journal_corrupt")
 	}
-	// Resolving records the observed state, never manufactures success or replays.
 	for i := range op.Changes {
 		h, err := hold(s.root, op.Changes[i].Path, false, false)
 		if err != nil {
@@ -209,24 +379,26 @@ func (s *Service) ResolveRequest(request, id, evidence string) (Operation, error
 		}
 		op.Changes[i].After = MissingRevision
 		if h.file != nil {
-			data, err := h.bytes(MaxFileBytes)
+			fileData, err := h.bytes(MaxFileBytes)
 			h.close()
 			if err != nil {
 				return Operation{}, err
 			}
-			op.Changes[i].After = revision(data)
+			op.Changes[i].After = revision(fileData)
 		} else {
 			h.close()
 		}
 		op.Changes[i].State = "reconciled"
 	}
-	op.State, op.Detail, op.Finished = "reconciled", evidence, time.Now().UTC()
+	op.State, op.Phase, op.WaitReason, op.Detail, op.Finished = "reconciled", PhaseTerminal, "", evidence, time.Now().UTC()
 	op.Resolution = request
 	s.sequence++
 	op.Sequence = s.sequence
-	if err := s.persist(op); err != nil {
+	raw, err := s.persist(op)
+	if err != nil {
 		return Operation{}, err
 	}
+	s.journalSizes[id] = int64(len(raw))
 	s.records[id] = publicOperation(op)
 	s.blocked = false
 	for _, record := range s.records {
@@ -277,22 +449,30 @@ func (s *Service) Restore(id string, scope Scope, versionID, name, expected stri
 	s.mu.Lock()
 	op, ok := s.records[versionID]
 	if ok {
-		data, err := os.ReadFile(filepath.Join(s.journal, versionID+".json"))
-		if err != nil || json.Unmarshal(data, &op) != nil {
-			s.mu.Unlock()
-			return Operation{}, fail("journal_corrupt")
-		}
+		s.pinJournalLocked(versionID)
+	}
+	s.mu.Unlock()
+	if !ok {
+		return Operation{}, fail("not_found")
+	}
+	defer func() {
+		s.mu.Lock()
+		s.unpinJournalLocked(versionID)
+		s.mu.Unlock()
+	}()
+	data, err := os.ReadFile(filepath.Join(s.journal, versionID+".json"))
+	if err != nil || json.Unmarshal(data, &op) != nil {
+		return Operation{}, fail("journal_corrupt")
 	}
 	var original *Change
 	for _, change := range op.Changes {
 		if pathKey(change.Path) == pathKey(name) {
-			copy := change
-			original = &copy
+			cp := change
+			original = &cp
 			break
 		}
 	}
-	s.mu.Unlock()
-	if !ok || original == nil {
+	if original == nil {
 		return Operation{}, fail("not_found")
 	}
 	if !original.Restorable {
@@ -302,7 +482,7 @@ func (s *Service) Restore(id string, scope Scope, versionID, name, expected stri
 	if original.Before == MissingRevision {
 		mutation.Action = "remove"
 	}
-	return s.Mutate(id, scope, []Mutation{mutation})
+	return s.MutateWithTool(id, scope, "workspace_versions.restore", []Mutation{mutation})
 }
 
 func (s *Service) Artifacts(turn string, after int64) ([]Artifact, int64) {

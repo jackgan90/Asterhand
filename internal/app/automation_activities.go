@@ -115,7 +115,7 @@ func (a *App) registerAutomationActivities(r *automation.Registry) {
 						return automation.Outcome{}, err
 					}
 				}
-				fragment, err := files.Read(item.Path, item.Revision, v.Offset)
+				fragment, err := files.ReadContext(ctx, item.Path, item.Revision, v.Offset)
 				if err != nil {
 					return automation.Outcome{}, workspacePublicError(err)
 				}

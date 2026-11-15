@@ -2,7 +2,19 @@
   "id": "asterhand-workspace",
   "name": "Asterhand workspace tools",
   "activation": {"onStartup": true},
-  "contracts": {"tools": ["workspace_search"]},
+  "contracts": {
+    "tools": [
+      "read_file",
+      "write_file",
+      "edit_file",
+      "apply_file_patch",
+      "list_dir",
+      "search_files",
+      "memory_search",
+      "memory_get",
+      "progress_card"
+    ]
+  },
   "configSchema": {
     "type": "object",
     "properties": {

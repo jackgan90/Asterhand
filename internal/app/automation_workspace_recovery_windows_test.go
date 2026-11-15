@@ -51,7 +51,7 @@ func TestWorkspaceReceiptRecoversOnlyDurableDomainEvidence(t *testing.T) {
 				}
 				op, err = files.Restore(identity.NativeID(), scope, versions[0].ID, "file.txt", current.Revision)
 			case "workspace_operations.resolve":
-				_, err = files.Begin(workspace.Begin{ID: "interrupted", Scope: scope, Tool: "write", Fingerprint: "fixture", Targets: []workspace.Target{{Path: "pending.txt"}}, NewBytes: 3})
+				_, err = files.Begin(workspace.Begin{ID: "interrupted", Scope: scope, Tool: "write_file", Fingerprint: "fixture", Targets: []workspace.Target{{Path: "pending.txt"}}, NewBytes: 3})
 				if err != nil {
 					t.Fatal(err)
 				}

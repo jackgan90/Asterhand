@@ -58,10 +58,13 @@ Go `os.OpenRoot` 约束路径解析，拒绝绝对路径、穿越、NTFS 流、�
 
 提示词组装独立于 harness；适配器声明 replace/append/unsupported，实际状态区分 pending/applied/degraded。应用失败继续原生聊天，状态只携带安全的枚举与版本。默认保留 harness 原生身份、语气与行为，只适配能力和入口冲突；append/applied 为正常成功。OpenClaw 私有 Gateway 加载应用自带的可信提示词插件，before_prompt_build 使用 appendSystemContext 保留原生组装，llm_input 核实补充规则与当前授权工具白名单。隔离工作区开启原生角色文件初始化并保留已有定制；不读取工程或个人 home 的设定。工具权限仍由有效运行配置约束。详见[会话设计](../assistant/conversations.md)与[功能计划](../development/features/chat-prompt-interaction/plan.md)。
 
-## 持续会话原生工具
+## 持续会话原生工具与轮内并发调度
 
-[本机工具能力设计](../assistant/runtime-capabilities.md)通过可选 WorkspaceRuntime 提供共享工作区服务与人工权限修改。公共层不判断原生工具名；OpenClaw adapter 生成九项白名单，保留原生 read/write/edit/apply_patch、ls、memory_search/memory_get 与 progress_card，只新增受限 workspace_search。
+[本机工具能力设计](../assistant/runtime-capabilities.md)通过可选 WorkspaceRuntime 提供共享工作区服务与人工权限修改。公共层不绑定特定 harness 内部实现；OpenClaw adapter 生成九项统一工具白名单（`read_file`、`write_file`、`edit_file`、`apply_file_patch`、`list_dir`、`search_files`、`memory_search`、`memory_get`、`progress_card`），同步注入系统提示词补充与 `llm_input` 校验，并通过离线 SDK 预检测试拦截与核心工具/别名的重名冲突。
 
-可信插件通过正式 registerSandboxBackend/createFsBridge 接入 Windows 文件服务，保留原生编辑与补丁算法；构造 shell/exec 的后端入口明确拒绝。调用前保存身份、前像并持有文件/父目录句柄，调用后核对每个目标的实际修订。宿主直写失败原因和现用实现见[实施门槛](../development/features/local-runtime-tools/preflight.md)。原任务 Executor.Execute、任务 token 与 create-only 授权目录保持独立。
+可信插件 `asterhand-workspace` 通过公开 `api.registerTool` 拥有全部九项工具的执行包装，无需修补 `node_modules/openclaw`：文件与进度工具在 `execute` 内委托 `openclaw/plugin-sdk/agent-harness` 的 `createOpenClawCodingTools`（每次调用注入词法绑定 `callId` 与在途计数的独立 `SandboxFsBridge`），记忆工具委托 `openclaw/plugin-sdk/memory-host-search` 的 `getActiveMemorySearchManager`，配置层通过 `tools.updatePlan: false` 与 `tools.deny`（加入 `"memory-core"`）停用未受监督的同名注册并保留原生 `## Memory Recall` 提示词构建；构造 shell/exec 的后端入口明确拒绝。原任务 `Executor.Execute`、任务 token 与 create-only 授权目录保持独立。
 
-插件仅获短期私有回调凭据；回调校验运行、会话、策略和工具调用身份。原生 after_tool_call 是异步通知，因此适配器在释放轮次前还检查共享服务，不能只依赖该 hook 返回。进程退出后清理句柄并标记未完成操作 unknown；下一次启动不重放。memory-core 使用关键词索引，文件发现/读取通过相同文件桥，索引写入内部 state。每次 memory_search 先等待原生索引同步；后台记忆、可执行 skill 和任意插件加载保持禁用。
+节点内共享资源调度器按 `(rootID, relPath)`、范围（`exact/children/subtree`）与 `S/X` 模式协调轮内并发，详见[细粒度并发设计](../development/features/workspace-tool-concurrency/design.md)与[ADR-007](adr/007-workspace-resource-scheduling.md)：
+- **两阶段封存、同批盲写冲突拦截与公平队列**：`before_tool_call` 只按批内顺序登记调用身份与输入指纹，不阻塞等待锁；各工具 `execute` 在同一微任务链收齐最终参数并一次原子封存整批声明（同一批次内若已有前序修改命中同一路径，后续盲覆写 `write_file` 直接以 `conflicting_batch_write` 拒绝，避免静默吞掉前序修改；有序管线与跨批次覆写保持允许），再一次申请全部资源与容量名额（最多 8 个活动调用、4 个修改调用、1 个记忆索引同步、64 项排队），冲突资源按批内顺序公平等待，不相交资源并行执行。
+- **句柄隔离、原子预算与排空收尾**：每次低层文件/目录操作均校验精确调用身份、已授予范围与允许的效果模式；Windows 纯读采用独立句柄与 `FILE_SHARE_READ`，修改保持相对父句柄打开、前像保存与排他新文件发布；容量采用原子预留账本，版本清理固定活跃前像引用。本地 HTTP 桥保留独立控制名额；取消、超时或进程退出必须等待全部在途子 I/O 排空并完成结果持久化（或转入 `unknown` 封锁新增修改）后才释放资源锁与轮次租约。
+- **受限记忆枚举与代次同步**：记忆文件枚举限制在 `MEMORY.md`、`USER.md` 与 `memory/`，纳入 `memory_sources` 与 `memory_index` 资源域，使普通工作区修改可与 `memory_search` 并行，而同批先写记忆后搜索严格等待并命中最新索引代次。

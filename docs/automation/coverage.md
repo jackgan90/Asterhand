@@ -88,3 +88,7 @@
 | 开启/撤销工具权限 | 人工例外；专用设置入口 | 改变执行范围；CLI/MCP 只读状态，模型不能批准自身权限 |
 
 内置助手仅获已授权工作区的窄调用上下文；外部当前用户 CLI/MCP 原有能力保持，不将 commands.run、node 管理或全量自动化凭据注入内置模型。活动展示的展开/折叠为纯展示，等价读取是 turn_activities；文件恢复是业务操作，必须三入口一致。
+
+### 工具轮内并发与活动阶段读取
+
+[工作区工具细粒度并发](../development/features/workspace-tool-concurrency/plan.md)不增加独立调度设置页。`workspace_files.list/search/read`、`artifacts.read` 与内置助手工具共用同一资源调度器，与不冲突的模型工具并发执行并在目标冲突时公平等待；`workspace_files.mutate`、`workspace_versions.restore` 保留现有轮次门禁，进入后同样按目标登记资源与调用身份。`workspace.Operation` 同步暴露可选 `phase` 与 `wait_reason` 并接入 CLI/MCP 机器 schema，`turn_activities.list/get`、`workspace_operations.get` 提供等价等待与排空收尾信息，聊天消息时间线保持原生工具顺序。

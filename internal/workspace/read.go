@@ -1,6 +1,8 @@
 package workspace
 
 import (
+	"context"
+	"crypto/rand"
 	"encoding/json"
 	"io"
 	"os"
@@ -10,24 +12,75 @@ import (
 	"time"
 )
 
-func (s *Service) Read(name, expected string, offset int64) (Fragment, error) {
+func (s *Service) withTransientRead(ctx context.Context, tool, rel string) (func(), error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	name, err := relative(name, false)
+	if !s.enabled || !platformSupported() {
+		s.mu.Unlock()
+		return nil, fail("not_authorized")
+	}
+	s.mu.Unlock()
+
+	plan, err := PrepareTool(tool, DescriptorInput{WorkspaceRoot: s.root, Path: rel})
+	if err != nil {
+		return nil, err
+	}
+	sysID := "sys-" + rand.Text()
+	s.sched.mu.Lock()
+	if s.sched.queuedCountLocked() >= s.sched.maxQueued {
+		s.sched.mu.Unlock()
+		return nil, fail("queue_limit")
+	}
+	s.sched.applyClaimFaults(&plan)
+	s.sched.nextTicket++
+	entry := &schedEntry{
+		id: sysID, batch: sysID, ticket: s.sched.nextTicket,
+		tool: tool, plan: plan, phase: PhaseRegistered, sealed: true, system: true,
+	}
+	s.sched.entries[sysID] = entry
+	s.sched.mu.Unlock()
+
+	granted, err := s.sched.acquire(ctx, sysID, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	s.sched.mu.Lock()
+	granted.phase = PhaseRunning
+	s.sched.mu.Unlock()
+	for _, claim := range plan.Claims {
+		s.recordTrace(sysID, tool, "granted", "", claim.Root, claim.Key, string(claim.Access))
+	}
+	return func() {
+		s.sched.mu.Lock()
+		s.sched.releaseEntryLocked(granted)
+		s.sched.mu.Unlock()
+		s.recordTrace(sysID, tool, "released", "", DefaultRoot, pathKey(rel), "completed")
+	}, nil
+}
+
+func (s *Service) Read(name, expected string, offset int64) (Fragment, error) {
+	return s.ReadContext(context.Background(), name, expected, offset)
+}
+
+func (s *Service) ReadContext(ctx context.Context, name, expected string, offset int64) (Fragment, error) {
+	rel, err := relative(name, false)
 	if err != nil {
 		return Fragment{}, err
-	}
-	if !s.enabled {
-		return Fragment{}, fail("not_authorized")
 	}
 	if offset < 0 {
 		return Fragment{}, fail("invalid_offset")
 	}
-	h, cleanup, err := s.readHandle(name)
+	release, err := s.withTransientRead(ctx, "workspace_files.read", rel)
 	if err != nil {
 		return Fragment{}, err
 	}
-	defer cleanup()
+	defer release()
+
+	h, err := hold(s.root, rel, false, false)
+	if err != nil {
+		return Fragment{}, err
+	}
+	defer h.close()
+	s.fireIOHook("", "workspace_files.read", EffectRead, rel)
 	data, err := h.bytes(MaxFileBytes)
 	if err != nil {
 		return Fragment{}, err
@@ -40,74 +93,121 @@ func (s *Service) Read(name, expected string, offset int64) (Fragment, error) {
 		return Fragment{}, fail("invalid_offset")
 	}
 	end := min(offset+PageBytes, int64(len(data)))
-	return Fragment{Path: name, Revision: rev, Data: data[offset:end], Next: end, More: end < int64(len(data))}, nil
+	return Fragment{Path: rel, Revision: rev, Data: data[offset:end], Next: end, More: end < int64(len(data))}, nil
 }
 
-// NativeRead uses the same bounded, pinned I/O. The private adapter RPC has a
-// separate 3 MiB limit; public reads always use PageBytes fragments.
+// NativeRead validates the exact call identity and granted claims, using only
+// the owning call's pinned handle (when modifying) or an independent shared-read handle.
 func (s *Service) NativeRead(id, name string) ([]byte, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.active == nil || s.active.op.ID != id {
-		return nil, fail("invalid_call")
-	}
-	name, err := relative(name, false)
+	rel, err := relative(name, false)
 	if err != nil {
 		return nil, err
 	}
-	h, cleanup, err := s.readHandle(name)
+	c, e, err := s.enterCallIO(id, DefaultRoot, rel, EffectRead, false)
 	if err != nil {
 		return nil, err
 	}
-	defer cleanup()
+	defer s.leaveCallIO(e, EffectRead, DefaultRoot, rel)
+
+	c.mu.Lock()
+	own := c.held[pathKey(rel)]
+	if own != nil {
+		s.fireIOHook(c.op.ID, c.op.Tool, EffectRead, rel)
+		data, readErr := own.bytes(MaxFileBytes)
+		c.mu.Unlock()
+		return data, readErr
+	}
+	c.mu.Unlock()
+
+	h, err := hold(s.root, rel, false, false)
+	if err != nil {
+		return nil, err
+	}
+	defer h.close()
+	s.fireIOHook(c.op.ID, c.op.Tool, EffectRead, rel)
 	return h.bytes(MaxFileBytes)
 }
 
-func (s *Service) readHandle(name string) (*heldFile, func(), error) {
-	if s.active != nil {
-		if h := s.active.held[pathKey(name)]; h != nil {
-			return h, func() {}, nil
-		}
-	}
-	h, err := hold(s.root, name, false, false)
-	if err != nil {
-		return nil, nil, err
-	}
-	return h, h.close, nil
-}
-
-func (s *Service) Stat(name string) (*Entry, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	name, err := relative(name, true)
+func (s *Service) readBootstrap(ctx context.Context, name string) ([]byte, error) {
+	rel, err := relative(name, false)
 	if err != nil {
 		return nil, err
 	}
-	if !s.enabled {
-		return nil, fail("not_authorized")
+	release, err := s.withTransientRead(ctx, "workspace.bootstrap", rel)
+	if err != nil {
+		return nil, err
 	}
-	if s.active != nil {
-		if h := s.active.held[pathKey(name)]; h != nil {
-			if h.file == nil || h.removed {
+	defer release()
+	h, err := hold(s.root, rel, false, false)
+	if err != nil {
+		return nil, err
+	}
+	defer h.close()
+	return h.bytes(MaxFileBytes)
+}
+
+func (s *Service) statBootstrap(ctx context.Context, name string) (*Entry, error) {
+	rel, err := relative(name, true)
+	if err != nil {
+		return nil, err
+	}
+	release, err := s.withTransientRead(ctx, "workspace.bootstrap", rel)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return s.statIndependent(rel)
+}
+
+func (s *Service) Stat(name string) (*Entry, error) {
+	return s.StatWithCall("", name)
+}
+
+func (s *Service) StatWithCall(id, name string) (*Entry, error) {
+	rel, err := relative(name, true)
+	if err != nil {
+		return nil, err
+	}
+	if id != "" {
+		c, e, err := s.enterCallIO(id, DefaultRoot, rel, EffectStat, false)
+		if err != nil {
+			return nil, err
+		}
+		defer s.leaveCallIO(e, EffectStat, DefaultRoot, rel)
+		c.mu.Lock()
+		if own := c.held[pathKey(rel)]; own != nil {
+			if own.file == nil || own.removed {
+				c.mu.Unlock()
 				return nil, nil
 			}
-			info, err := h.file.Stat()
-			if err != nil {
-				return nil, err
+			info, statErr := own.file.Stat()
+			c.mu.Unlock()
+			if statErr != nil {
+				return nil, statErr
 			}
-			return entry(name, info), nil
+			return entry(rel, info), nil
 		}
+		c.mu.Unlock()
+		s.fireIOHook(c.op.ID, c.op.Tool, EffectStat, rel)
+		return s.statIndependent(rel)
 	}
-	d, err := directory(s.root, name)
+	return s.statBootstrap(context.Background(), name)
+}
+
+func (s *Service) statIndependent(rel string) (*Entry, error) {
+	d, err := directory(s.root, rel)
 	if err == nil {
 		defer d.close()
 		info, err := d.parents[len(d.parents)-1].Stat()
 		if err != nil {
 			return nil, err
 		}
-		return entry(name, info), nil
+		return entry(rel, info), nil
 	}
-	h, err := hold(s.root, name, false, false)
+	if rel == "" {
+		return nil, err
+	}
+	h, err := hold(s.root, rel, false, false)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -122,7 +222,7 @@ func (s *Service) Stat(name string) (*Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	return entry(name, info), nil
+	return entry(rel, info), nil
 }
 
 func entry(name string, info os.FileInfo) *Entry {
@@ -134,16 +234,38 @@ func entry(name string, info os.FileInfo) *Entry {
 }
 
 func (s *Service) ReadDirectory(name string) ([]Entry, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.enabled {
-		return nil, fail("not_authorized")
-	}
-	name, err := relative(name, true)
+	return s.ReadDirectoryContext(context.Background(), name)
+}
+
+func (s *Service) ReadDirectoryContext(ctx context.Context, name string) ([]Entry, error) {
+	rel, err := relative(name, true)
 	if err != nil {
 		return nil, err
 	}
-	return s.directoryEntries(name, MaxWorkspaceFiles+1)
+	release, err := s.withTransientRead(ctx, "workspace_files.list", rel)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	s.fireIOHook("", "workspace_files.list", EffectList, rel)
+	return s.directoryEntries(rel, MaxWorkspaceFiles+1)
+}
+
+func (s *Service) ReadDirectoryWithCall(id, name string) ([]Entry, error) {
+	if id == "" {
+		return s.ReadDirectoryContext(context.Background(), name)
+	}
+	rel, err := relative(name, true)
+	if err != nil {
+		return nil, err
+	}
+	c, e, err := s.enterCallIO(id, DefaultRoot, rel, EffectList, false)
+	if err != nil {
+		return nil, err
+	}
+	defer s.leaveCallIO(e, EffectList, DefaultRoot, rel)
+	s.fireIOHook(c.op.ID, c.op.Tool, EffectList, rel)
+	return s.directoryEntries(rel, MaxWorkspaceFiles+1)
 }
 
 func (s *Service) directoryEntries(name string, limit int) ([]Entry, error) {
@@ -164,35 +286,66 @@ func (s *Service) directoryEntries(name string, limit int) ([]Entry, error) {
 		if item.Type()&os.ModeSymlink != 0 {
 			continue
 		}
-		name := path.Join(name, item.Name())
-		if _, err := relative(name, false); err != nil {
+		child := path.Join(name, item.Name())
+		if _, err := relative(child, false); err != nil {
 			continue
 		}
 		info, err := item.Info()
 		if err != nil {
 			return nil, err
 		}
-		entries = append(entries, *entry(name, info))
+		entries = append(entries, *entry(child, info))
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
 	return entries, nil
 }
 
-// Search is literal, case-insensitive text/name matching. A lexical checkpoint
-// advances even when no match is found; external edits may change later pages.
 func (s *Service) Search(base, query, cursor string, content, recursive bool) (Page, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.enabled {
-		return Page{}, fail("not_authorized")
-	}
-	base, err := relative(base, true)
+	return s.SearchContext(context.Background(), base, query, cursor, content, recursive)
+}
+
+func (s *Service) SearchContext(ctx context.Context, base, query, cursor string, content, recursive bool) (Page, error) {
+	rel, err := relative(base, true)
 	if err != nil {
 		return Page{}, err
 	}
 	if len(query) > 1024 {
 		return Page{}, fail("query_limit")
 	}
+	tool := "workspace_files.search"
+	if !recursive && !content && query == "" {
+		tool = "workspace_files.list"
+	}
+	release, err := s.withTransientRead(ctx, tool, rel)
+	if err != nil {
+		return Page{}, err
+	}
+	defer release()
+	s.fireIOHook("", tool, EffectSearch, rel)
+	return s.searchInternal(rel, query, cursor, content, recursive)
+}
+
+func (s *Service) SearchWithCall(id, base, query, cursor string, content, recursive bool) (Page, error) {
+	if id == "" {
+		return s.SearchContext(context.Background(), base, query, cursor, content, recursive)
+	}
+	rel, err := relative(base, true)
+	if err != nil {
+		return Page{}, err
+	}
+	if len(query) > 1024 {
+		return Page{}, fail("query_limit")
+	}
+	c, e, err := s.enterCallIO(id, DefaultRoot, rel, EffectSearch, false)
+	if err != nil {
+		return Page{}, err
+	}
+	defer s.leaveCallIO(e, EffectSearch, DefaultRoot, rel)
+	s.fireIOHook(c.op.ID, c.op.Tool, EffectSearch, rel)
+	return s.searchInternal(rel, query, cursor, content, recursive)
+}
+
+func (s *Service) searchInternal(base, query, cursor string, content, recursive bool) (Page, error) {
 	var checkpoint struct {
 		Base, Query, After string
 		Content, Recursive bool
@@ -208,8 +361,6 @@ func (s *Service) Search(base, query, cursor string, content, recursive bool) (P
 	var scannedBytes int64
 	last := checkpoint.After
 	needle := strings.ToLower(query)
-	// Match traversal order to the cursor. A directory's slash sorts after
-	// siblings such as a.txt, before any a/child, so pagination cannot skip it.
 	scanKey := func(item Entry) string {
 		if item.Type == "directory" {
 			return item.Path + "/"
@@ -220,6 +371,9 @@ func (s *Service) Search(base, query, cursor string, content, recursive bool) (P
 	visit = func(dir string) error {
 		entries, err := s.directoryEntries(dir, MaxWorkspaceFiles+1)
 		if err != nil {
+			if dir != base && os.IsNotExist(err) {
+				return nil
+			}
 			return err
 		}
 		sort.Slice(entries, func(i, j int) bool { return scanKey(entries[i]) < scanKey(entries[j]) })
@@ -235,15 +389,17 @@ func (s *Service) Search(base, query, cursor string, content, recursive bool) (P
 				if content {
 					match = false
 					if item.Type == "file" && item.Size <= MaxFileBytes {
-						h, cleanup, readErr := s.readHandle(item.Path)
+						h, readErr := hold(s.root, item.Path, false, false)
 						if readErr == nil {
-							data, readErr := h.bytes(MaxFileBytes)
-							cleanup()
-							scannedBytes += int64(len(data))
-							if readErr == nil {
-								match = strings.Contains(strings.ToLower(string(data)), needle)
-								item.Revision = revision(data)
+							if h.file != nil {
+								data, dataErr := h.bytes(MaxFileBytes)
+								scannedBytes += int64(len(data))
+								if dataErr == nil {
+									match = strings.Contains(strings.ToLower(string(data)), needle)
+									item.Revision = revision(data)
+								}
 							}
+							h.close()
 						}
 					}
 				}

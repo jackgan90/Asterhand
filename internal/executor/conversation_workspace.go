@@ -151,7 +151,7 @@ func prepareWorkspacePlugin(root string) error {
 }
 
 func nativeWorkspaceTools() []string {
-	return []string{"read", "write", "edit", "apply_patch", "ls", "workspace_search", "memory_search", "memory_get", "progress_card"}
+	return workspace.AssistantToolNames()
 }
 
 func configureWorkspace(value map[string]any, c config.Config, root string, access *workspace.Transport) error {
@@ -168,8 +168,8 @@ func configureWorkspace(value map[string]any, c config.Config, root string, acce
 	defaults["sandbox"] = map[string]any{"mode": "all", "backend": "asterhand-files", "scope": "agent", "workspaceAccess": "rw",
 		"workspaceRoot": filepath.Join(root, "sandboxes"), "docker": map[string]any{"workdir": workspaceRoot},
 		"browser": map[string]any{"enabled": false}, "prune": map[string]any{"idleHours": 0, "maxAgeDays": 0}}
-	value["tools"] = map[string]any{"allow": tools, "deny": []string{"exec", "process", "code_execution", "skills_read"},
-		"fs": map[string]any{"workspaceOnly": true}, "exec": map[string]any{"applyPatch": map[string]any{"enabled": true, "workspaceOnly": true}},
+	value["tools"] = map[string]any{"allow": tools, "deny": []string{"exec", "process", "code_execution", "skills_read", "memory-core"},
+		"updatePlan": false, "fs": map[string]any{"workspaceOnly": true}, "exec": map[string]any{"applyPatch": map[string]any{"enabled": true, "workspaceOnly": true}},
 		"codeMode": map[string]any{"enabled": false}, "toolSearch": false, "sandbox": map[string]any{"tools": map[string]any{"allow": tools}}}
 	plugins := value["plugins"].(map[string]any)
 	plugins["slots"].(map[string]any)["memory"] = "memory-core"

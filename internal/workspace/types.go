@@ -24,6 +24,12 @@ const (
 	PageBytes         = 32 << 10
 	PageItems         = 100
 	MissingRevision   = "missing"
+
+	MaxActiveCalls    = 8
+	MaxModifyingCalls = 4
+	MaxIndexCalls     = 1
+	MaxQueuedCalls    = 64
+	DefaultRoot       = "workspace"
 )
 
 type Error struct {
@@ -63,9 +69,42 @@ type Begin struct {
 	Scope       Scope    `json:"scope"`
 	Tool        string   `json:"tool"`
 	Targets     []Target `json:"targets"`
+	Path        string   `json:"path,omitempty"`
 	NewBytes    int64    `json:"new_bytes"`
 	Fingerprint string   `json:"fingerprint"`
 	Progress    []Step   `json:"progress,omitempty"`
+}
+
+// Register records a call during native batch preparation without waiting on locks.
+type Register struct {
+	ID               string   `json:"id"`
+	Batch            string   `json:"batch"`
+	Order            int      `json:"order"`
+	Scope            Scope    `json:"scope"`
+	Tool             string   `json:"tool"`
+	InputFingerprint string   `json:"input_fingerprint"`
+	Targets          []Target `json:"targets,omitempty"`
+	Path             string   `json:"path,omitempty"`
+	NewBytes         int64    `json:"new_bytes,omitempty"`
+	Progress         []Step   `json:"progress,omitempty"`
+}
+
+type SealItem struct {
+	ID          string   `json:"id"`
+	Tool        string   `json:"tool"`
+	Targets     []Target `json:"targets,omitempty"`
+	Path        string   `json:"path,omitempty"`
+	NewBytes    int64    `json:"new_bytes,omitempty"`
+	Fingerprint string   `json:"fingerprint,omitempty"`
+	Progress    []Step   `json:"progress,omitempty"`
+	Aborted     bool     `json:"aborted,omitempty"`
+	Reason      string   `json:"reason,omitempty"`
+}
+
+type SealBatch struct {
+	Batch string     `json:"batch"`
+	Scope Scope      `json:"scope"`
+	Items []SealItem `json:"items"`
 }
 
 // Step is model-declared progress, separate from observed file changes.
@@ -91,6 +130,8 @@ type Operation struct {
 	Started     time.Time `json:"started"`
 	Finished    time.Time `json:"finished,omitempty"`
 	State       string    `json:"state"`
+	Phase       string    `json:"phase,omitempty"`
+	WaitReason  string    `json:"wait_reason,omitempty"`
 	Changes     []Change  `json:"changes"`
 	Detail      string    `json:"detail,omitempty"`
 	Progress    []Step    `json:"progress,omitempty"`
@@ -145,6 +186,18 @@ type Status struct {
 	Enforcement  string           `json:"enforcement"`
 	Capabilities []string         `json:"capabilities"`
 	Limits       map[string]int64 `json:"limits"`
+}
+
+// TraceEvent records bounded, non-secret low-level lifecycle and I/O checkpoints.
+type TraceEvent struct {
+	Seq    int64  `json:"seq"`
+	CallID string `json:"call_id"`
+	Tool   string `json:"tool"`
+	Stage  string `json:"stage"`
+	Effect string `json:"effect,omitempty"`
+	Root   string `json:"root,omitempty"`
+	Key    string `json:"key,omitempty"`
+	Access string `json:"access,omitempty"`
 }
 
 func publicOperation(op Operation) Operation {

@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -14,29 +14,53 @@ import (
 )
 
 type call struct {
-	op       Operation
-	held     map[string]*heldFile
-	newBytes int64
-	written  int64
-	remove   map[string]bool
-	oldBytes int64
-	newFiles int
+	mu             sync.Mutex
+	op             Operation
+	entry          *schedEntry
+	held           map[string]*heldFile
+	newBytes       int64
+	written        int64
+	remove         map[string]bool
+	oldBytes       int64
+	newFiles       int
+	unsettledBytes int64
+	unsettledFiles int
+	resVersion     int64
+	resActivity    int64
+	pinned         bool
+	ephemeral      bool
 }
 
 type Service struct {
-	mu       sync.Mutex
-	root     string
-	journal  string
-	id       string
-	policy   string
-	enabled  bool
-	turn     string
-	scope    Scope
-	calls    int
-	active   *call
-	sequence int64
-	records  map[string]Operation
-	blocked  bool
+	mu                    sync.Mutex
+	root                  string
+	journal               string
+	id                    string
+	policy                string
+	enabled               bool
+	turn                  string
+	scope                 Scope
+	calls                 int
+	publicMutating        bool
+	callsByID             map[string]*call
+	registered            map[string]bool
+	sched                 *scheduler
+	sequence              int64
+	records               map[string]Operation
+	journalSizes          map[string]int64
+	pinnedJournals        map[string]int
+	publishGen            uint64
+	reservedVersionBytes  int64
+	reservedActivityBytes int64
+	blocked               bool
+
+	traceMu      sync.Mutex
+	traceEnabled bool
+	traceLimit   int
+	traceSeq     int64
+	trace        []TraceEvent
+	ioHook       func(callID, tool string, eff Effect, relPath string)
+	endHook      func(callID, stage string)
 }
 
 func Open(root, journal, id string) (*Service, error) {
@@ -49,8 +73,6 @@ func Open(root, journal, id string) (*Service, error) {
 			return nil, err
 		}
 	}
-	// The runtime owner guarantees the old process tree has exited before Open.
-	// Retired files have durable before-images; staging is never a replay queue.
 	orphans, err := os.ReadDir(filepath.Join(journal, "staging"))
 	if err != nil {
 		return nil, err
@@ -62,7 +84,17 @@ func Open(root, journal, id string) (*Service, error) {
 			}
 		}
 	}
-	s := &Service{root: root, journal: journal, id: id, records: map[string]Operation{}}
+	s := &Service{
+		root:           root,
+		journal:        journal,
+		id:             id,
+		callsByID:      map[string]*call{},
+		registered:     map[string]bool{},
+		sched:          newScheduler(),
+		records:        map[string]Operation{},
+		journalSizes:   map[string]int64{},
+		pinnedJournals: map[string]int{},
+	}
 	entries, err := os.ReadDir(journal)
 	if err != nil {
 		return nil, err
@@ -71,24 +103,40 @@ func Open(root, journal, id string) (*Service, error) {
 		if !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(journal, entry.Name()))
+		full := filepath.Join(journal, entry.Name())
+		data, err := os.ReadFile(full)
 		var op Operation
 		if err != nil || json.Unmarshal(data, &op) != nil || !validID(op.ID) {
 			return nil, fail("journal_corrupt")
 		}
 		if op.State == "started" {
 			op.State = "unknown"
+			op.Phase = PhaseTerminal
+			op.WaitReason = ""
 		}
 		if op.State == "unknown" {
 			s.blocked = true
 		}
 		s.records[op.ID] = publicOperation(op)
+		s.journalSizes[op.ID] = int64(len(data))
 		s.sequence = max(s.sequence, op.Sequence)
 	}
 	return s, nil
 }
 
 func validID(id string) bool {
+	if len(id) == 0 || len(id) > 160 {
+		return false
+	}
+	for _, c := range id {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.') {
+			return false
+		}
+	}
+	return true
+}
+
+func validStrictID(id string) bool {
 	if len(id) == 0 || len(id) > 160 {
 		return false
 	}
@@ -103,13 +151,26 @@ func validID(id string) bool {
 func (s *Service) ID() string   { return s.id }
 func (s *Service) Root() string { return s.root }
 
+func (s *Service) busyLocked() bool {
+	s.sched.mu.Lock()
+	active := s.sched.hasNonTerminalLocked()
+	s.sched.mu.Unlock()
+	return active || len(s.callsByID) > 0 || s.turn != "" || s.publicMutating
+}
+
 func (s *Service) Status() Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	state := Status{ID: s.id, Supported: platformSupported(), Authorized: s.enabled, Policy: s.policy,
-		Ready: platformSupported() && s.enabled && !s.blocked, Busy: s.active != nil || s.turn != "", Enforcement: "restricted_service",
+	state := Status{
+		ID: s.id, Supported: platformSupported(), Authorized: s.enabled, Policy: s.policy,
+		Ready: platformSupported() && s.enabled && !s.blocked, Busy: s.busyLocked(), Enforcement: "restricted_service",
 		Capabilities: []string{"files.read", "files.mutate", "files.discover", "memory.search", "progress", "artifacts.read", "versions.restore"},
-		Limits:       map[string]int64{"file_bytes": MaxFileBytes, "batch_bytes": MaxBatchBytes, "batch_targets": MaxTargets, "workspace_bytes": MaxWorkspaceBytes, "workspace_files": MaxWorkspaceFiles, "turn_calls": MaxCalls, "page_bytes": PageBytes}}
+		Limits: map[string]int64{
+			"file_bytes": MaxFileBytes, "batch_bytes": MaxBatchBytes, "batch_targets": MaxTargets,
+			"workspace_bytes": MaxWorkspaceBytes, "workspace_files": MaxWorkspaceFiles, "turn_calls": MaxCalls,
+			"page_bytes": PageBytes, "active_calls": MaxActiveCalls, "modifying_calls": MaxModifyingCalls, "queued_calls": MaxQueuedCalls,
+		},
+	}
 	if !state.Supported {
 		state.Reason = "unsupported_platform"
 	} else if !state.Authorized {
@@ -123,7 +184,7 @@ func (s *Service) Status() Status {
 func (s *Service) Configure(enabled bool, policy string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.active != nil || s.turn != "" {
+	if s.busyLocked() {
 		return fail("busy")
 	}
 	s.enabled, s.policy = enabled, policy
@@ -144,43 +205,73 @@ func (s *Service) AcquireTurnScope(scope Scope) error {
 	if s.blocked {
 		return fail("reconciliation_required")
 	}
-	if s.turn == turn {
+	if s.turn == turn && turn != "" {
 		return nil
 	}
-	if !validID(turn) || s.turn != "" || s.active != nil {
+	if !validStrictID(turn) || s.turn != "" || s.publicMutating || len(s.callsByID) > 0 {
 		return fail("busy")
 	}
 	s.turn, s.scope, s.calls = turn, scope, 0
 	return nil
 }
 
-// ReleaseTurn requires a trusted adapter's proof of native termination. An
-// unfinished callback leaves a durable unknown operation and blocks mutation.
+// ReleaseTurn requires a trusted adapter's proof of native termination.
 func (s *Service) ReleaseTurn(turn string, stopped bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.turn != turn {
 		return nil
 	}
-	if !stopped || s.active != nil {
+	s.sched.mu.Lock()
+	hasActive := false
+	for _, e := range s.sched.entries {
+		if !e.system && e.scope.Turn == turn && e.phase != PhaseTerminal {
+			hasActive = true
+			break
+		}
+	}
+	s.sched.mu.Unlock()
+	if !stopped || hasActive || len(s.callsByID) > 0 {
 		return fail("cleanup_pending")
 	}
+	s.sched.mu.Lock()
+	for id, b := range s.sched.batches {
+		if b.scope.Turn == turn {
+			delete(s.sched.batches, id)
+		}
+	}
+	s.sched.mu.Unlock()
 	s.turn = ""
 	return nil
 }
 
-func (s *Service) Begin(req Begin) (Operation, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !validID(req.ID) || req.Fingerprint == "" || len(req.Tool) > 100 {
+func validateProgress(steps []Step) error {
+	if len(steps) > 20 {
+		return fail("progress_limit")
+	}
+	for _, step := range steps {
+		if len(step.Text) > 200 || !utf8.ValidString(step.Text) || (step.Status != "pending" && step.Status != "in_progress" && step.Status != "completed") {
+			return fail("progress_limit")
+		}
+	}
+	return nil
+}
+
+func (s *Service) Register(req Register) (Operation, error) {
+	if !validStrictID(req.ID) || !validStrictID(req.Batch) || req.InputFingerprint == "" || len(req.Tool) > 100 {
 		return Operation{}, fail("invalid_request")
 	}
+	if _, ok := LookupDescriptor(req.Tool); !ok {
+		return Operation{}, fail("unsupported_tool")
+	}
+	if err := validateProgress(req.Progress); err != nil {
+		return Operation{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if prior, ok := s.records[req.ID]; ok {
-		if prior.Fingerprint != req.Fingerprint || prior.Scope != req.Scope {
+		if prior.Scope != req.Scope {
 			return Operation{}, fail("identity_conflict")
-		}
-		if prior.State == "started" {
-			return publicOperation(prior), fail("operation_pending")
 		}
 		return publicOperation(prior), nil
 	}
@@ -190,280 +281,341 @@ func (s *Service) Begin(req Begin) (Operation, error) {
 	if s.blocked {
 		return Operation{}, fail("reconciliation_required")
 	}
-	if s.active != nil || (s.turn != "" && s.turn != req.Scope.Turn) || (req.Scope.Turn != "" && s.turn != req.Scope.Turn) {
+	if s.turn == "" || req.Scope.Turn != s.turn {
 		return Operation{}, fail("busy")
 	}
-	if s.turn != "" && s.calls >= MaxCalls {
+	if s.calls >= MaxCalls {
 		return Operation{}, fail("call_limit")
 	}
-	if len(req.Targets) > MaxTargets || req.NewBytes < 0 || req.NewBytes > MaxBatchBytes {
-		return Operation{}, fail("batch_limit")
-	}
-	if len(req.Progress) > 20 {
-		return Operation{}, fail("progress_limit")
-	}
-	for _, step := range req.Progress {
-		if len(step.Text) > 200 || !utf8.ValidString(step.Text) || (step.Status != "pending" && step.Status != "in_progress" && step.Status != "completed") {
-			return Operation{}, fail("progress_limit")
-		}
-	}
-	if err := s.pruneLocked(); err != nil {
+	if err := s.pruneAndReserveActivityLocked(MaxOperationBytes); err != nil {
 		return Operation{}, err
 	}
-	c := &call{held: map[string]*heldFile{}, remove: map[string]bool{}, newBytes: req.NewBytes,
-		op: Operation{ID: req.ID, Scope: req.Scope, Tool: req.Tool, Fingerprint: req.Fingerprint, Sequence: s.sequence + 1, Started: time.Now().UTC(), State: "started", Changes: []Change{}, Progress: req.Progress}}
-	if err := s.capture(c, req.Targets); err != nil {
-		closeCall(c)
-		return Operation{}, err
-	}
-	metadata, _ := json.Marshal(publicOperation(c.op))
-	// Leave room for terminal timestamps, outcome codes and reconciliation text.
-	if len(metadata) > MaxOperationBytes-3*1024 {
-		closeCall(c)
-		return Operation{}, fail("activity_limit")
-	}
-	if len(req.Targets) > 0 {
-		snapshot, _ := json.Marshal(c.op)
-		growth := max(0, c.newBytes-c.oldBytes)
-		if req.Tool == "edit" || req.Tool == "apply_patch" {
-			// Native algorithms determine the exact result. Their conservative
-			// expansion bound must not block shrinking an already-full workspace.
-			// Write checks the actual size before any filesystem change.
-			growth = 0
+	s.sched.mu.Lock()
+	if existing, ok := s.sched.entries[req.ID]; ok {
+		if existing.inputFingerprint != req.InputFingerprint || existing.scope != req.Scope {
+			s.sched.mu.Unlock()
+			return Operation{}, fail("identity_conflict")
 		}
-		if err := s.reserveLocked(growth, c.newFiles+len(c.op.ParentDirectories), int64(len(snapshot))); err != nil {
-			closeCall(c)
-			return Operation{}, err
-		}
+		s.sched.mu.Unlock()
+		return s.records[req.ID], nil
 	}
-	if err := s.persist(c.op); err != nil {
-		closeCall(c)
-		return Operation{}, err
+	if s.sched.queuedCountLocked() >= s.sched.maxQueued {
+		s.sched.mu.Unlock()
+		return Operation{}, fail("queue_limit")
 	}
-	s.sequence, s.active = c.op.Sequence, c
-	s.records[c.op.ID] = publicOperation(c.op)
+	b := s.sched.batches[req.Batch]
+	if b == nil {
+		b = &schedBatch{id: req.Batch, scope: req.Scope}
+		s.sched.batches[req.Batch] = b
+	} else if b.sealed || b.scope != req.Scope {
+		s.sched.mu.Unlock()
+		return Operation{}, fail("invalid_batch")
+	}
+	s.sched.nextTicket++
+	entry := &schedEntry{
+		id: req.ID, batch: req.Batch, order: req.Order, ticket: s.sched.nextTicket,
+		scope: req.Scope, tool: req.Tool, inputFingerprint: req.InputFingerprint,
+		newBytes: req.NewBytes, progress: req.Progress, phase: PhaseRegistered, waitReason: "batch_seal",
+	}
+	s.sched.entries[req.ID] = entry
+	b.ids = append(b.ids, req.ID)
+	s.sched.mu.Unlock()
+
 	s.calls++
-	return publicOperation(c.op), nil
+	s.registered[req.ID] = true
+	s.reservedActivityBytes += MaxOperationBytes
+	s.sequence++
+	op := Operation{
+		ID: req.ID, Scope: req.Scope, Tool: req.Tool, Fingerprint: req.InputFingerprint,
+		Sequence: s.sequence, Started: time.Now().UTC(), State: "started", Phase: PhaseRegistered,
+		WaitReason: "batch_seal", Changes: []Change{}, Progress: req.Progress,
+	}
+	s.records[req.ID] = publicOperation(op)
+	s.recordTrace(req.ID, req.Tool, "registered", "", DefaultRoot, "", "")
+	return publicOperation(op), nil
 }
 
-func (s *Service) capture(c *call, targets []Target) error {
-	// Stable order also makes future per-file locking safe against deadlock.
-	targets = append([]Target(nil), targets...)
-	sort.Slice(targets, func(i, j int) bool { return pathKey(targets[i].Path) < pathKey(targets[j].Path) })
-	var oldBytes int64
-	parents := map[string]string{}
-	writable := 0
-	for _, target := range targets {
-		name, err := relative(target.Path, false)
+func (s *Service) SealBatch(req SealBatch) error {
+	if !validStrictID(req.Batch) || len(req.Items) == 0 {
+		return fail("invalid_batch")
+	}
+	byID, alreadySealed, err := s.validateBatchSealHeader(req)
+	if err != nil || alreadySealed {
+		return err
+	}
+	plans, itemFailures := s.prepareSealPlans(req.Items)
+	return s.commitSealedBatch(req.Batch, byID, plans, itemFailures)
+}
+
+func (s *Service) validateBatchSealHeader(req SealBatch) (map[string]SealItem, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.enabled || req.Scope.Policy != s.policy || !platformSupported() {
+		return nil, false, fail("not_authorized")
+	}
+	if s.blocked {
+		s.abortBatchLocked(req.Batch, "reconciliation_required")
+		return nil, false, fail("reconciliation_required")
+	}
+	s.sched.mu.Lock()
+	b := s.sched.batches[req.Batch]
+	if b == nil || b.scope != req.Scope {
+		s.sched.mu.Unlock()
+		return nil, false, fail("invalid_batch")
+	}
+	if b.sealed {
+		s.sched.mu.Unlock()
+		return nil, true, nil
+	}
+	byID := make(map[string]SealItem, len(req.Items))
+	for _, item := range req.Items {
+		if _, dup := byID[item.ID]; dup {
+			s.sched.mu.Unlock()
+			s.abortBatchLocked(req.Batch, "invalid_batch")
+			return nil, false, fail("invalid_batch")
+		}
+		byID[item.ID] = item
+	}
+	if len(byID) != len(b.ids) {
+		s.sched.mu.Unlock()
+		s.abortBatchLocked(req.Batch, "invalid_batch")
+		return nil, false, fail("invalid_batch")
+	}
+	s.sched.mu.Unlock()
+	return byID, false, nil
+}
+
+func (s *Service) prepareSealPlans(items []SealItem) (map[string]PreparedPlan, map[string]string) {
+	plans := make(map[string]PreparedPlan, len(items))
+	itemFailures := make(map[string]string)
+	for _, item := range items {
+		if item.Aborted {
+			continue
+		}
+		if item.Fingerprint == "" || item.NewBytes < 0 || item.NewBytes > MaxBatchBytes || len(item.Targets) > MaxTargets {
+			itemFailures[item.ID] = "batch_limit"
+			continue
+		}
+		if err := validateProgress(item.Progress); err != nil {
+			itemFailures[item.ID] = Code(err)
+			continue
+		}
+		plan, err := PrepareTool(item.Tool, DescriptorInput{WorkspaceRoot: s.root, Targets: item.Targets, Path: item.Path, NewBytes: item.NewBytes})
 		if err != nil {
-			return err
+			itemFailures[item.ID] = Code(err)
+			continue
 		}
-		if _, exists := c.held[pathKey(name)]; exists {
-			return fail("duplicate_target")
-		}
-		h, err := hold(s.root, name, true, true)
-		if err != nil {
-			return err
-		}
-		h.staging = filepath.Join(s.journal, "staging")
-		c.held[pathKey(name)] = h
-		c.remove[pathKey(name)] = target.Remove
-		change := Change{Path: name, Before: MissingRevision, After: MissingRevision, State: "unchanged", Restorable: true}
-		if h.file != nil {
-			change.Content, err = h.bytes(MaxFileBytes)
-			if err != nil {
-				return err
-			}
-			if !utf8.Valid(change.Content) {
-				return fail("not_utf8")
-			}
-			change.Before = revision(change.Content)
-			change.After = change.Before
-		}
-		if target.Expected != "" && target.Expected != change.Before {
-			return fail("revision_conflict")
-		}
-		oldBytes += int64(len(change.Content))
-		if !target.Remove {
-			writable++
-			c.oldBytes += int64(len(change.Content))
-			if h.file == nil {
-				c.newFiles++
-			}
-			for _, parent := range h.missing {
-				relative, _ := filepath.Rel(s.root, parent)
-				parents[pathKey(relative)] = filepath.ToSlash(relative)
-			}
-		}
-		c.op.Changes = append(c.op.Changes, change)
+		plans[item.ID] = plan
 	}
-	if writable == 0 {
-		c.newBytes = 0
-	} else if c.op.Tool == "apply_patch" {
-		// A move writes the source bytes to another target before removal. Its
-		// source contributes to the result bound, but is not replacement credit
-		// for workspace capacity while both names can exist.
-		c.newBytes += oldBytes
-	} else if c.op.Tool == "edit" {
-		c.newBytes += c.oldBytes
+	return plans, itemFailures
+}
+
+func hasPriorBatchMutation(plan PreparedPlan, priorMutated map[string]bool) bool {
+	if plan.Semantic != SemanticFileWrite {
+		return false
 	}
-	for _, parent := range parents {
-		c.op.ParentDirectories = append(c.op.ParentDirectories, parent)
+	for _, t := range plan.Targets {
+		if priorMutated[pathKey(t.Path)] {
+			return true
+		}
 	}
-	sort.Strings(c.op.ParentDirectories)
-	if oldBytes+c.newBytes > MaxBatchBytes {
-		return fail("batch_limit")
+	return false
+}
+
+func (s *Service) commitSealedBatch(batchID string, byID map[string]SealItem, plans map[string]PreparedPlan, itemFailures map[string]string) error {
+	type rejectedItem struct{ id, tool, fp, reason string }
+	var rejected []rejectedItem
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sched.mu.Lock()
+	b := s.sched.batches[batchID]
+	if b == nil {
+		s.sched.mu.Unlock()
+		return fail("invalid_batch")
+	}
+	if b.sealed {
+		s.sched.mu.Unlock()
+		return nil
+	}
+	priorMutated := make(map[string]bool, len(b.ids))
+	for _, id := range b.ids {
+		e := s.sched.entries[id]
+		item := byID[id]
+		if e == nil {
+			continue
+		}
+		if failReason, bad := itemFailures[id]; bad {
+			s.sched.releaseEntryLocked(e)
+			rejected = append(rejected, rejectedItem{id: id, tool: item.Tool, fp: item.Fingerprint, reason: failReason})
+			continue
+		}
+		if item.Aborted || e.admissionClosed {
+			reason := item.Reason
+			if reason == "" {
+				reason = e.cancelReason
+			}
+			s.sched.releaseEntryLocked(e)
+			rejected = append(rejected, rejectedItem{id: id, tool: item.Tool, fp: item.Fingerprint, reason: reason})
+			continue
+		}
+		plan := plans[id]
+		if hasPriorBatchMutation(plan, priorMutated) {
+			s.sched.releaseEntryLocked(e)
+			rejected = append(rejected, rejectedItem{id: id, tool: item.Tool, fp: item.Fingerprint, reason: "conflicting_batch_write"})
+			s.recordTrace(id, item.Tool, "rejected", "", DefaultRoot, "conflicting_batch_write", "")
+			continue
+		}
+		if plan.Modifying {
+			for _, t := range plan.Targets {
+				priorMutated[pathKey(t.Path)] = true
+			}
+		}
+		s.sched.applyClaimFaults(&plan)
+		e.tool, e.plan, e.fingerprint, e.newBytes, e.progress = item.Tool, plan, item.Fingerprint, item.NewBytes, item.Progress
+		e.sealed, e.waitReason = true, ""
+		if op, ok := s.records[id]; ok {
+			s.sequence++
+			op.Sequence = s.sequence
+			op.Tool, op.Fingerprint, op.Progress, op.WaitReason = item.Tool, item.Fingerprint, item.Progress, ""
+			s.records[id] = op
+		}
+		s.recordTrace(id, item.Tool, "sealed", "", DefaultRoot, "", "")
+	}
+	b.sealed = true
+	s.sched.pruneBatchIfEmptyLocked(batchID, b)
+	s.sched.broadcastLocked()
+	s.sched.mu.Unlock()
+	for _, r := range rejected {
+		if op, ok := s.records[r.id]; ok && op.State == "started" {
+			if r.tool != "" {
+				op.Tool = r.tool
+			}
+			if r.fp != "" {
+				op.Fingerprint = r.fp
+			}
+			s.records[r.id] = op
+		}
+		s.releaseRegisteredSlotLocked(r.id, r.reason)
 	}
 	return nil
 }
 
-func closeCall(c *call) {
-	for _, h := range c.held {
-		h.close()
+func (s *Service) abortBatchLocked(batchID, reason string) {
+	s.sched.mu.Lock()
+	b := s.sched.batches[batchID]
+	if b == nil {
+		s.sched.mu.Unlock()
+		return
+	}
+	ids := append([]string(nil), b.ids...)
+	delete(s.sched.batches, batchID)
+	for _, id := range ids {
+		if e := s.sched.entries[id]; e != nil && !e.granted {
+			s.sched.releaseEntryLocked(e)
+		}
+	}
+	s.sched.mu.Unlock()
+	for _, id := range ids {
+		s.releaseRegisteredSlotLocked(id, reason)
 	}
 }
 
-func (s *Service) persist(op Operation) error {
+func (s *Service) releaseRegisteredSlotLocked(id, reason string) {
+	if s.reservedActivityBytes >= MaxOperationBytes {
+		s.reservedActivityBytes -= MaxOperationBytes
+	} else {
+		s.reservedActivityBytes = 0
+	}
+	wasRegistered := s.registered[id]
+	delete(s.registered, id)
+	if op, ok := s.records[id]; ok && op.State == "started" && s.callsByID[id] == nil {
+		if !wasRegistered {
+			delete(s.records, id)
+			return
+		}
+		if reason == "" {
+			reason = "cancelled"
+		}
+		if reason == "cancelled" || reason == "runtime_stopped" {
+			op.State = "cancelled"
+		} else {
+			op.State = "failed"
+		}
+		s.sequence++
+		op.Sequence = s.sequence
+		op.Phase = PhaseTerminal
+		op.WaitReason = ""
+		op.Detail = reason
+		op.Finished = time.Now().UTC()
+		if rawBytes, err := s.persist(op); err == nil {
+			s.journalSizes[id] = int64(len(rawBytes))
+		}
+		s.records[id] = publicOperation(op)
+	}
+}
+
+func (s *Service) persist(op Operation) ([]byte, error) {
 	data, err := json.Marshal(op)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return config.AtomicFile(filepath.Join(s.journal, op.ID+".json"), data, 0600)
+	return data, config.AtomicFile(filepath.Join(s.journal, op.ID+".json"), data, 0600)
 }
 
-func (s *Service) Write(id, name string, data []byte, exclusive bool) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	c, h, err := s.mutable(id, name)
-	if err != nil {
-		return "", err
-	}
-	if exclusive && h.file != nil && !h.removed {
-		return "exists", nil
-	}
-	if c.remove[pathKey(name)] {
-		return "", fail("undeclared_write")
-	}
-	if len(data) > MaxFileBytes || !utf8.Valid(data) {
-		return "", fail("file_limit")
-	}
-	if c.written+int64(len(data)) > c.newBytes {
-		return "", fail("batch_limit")
-	}
-	if err := h.pinAvailableParents(); err != nil {
-		return "", err
-	}
-	// A mixed batch may grow an early file before shrinking a later one.
-	// Recheck that transient growth too, while allowing shrinking recovery.
-	var oldSize int64
-	newFiles := len(h.missing)
-	if h.file != nil {
-		info, statErr := h.file.Stat()
-		if statErr != nil {
-			return "", statErr
-		}
-		oldSize = info.Size()
-	} else {
-		newFiles++
-	}
-	if err := s.reserveWorkspaceLocked(max(0, int64(len(data))-oldSize), newFiles); err != nil {
-		return "", err
-	}
-	if err = h.write(data); err != nil {
-		return "", err
-	}
-	c.written += int64(len(data))
-	return "created", nil
+func (s *Service) EnableTrace(limit int) {
+	s.traceMu.Lock()
+	defer s.traceMu.Unlock()
+	s.traceEnabled = limit > 0
+	s.traceLimit = limit
+	s.traceSeq = 0
+	s.trace = nil
 }
 
-func (s *Service) Remove(id, name string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, h, err := s.mutable(id, name)
-	if err != nil {
-		return err
-	}
-	return h.remove()
+func (s *Service) TraceEvents() []TraceEvent {
+	s.traceMu.Lock()
+	defer s.traceMu.Unlock()
+	return append([]TraceEvent(nil), s.trace...)
 }
 
-func (s *Service) mutable(id, name string) (*call, *heldFile, error) {
-	name, err := relative(name, false)
-	if err != nil {
-		return nil, nil, err
-	}
-	if s.active == nil || s.active.op.ID != id {
-		return nil, nil, fail("invalid_call")
-	}
-	h := s.active.held[pathKey(name)]
-	if h == nil {
-		return nil, nil, fail("undeclared_target")
-	}
-	return s.active, h, nil
+func (s *Service) SetIOHook(fn func(callID, tool string, eff Effect, relPath string)) {
+	s.traceMu.Lock()
+	s.ioHook = fn
+	s.traceMu.Unlock()
 }
 
-func (s *Service) End(id, state, detail string) (Operation, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.active == nil || s.active.op.ID != id {
-		if op, ok := s.records[id]; ok {
-			return publicOperation(op), nil
-		}
-		return Operation{}, fail("not_found")
-	}
-	if state != "completed" && state != "failed" && state != "cancelled" && state != "unknown" {
-		return Operation{}, fail("invalid_state")
-	}
-	c := s.active
-	for i := range c.op.Changes {
-		change := &c.op.Changes[i]
-		h := c.held[pathKey(change.Path)]
-		after, conflict, err := h.observe()
-		change.After = after
-		if err != nil {
-			state = "unknown"
-		}
-		if change.After != change.Before {
-			change.State = "changed"
-		}
-		if conflict {
-			change.State = "conflict"
-		}
-	}
-	c.op.State, c.op.Finished = state, time.Now().UTC()
-	s.sequence++
-	c.op.Sequence = s.sequence
-	// Detail is a fixed code or bounded user reconciliation note, not tool text.
-	if len(detail) > 2048 {
-		detail = detail[:2048]
-	}
-	c.op.Detail = detail
-	err := s.persist(c.op)
-	if err != nil {
-		c.op.State = "unknown"
-	}
-	s.records[id] = publicOperation(c.op)
-	if c.op.State == "unknown" {
-		s.blocked = true
-	}
-	closeCall(c)
-	s.active = nil
-	if err == nil {
-		err = s.pruneLocked()
-	}
-	return publicOperation(c.op), err
+func (s *Service) SetEndHook(fn func(callID, stage string)) {
+	s.traceMu.Lock()
+	s.endHook = fn
+	s.traceMu.Unlock()
 }
 
-// RuntimeStopped is called only after the owned process tree has exited.
-func (s *Service) RuntimeStopped() error {
-	s.mu.Lock()
-	active := s.active
-	s.mu.Unlock()
-	var err error
-	if active != nil {
-		_, err = s.End(active.op.ID, "unknown", "runtime_stopped")
+func (s *Service) recordTrace(callID, tool, stage string, eff Effect, root, key, access string) {
+	s.traceMu.Lock()
+	defer s.traceMu.Unlock()
+	if !s.traceEnabled {
+		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.turn = ""
-	return err
+	seq := atomic.AddInt64(&s.traceSeq, 1)
+	if len(s.trace) < s.traceLimit {
+		s.trace = append(s.trace, TraceEvent{Seq: seq, CallID: callID, Tool: tool, Stage: stage, Effect: string(eff), Root: root, Key: key, Access: access})
+	}
+}
+
+func (s *Service) fireIOHook(callID, tool string, eff Effect, relPath string) {
+	s.traceMu.Lock()
+	fn := s.ioHook
+	s.traceMu.Unlock()
+	if fn != nil {
+		fn(callID, tool, eff, relPath)
+	}
+}
+
+func (s *Service) fireEndHook(callID, stage string) {
+	s.traceMu.Lock()
+	fn := s.endHook
+	s.traceMu.Unlock()
+	if fn != nil {
+		fn(callID, stage)
+	}
 }

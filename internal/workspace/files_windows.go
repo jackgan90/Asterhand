@@ -87,7 +87,42 @@ func openChild(parent *os.File, name string, access, share uint32, createDirecto
 		}
 		return nil, err
 	}
-	return checkedHandle(handle, filepath.Join(parent.Name(), name))
+	f, err := checkedHandle(handle, filepath.Join(parent.Name(), name))
+	if err != nil {
+		return nil, err
+	}
+	if actual, nameErr := canonicalHandleBase(windows.Handle(f.Fd())); nameErr != nil || !strings.EqualFold(actual, name) {
+		f.Close()
+		if nameErr != nil {
+			return nil, nameErr
+		}
+		return nil, fail("invalid_path")
+	}
+	return f, nil
+}
+
+func canonicalHandleBase(h windows.Handle) (string, error) {
+	const fileNameNormalized = uint32(0)
+	var stack [windows.MAX_PATH]uint16
+	n, err := windows.GetFinalPathNameByHandle(h, &stack[0], uint32(len(stack)), fileNameNormalized)
+	if err != nil || n == 0 {
+		if err != nil {
+			return "", err
+		}
+		return "", fail("invalid_path")
+	}
+	if n < uint32(len(stack)) {
+		return filepath.Base(windows.UTF16ToString(stack[:n])), nil
+	}
+	buf := make([]uint16, n+1)
+	written, err := windows.GetFinalPathNameByHandle(h, &buf[0], uint32(len(buf)), fileNameNormalized)
+	if err != nil || written == 0 || written >= uint32(len(buf)) {
+		if err != nil {
+			return "", err
+		}
+		return "", fail("invalid_path")
+	}
+	return filepath.Base(windows.UTF16ToString(buf[:written])), nil
 }
 
 func checkedHandle(h windows.Handle, name string) (*os.File, error) {
@@ -202,13 +237,15 @@ func hold(root, name string, writing, createParents bool) (*heldFile, error) {
 		return nil, err
 	}
 	access := uint32(windows.GENERIC_READ)
+	share := uint32(windows.FILE_SHARE_READ)
 	if writing {
 		access |= windows.GENERIC_WRITE | windows.DELETE
+		share = 0
 	}
 	if len(h.missing) > 0 {
 		return h, nil
 	}
-	h.file, err = openChild(h.parents[len(h.parents)-1], filepath.Base(h.name), access, 0, false)
+	h.file, err = openChild(h.parents[len(h.parents)-1], filepath.Base(h.name), access, share, false)
 	if os.IsNotExist(err) {
 		return h, nil
 	}

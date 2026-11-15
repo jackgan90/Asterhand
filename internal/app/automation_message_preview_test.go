@@ -15,9 +15,9 @@ import (
 
 func TestAutomationMessagePreviewPreservesOrderedToolsAndTextSegmentIDs(t *testing.T) {
 	message := conversation.Message{ID: "message-00000001", Role: "assistant", Blocks: []conversation.Block{
-		{Type: "tool", Tool: &wire.ToolActivity{ID: "first-call", Tool: "ls", State: "completed"}},
+		{Type: "tool", Tool: &wire.ToolActivity{ID: "first-call", Tool: "list_dir", State: "completed"}},
 		{Type: "text", ID: "message-00000001_text_1", Text: strings.Repeat("中🙂", 200)},
-		{Type: "tool", Tool: &wire.ToolActivity{ID: "second-call", Tool: "read", State: "failed"}},
+		{Type: "tool", Tool: &wire.ToolActivity{ID: "second-call", Tool: "read_file", State: "failed"}},
 		{Type: "text", ID: "message-00000001_text_3", Text: "still independently readable"},
 	}}
 	preview := messagePreview(message)
@@ -49,7 +49,7 @@ func TestAutomationOrderedHistoryAndSegmentReadUseTheConversationGrant(t *testin
 	runtime := &automationChatRuntime{segments: map[string]string{segment: text}, messages: []conversation.Message{
 		{ID: "native-message-000001", Role: "assistant", Blocks: []conversation.Block{
 			{Type: "text", ID: "native-message-000001_text_0", Text: "before"},
-			{Type: "tool", Tool: &wire.ToolActivity{ID: "native-call-000001", Tool: "read", State: "completed"}},
+			{Type: "tool", Tool: &wire.ToolActivity{ID: "native-call-000001", Tool: "read_file", State: "completed"}},
 			{Type: "text", ID: segment, Text: text},
 		}},
 	}}

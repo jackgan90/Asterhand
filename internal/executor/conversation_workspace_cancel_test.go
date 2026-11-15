@@ -49,7 +49,7 @@ func TestNativeWorkspaceCancellationRetainsCompletedFiles(t *testing.T) {
 		finish := "stop"
 		if index == 1 {
 			args, _ := json.Marshal(map[string]any{"path": "kept.txt", "content": "Written before stop"})
-			delta = map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{"index": 0, "id": "cancel-write", "type": "function", "function": map[string]any{"name": "write", "arguments": string(args)}}}}
+			delta = map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{"index": 0, "id": "cancel-write", "type": "function", "function": map[string]any{"name": "write_file", "arguments": string(args)}}}}
 			finish = "tool_calls"
 		}
 		w.Header().Set("Content-Type", "text/event-stream")

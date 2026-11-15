@@ -57,7 +57,7 @@ export class ChatWindow {
 
   pendingTools() {
     return this.messages.some(message => message.blocks?.some(block => block.type === 'tool' &&
-      ['started', 'unknown'].includes(block.tool?.state)));
+      ['queued', 'started', 'unknown'].includes(block.tool?.state)));
   }
 
   makeRoom(id, requestedBytes) {

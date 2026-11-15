@@ -7,8 +7,8 @@ import {RenderNode, rendererDocument, withClass} from './chat-renderer-fixture.m
 
 const tool = (id, name, state = 'started') => ({type: 'tool', tool: {id, tool: name, state}});
 const mixed = () => ({id: 'mixed', role: 'assistant', blocks: [
-  tool('first-call', 'ls'), {type: 'text', id: 'part-one', text: 'first words'},
-  tool('second-call', 'read'), {type: 'text', id: 'part-two', text: 'last words', truncated: true},
+  tool('first-call', 'list_dir'), {type: 'text', id: 'part-one', text: 'first words'},
+  tool('second-call', 'read_file'), {type: 'text', id: 'part-two', text: 'last words', truncated: true},
 ]});
 
 test('tools and text share native order and status updates preserve their DOM positions', t => {
@@ -21,7 +21,7 @@ test('tools and text share native order and status updates preserve their DOM po
   render([message, final]);
   const body = withClass(container, 'chat-message-body')[0];
   assert.deepEqual(body.children.map(node => node.className), ['tool-activity', 'chat-message-text', 'tool-activity', 'chat-message-text']);
-  assert.match(container.textContent, /ls.*first words.*read.*last words.*final answer/s);
+  assert.match(container.textContent, /list_dir.*first words.*read_file.*last words.*final answer/s);
   const [firstCall, firstText, secondCall] = body.children;
   message.blocks[0].tool.state = 'completed';
   message.blocks[2].tool.state = 'failed';
@@ -44,11 +44,43 @@ test('tool-only messages contain the tool itself without an empty author bubble'
   rendererDocument(t);
   const container = new RenderNode('main');
   const render = messageRenderer(container, {copy() {}, expand() {}});
-  render([{id: 'only-call', role: 'assistant', blocks: [tool('call', 'write', 'completed')]}]);
+  render([{id: 'only-call', role: 'assistant', blocks: [tool('call', 'write_file', 'completed')]}]);
   assert.equal(withClass(container, 'chat-author').length, 0);
   assert.equal(withClass(container, 'chat-tool-only').length, 1);
   assert.equal(withClass(container, 'tool-activity').length, 1);
-  assert.match(container.textContent, /write/);
+  assert.match(container.textContent, /write_file/);
+  render.dispose();
+});
+
+test('out-of-order parallel tool completions preserve original assistant message call order', t => {
+  rendererDocument(t); setLocale('zh-CN');
+  const container = new RenderNode('main');
+  const render = messageRenderer(container, {copy() {}, expand() {}});
+  const batchMessage = {
+    id: 'parallel-batch',
+    role: 'assistant',
+    blocks: [
+      tool('call-1', 'write_file', 'started'),
+      tool('call-2', 'write_file', 'queued'),
+      tool('call-3', 'read_file', 'started'),
+    ],
+  };
+  render([batchMessage]);
+  const body = withClass(container, 'chat-message-body')[0];
+  assert.deepEqual(body.children.map(node => node.dataset.callId), ['call-1', 'call-2', 'call-3']);
+  assert.match(body.children[1].textContent, /排队中/);
+  // Call 3 finishes first, call 2 starts while call 1 is still running.
+  batchMessage.blocks[2].tool.state = 'completed';
+  batchMessage.blocks[1].tool.state = 'started';
+  render([batchMessage]);
+  assert.deepEqual(body.children.map(node => node.dataset.callId), ['call-1', 'call-2', 'call-3']);
+  assert.deepEqual(body.children.map(node => node.dataset.state), ['started', 'started', 'completed']);
+  // Call 2 finishes before call 1.
+  batchMessage.blocks[1].tool.state = 'completed';
+  batchMessage.blocks[0].tool.state = 'completed';
+  render([batchMessage]);
+  assert.deepEqual(body.children.map(node => node.dataset.callId), ['call-1', 'call-2', 'call-3']);
+  assert.deepEqual(body.children.map(node => node.dataset.state), ['completed', 'completed', 'completed']);
   render.dispose();
 });
 

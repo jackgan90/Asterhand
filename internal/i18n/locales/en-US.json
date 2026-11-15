@@ -966,6 +966,7 @@
   "err.workspace.busy": "The workspace is busy. Stop the reply and wait for file operations to finish.",
   "err.workspace.unsupported": "This runtime does not support workspace tools.",
   "common.workspace.progress_declared": "Assistant-declared progress",
+  "common.workspace.state.queued": "Queued",
   "common.workspace.state.started": "Running",
   "common.workspace.state.completed": "Completed",
   "common.workspace.state.failed": "Failed",

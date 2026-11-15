@@ -55,7 +55,7 @@ func (a *App) registerAutomationWorkspace(r *automation.Registry) {
 			if err != nil {
 				return automation.Outcome{}, err
 			}
-			page, err := files.Search(v.Path, "", v.Cursor, false, false)
+			page, err := files.SearchContext(ctx, v.Path, "", v.Cursor, false, false)
 			return automation.Outcome{Data: page}, workspacePublicError(err)
 		})
 	automation.Register(r, automation.Definition{Name: "workspace_files.search", Description: "Find files by literal filename or content with bounded scanning and pagination", Role: "read"}, nil, nil,
@@ -64,7 +64,7 @@ func (a *App) registerAutomationWorkspace(r *automation.Registry) {
 			if err != nil {
 				return automation.Outcome{}, err
 			}
-			page, err := files.Search(v.Path, v.Query, v.Cursor, v.Content, true)
+			page, err := files.SearchContext(ctx, v.Path, v.Query, v.Cursor, v.Content, true)
 			return automation.Outcome{Data: page}, workspacePublicError(err)
 		})
 	automation.Register(r, automation.Definition{Name: "workspace_files.read", Description: "Read a bounded base64 fragment, checking the expected file revision", Role: "read"}, nil, nil,
@@ -73,7 +73,7 @@ func (a *App) registerAutomationWorkspace(r *automation.Registry) {
 			if err != nil {
 				return automation.Outcome{}, err
 			}
-			data, err := files.Read(v.Path, v.Revision, v.Offset)
+			data, err := files.ReadContext(ctx, v.Path, v.Revision, v.Offset)
 			return automation.Outcome{Data: data}, workspacePublicError(err)
 		})
 	automation.Register(r, automation.Definition{Name: "workspace_files.mutate", Description: "Create, replace, move or remove workspace text files with expected revisions and recoverable versions; a batch may partially complete", Role: "edit", Write: true, Batch: true}, func(v automation.WorkspaceMutate) string { return v.Workspace }, nil,

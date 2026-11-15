@@ -3,6 +3,10 @@ package workspace
 import "encoding/json"
 
 func (s *Service) Mutate(id string, scope Scope, mutations []Mutation) (Operation, error) {
+	return s.MutateWithTool(id, scope, "workspace_files.mutate", mutations)
+}
+
+func (s *Service) MutateWithTool(id string, scope Scope, tool string, mutations []Mutation) (Operation, error) {
 	if len(mutations) == 0 || len(mutations) > MaxTargets {
 		return Operation{}, fail("batch_limit")
 	}
@@ -28,7 +32,7 @@ func (s *Service) Mutate(id string, scope Scope, mutations []Mutation) (Operatio
 		}
 	}
 	encoded, _ := json.Marshal(mutations)
-	op, err := s.Begin(Begin{ID: id, Scope: scope, Tool: "workspace_files.mutate", Targets: targets, NewBytes: bytes, Fingerprint: revision(encoded)})
+	op, err := s.Begin(Begin{ID: id, Scope: scope, Tool: tool, Targets: targets, NewBytes: bytes, Fingerprint: revision(encoded)})
 	if err != nil || op.State != "started" {
 		return op, err
 	}

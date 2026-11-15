@@ -2,6 +2,8 @@
 
 ## 本机助手工具能力优先
 
+[工作区工具细粒度并发](features/workspace-tool-concurrency/plan.md)已完成实现、工程验证、独立审计修复复审与本机真实模型用户验收：保留同工作区工具轮次串行，通过公开插件 SDK 委托九项统一工具，按 `(rootID, relPath)` 资源声明调度轮内文件、记忆与进度并行、同批盲覆写冲突拦截及公平等待，配套逐次低层效果校验、排空式取消、离线重名/别名预检与 `9×9` 组合及变异检测；见[验证方案](features/workspace-tool-concurrency/validation.md)。
+
 [聊天历史顺序与分页修复](features/chat-history-timeline/plan.md)已完成实现、工程验证与本机用户验收：文字/工具按顺序显示，工具状态原位更新，原生跨页与重启读取保留最初消息。
 
 [本机工具计划](features/local-runtime-tools/plan.md)首批已交付，工程回归、独立审查和用户验收完成；采用[正式文件 I/O 桥接](features/local-runtime-tools/preflight.md)，专项验证边界见[验证说明](features/local-runtime-tools/validation.md)。首批包含文件读写/发现、本地记忆、工具活动/产物及文件恢复，暂不执行脚本。之后分批完善本机网络、媒体、隔离执行、委派与后台工作；本机常用原生能力基本完善后再评估远程聊天。其他 harness 保留能力适配边界，本批仅实现 OpenClaw。旧 route/execute 兼容入口暂保留。

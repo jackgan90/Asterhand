@@ -35,14 +35,15 @@ Asterhand 负责目标节点、授权、工作区身份、资源预算、公共�
 ## 首个 OpenClaw 映射
 
 - 持久 Gateway 与 chat.send 路径保持，agents.defaults.workspace 显式指定受管工作区。
-- 文件工具显式白名单 read/write/edit/apply_patch；tools.fs.workspaceOnly 与 tools.exec.applyPatch.workspaceOnly 明确启用；关闭 exec、终端、Code Mode、elevated 和管理命令。验证会话权限覆盖无法解除边界。
-- 不直接启用 coding/full 全集或 group:plugins，不自动接入用户 MCP/个人配置。原生工具最终 schema 必须与解析后的授权相符。
-- 原生文件实现配合同步守卫处理版本记录、预算和禁止的路径形式；受限搜索复用统一工作区校验，以固定库调用或固定可执行文件参数实现，不接受命令字符串。
-- promptplugin 从 toolsAllow: [] 改为当前有效集合/正式原生约束；llm_input 的零工具断言改为集合与修订核对。可选人格补充失败仍可聊天；权限配置失败必须关闭工具，二者不可共用宽松降级。
-- 只启用已审核的 memory 插件，关键词检索；索引仅限工作区记忆，不额外索引会话、home 或其他目录。显式关闭 dreaming、cron、heartbeat、后台学习和 compaction memory flush，首批记忆写入只发生在受监督的用户轮次。
-- 显式 memory_search 先等待已有原生索引同步，再通知记忆文件变更并等待新一代索引发布，避免写入成功后立即检索仍使用旧索引。文件枚举、分块、FTS 与排序仍由原生 memory 实现；不增加周期索引任务。
-- progress_card 只表达模型声明的进度，不替代工具结果或成功证据。原生状态工具若含模型切换/跨会话操作，不作为只读能力整体开放。
-- G1—G5 的原生验证通过后锁定正式字段和接口；以上键名是 2026.10.7 调研映射，不是假定未来版本永久兼容。
+- 工具面统一为可信插件 `asterhand-workspace` 注册的九项无冲突工具：`read_file`、`write_file`、`edit_file`、`apply_file_patch`、`list_dir`、`search_files`、`memory_search`、`memory_get`、`progress_card`；内部委托公开 `openclaw/plugin-sdk/agent-harness` 与 `openclaw/plugin-sdk/memory-host-search`，无需修改 `node_modules/openclaw`。配置层显式开启 `tools.fs.workspaceOnly` 与 `tools.exec.applyPatch.workspaceOnly`，设 `tools.updatePlan: false`，并在 `tools.deny` 禁用 `exec`、`process`、`code_execution`、`skills_read` 与未受监督的 `memory-core` 原始工具导出；会话权限覆盖无法解除工作区边界。
+- 文件工具采用不绑定特定根目录前缀的通用名称，默认相对路径作用于受管工作区根，服务端资源键按 `(rootID, relPath)` 建模，为后续扩展额外授权目录保留统一工具面。
+- 不直接启用 coding/full 全集或 group:plugins，不自动接入用户 MCP/个人配置。原生工具最终 schema 与插件归属由离线预检测试与每次 `llm_input` 钩子双重核对。
+- 原生文件实现通过每调用词法绑定的独立 `SandboxFsBridge` 配合服务端资源调度器处理并发、版本记录、原子预算和禁止的路径形式；`search_files` 复用统一工作区校验与有界扫描预算，不接受命令字符串。
+- promptplugin 将当前有效九项工具注入补充规则并在 `llm_input` 核对集合与策略修订。可选人格补充失败仍可聊天；权限配置失败必须关闭工具，二者不可共用宽松降级。
+- 只启用已审核的 `memory-core` 作为记忆槽位与提示词段落来源，关键词检索；文件枚举严格限制在 `MEMORY.md`、`USER.md` 与 `memory/`，不扫描整个工作区、会话或 home。显式关闭 dreaming、cron、heartbeat、后台学习和 compaction memory flush。
+- 显式 `memory_search` 持有 `memory_sources S` 与 `memory_index X`，等待前序记忆写入收尾后在受监督调用身份与排空计数保护下同步刷新本地索引（`manager.sync({force: true})`）再执行查询，禁用脱离工具上下文的后台监听唤醒；普通非记忆工作区文件读写可与其并行。
+- `progress_card` 持有当前轮次进度资源 `X`，只表达模型声明的进度，与文件及记忆工具并行，不替代工具结果或成功证据。
+- G1—G5 与 S0 公开 SDK 预检通过后锁定正式字段和接口；以上键名是 2026.10.7 实测映射，升级时由离线预检测试拦截漂移。
 
 Hermes 的 read_file/write_file/patch/search_files 可映射相同语义，但只写路径保护不足以满足首批读写双向限制。DeepSeek Harness 的 fs、sandbox、session、interaction 等接口可分别适配；自定义 harness 同样必须证明执行约束。第一批只用异名 fixture 验证边界，不宣称支持其他产品。
 
@@ -72,7 +73,7 @@ workspace 租约只协调节点内入口；外部程序仍可同时改动普通�
 
 G3 必须在真实 Windows 上证明所选原生实现能在该保护下正常写入，外部竞争得到明确冲突/拒绝；用共享模式把原生工具自身一并挡住不算通过。锁获取受操作预算限制，取消/失败按实际收尾释放资源。无法配合的写入能力保持不可用，按计划重新评估范围，不自行重写原生工具。
 
-固定包宿主工具的调用前快照不能保护外部竞争版本，共享锁又会拒绝原生修改，因此实际使用正式 `createFsBridge` 接入窄文件服务。Windows 服务从读取前像到发布结果持续持有目标及父目录句柄，阻止原地写入、替换和父目录改名。修改写入私有新文件，将旧文件移入受管暂存目录，再以不可覆盖的句柄重命名发布；提交前检查目标是否仍为空。Windows 允许外部进程为已打开文件新建硬链接，新文件发布保证该别名仍指向未修改的旧内容。原目标已存在硬链接或 reparse point 时拒绝读取和修改。服务支持受管目录中的长路径及 Unicode，拒绝调用方传入 device namespace。该实现只约束文件 I/O，不提供脚本执行隔离。
+Windows 服务对修改调用从读取前像到发布结果持续持有目标及父目录排他句柄（`share = 0`），阻止原地写入、替换和父目录改名；对纯读调用采用独立句柄、`FILE_SHARE_READ`（仍拒绝外部写入与删除）及 `ReadAt` 定位读取，允许同文件内部纯读并发且禁止跨调用借用句柄。修改写入私有新文件，将旧文件移入受管暂存目录，再以不可覆盖的句柄重命名发布；提交前检查目标是否仍为空。Windows 允许外部进程为已打开文件新建硬链接，新文件发布保证该别名仍指向未修改的旧内容。原目标已存在硬链接或 reparse point 时拒绝读取和修改。服务支持受管目录中的长路径及 Unicode，拒绝调用方传入 device namespace。该实现只约束文件 I/O，不提供脚本执行隔离。
 
 已有父目录即使被外部程序原地设为 junction，也不能让后续 I/O 跟随新目标：每级子项通过 NtCreateFile 相对已固定父句柄打开，发布通过 NtSetInformationFile 相对目标父句柄重命名，不重新解析整条目标绝对路径。遇到无法解析的目录变化时拒绝操作，无法确认的结果保留 unknown；私有暂存目录由节点拥有。
 
@@ -82,7 +83,7 @@ G3 必须在真实 Windows 上证明所选原生实现能在该保护下正常�
 
 首批同一 workspace 所有获工具授权的轮次串行（包括可能写记忆的轮次），搜索/产物读取和纯历史查询不占修改槽。默认工具会话在整轮与收尾期间持有租约，不根据模型尚未调用 write 就提前允许另一个工具轮次。现有入队与容量规则保持，停止和核对留独立通道。
 
-公共事件包含 workspace/conversation/turn/call 身份、策略修订、单调顺序、状态、简短参数摘要、结果/产物引用。不公开原生 token、内部提示词、隐藏推理、完整工具入参或秘密。工具状态为 started/completed/failed/cancelled/unknown；轮次终态依据原生明确终态及工具收尾，不能凭出现 assistant 消息判完成。
+公共事件包含 workspace/conversation/turn/call 身份、策略修订、单调顺序、状态、简短参数摘要、结果/产物引用。不公开原生 token、内部提示词、隐藏推理、完整工具入参或秘密。工具状态为 started/queued/completed/failed/cancelled/unknown（工作区操作记录保持 `State = "started"` 并通过 `Phase` 细分排队与运行，会话活动与历史视图将 `PhaseQueued` 映射为 `queued`）；轮次终态依据原生明确终态及工具收尾，不能凭出现 assistant 消息判完成。
 
 会话正文和原生工具正文仍归 harness。若原生历史不能稳定回读活动，节点只存有界活动元数据、结果引用及操作日志，和文件版本日志同域管理；不复制完整 transcript。UI 实时事件丢失后用游标/快照补读；历史中保留部分完成与未知标记。无法还原完整输出时给摘要/可读取产物和明确限制，不伪造连续事件。
 
@@ -107,3 +108,5 @@ CLI/MCP 与 UI 复用同一服务、目标约束、分页和错误语义；文�
 ## 验证与演进
 
 实现门槛和场景见[验证方案](../development/features/local-runtime-tools/validation.md)。后续网络、媒体、命令执行、子 agent 和后台任务分别扩展能力与执行环境；远程聊天在本机能力完善后另行评估。旧任务路径、本机快捷命令与外部自动化的现有授权保持原契约。
+
+[工作区工具细粒度并发计划](../development/features/workspace-tool-concurrency/plan.md)已在保留同工作区工具轮次串行的前提下实现轮内不冲突资源的并行执行：每项工具通过受信任描述声明资源范围，整批原子封存（同批内对同一已修改路径的后续盲覆写 `write_file` 以 `conflicting_batch_write` 拦截，其余冲突管线按批内顺序串行）后按序公平授予并在每次低层访问前校验身份与效果；记忆检索显式声明源文件与索引代次，取消等待在途子 I/O 排空。公共文件入口共用同一调度器，操作记录可选暴露 `phase` 与 `wait_reason`，文件版本、原子预算和外部程序竞争保护完整保留。详细架构与验证入口见[资源调度设计](../development/features/workspace-tool-concurrency/design.md)与[并发验证方案](../development/features/workspace-tool-concurrency/validation.md)。

@@ -65,7 +65,11 @@ func (s *Service) activities(request Request) (*wire.ToolActivityPage, error) {
 	}
 	items, next := files.Activities(request.Conversation, turn, int64(request.Offset))
 	for _, op := range items {
-		item := wire.ToolActivity{ID: op.ID, Turn: op.Scope.Turn, Tool: op.Tool, State: op.State, Sequence: op.Sequence}
+		state := op.State
+		if state == "started" && op.Phase == workspace.PhaseQueued {
+			state = "queued"
+		}
+		item := wire.ToolActivity{ID: op.ID, Turn: op.Scope.Turn, Tool: op.Tool, State: state, Sequence: op.Sequence}
 		for _, step := range op.Progress {
 			item.Progress = append(item.Progress, wire.ToolStep{Text: step.Text, Status: step.Status})
 		}

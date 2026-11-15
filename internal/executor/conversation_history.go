@@ -29,10 +29,14 @@ func enrichHistoryTools(page *conversation.Page, conversationID string, files *w
 				continue
 			}
 			activity := *block.Tool
+			state := op.State
+			if state == "started" && op.Phase == workspace.PhaseQueued {
+				state = "queued"
+			}
 			// A failed native callback must not become successful just because its
 			// file operation finished before the callback itself failed.
-			if activity.State != "failed" {
-				activity.State = op.State
+			if !(activity.State == "failed" && state == "completed") {
+				activity.State = state
 			}
 			activity.Sequence = op.Sequence
 			activity.Progress = nil

@@ -79,3 +79,100 @@ test('tool permission localization keeps current value',async t=>{
  assert.equal(ui.input.checked,true);assert.match(ui.status.textContent,/下一条消息/);
  setLocale('en-US');ui.controller.relocalize();assert.equal(ui.input.checked,true);
 });
+
+test('confirmation mode and always-allowed list update live and hide when empty',async t=>{
+ let server={
+  workspace_id:'workspace',authorized:true,supported:true,ready:true,policy_revision:'policy',
+  execution_mode:'standard',allowed_items:[{id:'tr_1',kind:'folder',label:'D:\\Reports'}],
+ };
+ const ui=fixture(t,{
+  read:async()=>structuredClone(server),
+  write:async(_path,body)=>{
+   if(body.execution_mode)server={...server,execution_mode:body.execution_mode};
+   if(body.remove_rule_id)server={...server,allowed_items:server.allowed_items.filter(item=>item.id!==body.remove_rule_id)};
+   return structuredClone(server);
+  },
+ });
+ const trust=ui.select('#assistant-tools-trust');
+ const modeStd=ui.select('#assistant-tools-mode-standard');
+ const modeTurbo=ui.select('#assistant-tools-mode-turbo');
+ const allowedBox=ui.select('#assistant-tools-allowed');
+ const allowedList=ui.select('#assistant-tools-allowed-list');
+ await ui.open();
+
+ assert.equal(trust.hidden,false);
+ assert.equal(modeStd.checked,true);
+ assert.equal(allowedBox.hidden,false);
+ assert.equal(allowedList.children.length,1);
+
+ modeStd.checked=false;modeTurbo.checked=true;modeTurbo.fire('change');await tick();
+ assert.deepEqual(ui.calls.at(-1),{path:'/api/workspace/permission',body:{execution_mode:'turbo'}});
+ assert.equal(modeTurbo.checked,true);
+
+ const removeBtn=allowedList.children[0].children[1];
+ removeBtn.fire('click');
+ await tick();
+ assert.deepEqual(ui.calls.at(-1),{path:'/api/workspace/permission',body:{remove_rule_id:'tr_1'}});
+ assert.equal(allowedBox.hidden,true);
+});
+
+test('removing always-allowed rules one by one keeps trust panel visible and master switch checked while saving',async t=>{
+ let server={
+  workspace_id:'workspace',authorized:true,supported:true,ready:true,policy_revision:'policy',
+  execution_mode:'standard',
+  allowed_items:[
+   {id:'tr_1',kind:'folder',label:'C:\\Users\\Public\\Pictures'},
+   {id:'tr_2',kind:'command',label:'git.exe (C:\\Program Files\\Git\\cmd)'},
+  ],
+ };
+ const inFlight=[];
+ const ui=fixture(t,{
+  read:async()=>structuredClone(server),
+  write:async(_path,body)=>{
+   const p=deferred();
+   inFlight.push({body,resolve:()=>{
+    if(body.remove_rule_id)server={...server,allowed_items:server.allowed_items.filter(item=>item.id!==body.remove_rule_id)};
+    p.resolve(structuredClone(server));
+   }});
+   return p.promise;
+  },
+ });
+ const trust=ui.select('#assistant-tools-trust');
+ const allowedBox=ui.select('#assistant-tools-allowed');
+ const allowedList=ui.select('#assistant-tools-allowed-list');
+ await ui.open();
+
+ assert.equal(ui.input.checked,true);
+ assert.equal(trust.hidden,false);
+ assert.equal(allowedBox.hidden,false);
+ assert.equal(allowedList.children.length,2);
+ const secondRowBefore=allowedList.children[1];
+
+ // Remove first item: while POST is in flight, trustBox/allowedBox must NOT hide for 1-2 frames.
+ allowedList.children[0].children[1].fire('click');
+ assert.equal(ui.input.checked,true);
+ assert.equal(trust.hidden,false);
+ assert.equal(allowedBox.hidden,false);
+ assert.equal(allowedList.children[1],secondRowBefore);
+ assert.equal(secondRowBefore.children[1].disabled,true);
+
+ inFlight.shift().resolve();
+ await tick();
+ assert.equal(trust.hidden,false);
+ assert.equal(allowedBox.hidden,false);
+ assert.equal(allowedList.children.length,1);
+ assert.equal(allowedList.children[0],secondRowBefore);
+ assert.equal(secondRowBefore.children[1].disabled,false);
+
+ // Remove remaining item: while POST is in flight, trustBox/allowedBox still stay visible.
+ allowedList.children[0].children[1].fire('click');
+ assert.equal(ui.input.checked,true);
+ assert.equal(trust.hidden,false);
+ assert.equal(allowedBox.hidden,false);
+
+ inFlight.shift().resolve();
+ await tick();
+ assert.equal(ui.input.checked,true);
+ assert.equal(trust.hidden,false);
+ assert.equal(allowedBox.hidden,true);
+});

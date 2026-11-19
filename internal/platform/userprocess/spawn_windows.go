@@ -31,6 +31,7 @@ type SpawnConfig struct {
 	Stdout         windows.Handle
 	Stderr         windows.Handle
 	AfterSuspended func(process windows.Handle) error
+	AdmitResume    func(resume func() error) error
 }
 
 // SpawnResult carries the started process handle and OS PID. The thread handle is closed before return.
@@ -137,7 +138,15 @@ func SpawnAttachedJob(cfg SpawnConfig) (SpawnResult, error) {
 		err = cfg.AfterSuspended(info.Process)
 	}
 	if err == nil {
-		_, err = windows.ResumeThread(info.Thread)
+		resumeFn := func() error {
+			_, rErr := windows.ResumeThread(info.Thread)
+			return rErr
+		}
+		if cfg.AdmitResume != nil {
+			err = cfg.AdmitResume(resumeFn)
+		} else {
+			err = resumeFn()
+		}
 	}
 	if err != nil {
 		_ = windows.TerminateJobObject(cfg.Job, 1)

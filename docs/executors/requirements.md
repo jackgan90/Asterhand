@@ -88,16 +88,18 @@
 
 ## 持续会话工具执行
 
-以下要求约束工具开启时的文件与第一阶段受限工作区脚本执行工具；未设置权限时默认开启，保留用户明确关闭后的纯文本模式。文件并发与脚本执行边界分别见[工作区工具并发计划](../development/features/workspace-tool-concurrency/plan.md)与[工作区脚本执行计划（第一阶段）](../development/features/workspace-script-execution/plan.md)。
+以下要求约束工具开启时的文件、第一阶段受限工作区脚本执行工具及第二阶段受控提权脚本与极速免审执行；未设置权限时默认开启（默认按需询问模式），保留用户明确关闭后的纯文本模式。文件并发、第一阶段脚本沙箱及第二阶段受控提权边界分别见[工作区工具并发计划](../development/features/workspace-tool-concurrency/plan.md)、[第一阶段计划](../development/features/workspace-script-execution/plan.md)与[受控提权计划](../development/features/workspace-script-escalation/plan.md)。
 
 | ID | 要求 |
 |---|---|
 | EXEC-TOOLS-01 | 公共层按语义能力、支持/授权/就绪和执行约束表达；adapter 映射原生工具，不能落实的限制明确不可用 |
 | EXEC-TOOLS-02 | 文件读写均限制于真实工作区根，覆盖 Windows 别名/链接和竞态；配置、凭据及运行时 state 不授予模型文件工具，工作区控制桥令牌通过环境注入且不写入 Gateway JSON |
-| EXEC-TOOLS-03 | 所有文件修改入口执行前持久保存完整前像并预留预算，具备外部并发保护（含同卷发布后恢复工作区继承 ACL）；第一阶段脚本进程仅能在工作区与受管 `<journal>/sandbox-temp` 内由内核放开 `Modify` 写入，退出后统一触发配额重算、reparse point 检测与文件修订冲突保护 |
-| EXEC-TOOLS-04 | 同工作区工具轮次与恢复串行，轮次内按资源声明调度并发与等待（前台 `exec_command` 在等待切片窗持有工作区写排他，超出 `yieldMs` 持久化 `<journal>/es_*.json` 转由 `execManager` 后台托管后释放 `DomainFS` 锁放行只读、控制与多脚本并发，并通过 `exec_active` 写屏障延迟并发受管文件修改直至脚本退出，`process_control` 使用独立控制域）；取消（`CancelCall`/`CancelTurn`）、轮次结束与崩溃均在锁外并行强制终止并排空 Turn 内全部在途/后台脚本及可取消搜索扫描，不自动重放未知副作用 |
-| EXEC-TOOLS-05 | 文件大小、搜索扫描、工具调用、脚本时长/输出流/轮内会话数、`sandbox-temp` 磁盘配额、版本和事件存储有界，达到上限明确强杀该轮全部活动脚本并截断/锁存，不静默丢失活跃证据；`"exec/start"` 与 `"exec/poll"` 分片通过独立 `waitSlots`（24 槽）阻塞等待，`"exec/kill"` 走 `controlSlots`（12 槽），`"exec/control"`（`status`/`log`/`list`）走 `ioSlots`（12 槽），避免耗尽通道或触发写超时 |
-| EXEC-TOOLS-06 | 工具白名单（11 项统一工具）、prompt hook、原生权限覆盖和插件来源一起验证；离线预检拦截核心工具重名与归属漂移；Gateway 原生 `exec`/`process`/`code_execution` 保持拒绝，第一阶段不包含第二阶段审批提权旁路；旧路径保持兼容 |
+| EXEC-TOOLS-03 | 所有文件修改入口执行前持久保存完整前像并预留预算，具备外部并发保护（含同卷发布后恢复工作区继承 ACL）；第一阶段脚本进程仅能在工作区与受管 `<journal>/sandbox-temp` 内由内核放开 `Modify` 写入，第二阶段 Tier 2 以普通用户 `OrdinaryToken` + 具名 `JobObject` 在声明外部目录或原生 HTTPS 环境下执行，退出后均触发配额重算、reparse point 检测与文件修订冲突保护 |
+| EXEC-TOOLS-04 | 同工作区工具轮次与恢复串行，轮次内按资源声明调度并发与等待（前台 `exec_command` 在等待切片窗持有工作区写排他，超出 `yieldMs` 持久化 `<journal>/es_*.json` 转由 `execManager` 后台托管后释放 `DomainFS` 锁放行只读、控制与多脚本并发，并通过 `exec_active` 写屏障延迟并发受管文件修改直至脚本退出，且待确认提权票据通过 `approval_pending` 写屏障保护引用脚本不被并发修改，`process_control` 使用独立控制域）；取消（`CancelCall`/`CancelTurn`）、轮次结束与崩溃均在锁外并行强制终止并排空 Turn 内全部在途/后台脚本及可取消搜索扫描，不自动重放未知副作用 |
+| EXEC-TOOLS-05 | 文件大小、搜索扫描、工具调用、脚本时长/输出流/轮内会话数、`sandbox-temp` 磁盘配额、版本和事件存储有界，达到上限明确强杀该轮全部活动脚本并截断/锁存，不静默丢失活跃证据；`"exec/start"`、`"exec/approval_wait"` 与 `"exec/poll"` 分片通过独立 `waitSlots`（24 槽）阻塞等待（单次切片 `<= 2.5s`），`"exec/kill"` 走 `controlSlots`（12 槽），`"exec/control"`（`status`/`log`/`list`）走 `ioSlots`（12 槽），避免耗尽通道或触发写超时 |
+| EXEC-TOOLS-06 | 工具白名单（11 项统一工具）、prompt hook、原生权限覆盖和插件来源一起验证；离线预检拦截核心工具重名与归属漂移；Gateway 原生 `exec`/`process`/`code_execution` 保持拒绝；受控提权（`escalated`、`escalationReason`、`externalPaths`）必须经由 Go 服务端评估、分片审批或 `turbo` 临时放行执行，模型无权自批或绕过 UAC/硬底线拦截 |
+| EXEC-TOOLS-07 | 提权策略独立保存于受限节点配置的 `ExecutionMode`（`standard`/`turbo`）、`TrustRevision` 与 `TrustRules`：按“系统硬底线 → 用户禁止 → 用户每次询问 → 会话/持久允许 → 模式兜底”五层执行，保守词法解析阻止复合连接符或裸通用解释器取得持久自动放行，修改模式或移除信任项目须在不重启 Gateway 的前提下毫秒热生效并同步清除被撤销/覆盖的会话级缓存 |
+| EXEC-TOOLS-08 | 每次待确认审批票据设置 `5 分钟`最长等待上限、绑定工作目录/外部目录/可执行身份与引用工作区脚本 SHA-256 摘要，启动前复核任何篡改均返回 `approval_tampered`；用户拒绝返回非阻塞 `denied_by_user` 且不锁存 `reconciliation_required` |
 | EXEC-SCHED-01 | 保留同工作区工具轮次串行，在轮次内允许无冲突工具同时执行；公共文件入口使用相同资源规则 |
 | EXEC-SCHED-02 | 工具通过受信任描述登记效果、资源范围、兼容模式、容量和期限；未知工具或缺少声明时拒绝执行 |
 | EXEC-SCHED-03 | 原生调用、文件桥、版本记录、取消和结果使用同一调用身份；跨调用、旧代次和身份缺失访问拒绝 |

@@ -19,8 +19,16 @@ func normalize(c Config) Config {
 	// Earlier defaults serialized enabled=false without a policy revision.
 	// Only an actual saved choice must survive a change to the product default.
 	if c.LocalTools.Revision == "" {
-		c.LocalTools = LocalToolPolicy{Enabled: true, Revision: "default-tools-v1"}
+		c.LocalTools.Enabled = true
+		c.LocalTools.Revision = "default-tools-v1"
 	}
+	if c.LocalTools.ExecutionMode != ExecutionModeTurbo {
+		c.LocalTools.ExecutionMode = ExecutionModeStandard
+	}
+	if c.LocalTools.TrustRevision == "" {
+		c.LocalTools.TrustRevision = "default-trust-v1"
+	}
+	c.LocalTools.TrustRules = normalizeTrustRules(c.LocalTools.TrustRules)
 	if c.AgentRuntime == "" {
 		c.AgentRuntime = packaging.Dependencies().DefaultTarget().Runtime
 	}

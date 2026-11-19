@@ -1,6 +1,6 @@
 # 测试入口
 
-工作区工具并发的基线探针使用 `node scripts/probe-workspace-concurrency.mjs --runtime <prepared-runtime>/node_modules/openclaw` 配合相关并发回归；第一阶段受限工作区脚本执行、Windows `WRITE_RESTRICTED` 沙箱预检（`E1`–`E3`）、四级停止及本地 Gateway 脚本测试入口与边界见[脚本执行验证方案](../docs/development/features/workspace-script-execution/validation.md)。
+工作区工具并发的基线探针使用 `node scripts/probe-workspace-concurrency.mjs --runtime <prepared-runtime>/node_modules/openclaw` 配合相关并发回归；第一阶段受限工作区脚本执行、Windows `WRITE_RESTRICTED` 沙箱预检（`E1`–`E3`）、四级停止及本地 Gateway 脚本测试入口与边界见[脚本执行验证方案](../docs/development/features/workspace-script-execution/validation.md)，第二阶段 Tier 2 `OrdinaryToken` 受控提权、五层规则、`TOCTOU` 防篡改、`turbo` 零污染及聊天/设置 UI 交互回归见[受控提权验证方案](../docs/development/features/workspace-script-escalation/validation.md)。
 
 聊天中工具与文字的顺序、空消息过滤、历史翻页及混合文本全文读取，见[聊天历史顺序与分页计划](../docs/development/features/chat-history-timeline/plan.md#验证入口与边界)。包含固定 OpenClaw 的 32 次工具调用跨页回归，以及公共读取与前端状态更新测试。
 

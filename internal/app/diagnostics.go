@@ -67,12 +67,17 @@ func (a *App) executeProbe(token string, state *operations.State) {
 	if err == nil && !called {
 		err = i18n.Err("err.app.probe_tool_not_called")
 	}
-	c := a.Config.Get()
-	c.ModelVerified, c.ModelDiagnostic = err == nil, config.DiagnosticFailed
-	if err == nil {
-		c.ModelDiagnostic, c.VerifiedBundle, c.VerifiedExecution = config.DiagnosticPassed, executor.BundleIdentity(), executor.ExecutionIdentity(c)
-	}
-	if saveErr := a.Config.Save(c); saveErr != nil {
+	c, saveErr := a.Config.Update(func(latest config.Config) (config.Config, error) {
+		latest.ModelVerified = err == nil
+		if err == nil {
+			latest.ModelDiagnostic, latest.VerifiedBundle, latest.VerifiedExecution = config.DiagnosticPassed, executor.BundleIdentity(), executor.ExecutionIdentity(latest)
+		} else {
+			latest.ModelDiagnostic = config.DiagnosticFailed
+		}
+		return latest, nil
+	})
+	_ = c
+	if saveErr != nil {
 		err = saveErr
 	}
 	a.probeRunning, a.probeStatus, a.probeError, a.probeErrorKey, a.probeErrorArgs = false, "passed", "", "", nil

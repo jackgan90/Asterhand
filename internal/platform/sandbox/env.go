@@ -61,20 +61,51 @@ var dangerousEnvKeys = map[string]bool{
 }
 
 var redirectedTempSubdirs = map[string]string{
-	"TEMP":              "",
-	"TMP":               "",
-	"TMPDIR":            "",
-	"PIP_CACHE_DIR":     "pip-cache",
-	"UV_CACHE_DIR":      "uv-cache",
-	"NPM_CONFIG_CACHE":  "npm-cache",
-	"XDG_CACHE_HOME":    "xdg-cache",
-	"GOCACHE":           "go-cache",
+	"TEMP":                "",
+	"TMP":                 "",
+	"TMPDIR":              "",
+	"PIP_CACHE_DIR":       "pip-cache",
+	"UV_CACHE_DIR":        "uv-cache",
+	"NPM_CONFIG_CACHE":    "npm-cache",
+	"XDG_CACHE_HOME":      "xdg-cache",
+	"GOCACHE":             "go-cache",
 	"PYTHONPYCACHEPREFIX": "pycache",
+}
+
+// EffectiveSearchPath returns the PATH and PATHEXT values exposed to sandboxed
+// and escalated child processes so pre-launch resolution matches runtime lookup.
+func EffectiveSearchPath(bundledNodeDir string) (pathVal, pathExt string) {
+	envMap := map[string]string{}
+	origKey := map[string]string{}
+	for _, entry := range os.Environ() {
+		k, v, ok := strings.Cut(entry, "=")
+		if !ok || k == "" || !shouldInheritEnvEntry(k, v) {
+			continue
+		}
+		upper := strings.ToUpper(k)
+		if upper == "PATH" || upper == "PATHEXT" {
+			envMap[upper] = v
+			origKey[upper] = k
+		}
+	}
+	applyPathPrepends(envMap, origKey, bundledNodeDir)
+	return envMap["PATH"], envMap["PATHEXT"]
 }
 
 // BuildEnvironment creates a scrubbed environment for sandboxed scripts, rejecting
 // dangerous overrides or sensitive path references upfront.
 func BuildEnvironment(spec SpawnSpec) ([]string, error) {
+	return buildFilteredEnvironment(spec, true)
+}
+
+// BuildEscalatedEnvironment builds an environment for Tier 2 non-elevated runs:
+// host secrets and dangerous overrides remain stripped, while the user's native
+// temp/cache directories and system TLS defaults stay intact.
+func BuildEscalatedEnvironment(spec SpawnSpec) ([]string, error) {
+	return buildFilteredEnvironment(spec, false)
+}
+
+func buildFilteredEnvironment(spec SpawnSpec, isolateTempAndSSL bool) ([]string, error) {
 	if len(spec.Env) > 64 {
 		return nil, fail("invalid_request")
 	}
@@ -103,19 +134,23 @@ func BuildEnvironment(spec SpawnSpec) ([]string, error) {
 	}
 
 	applyPathPrepends(envMap, origKey, spec.BundledNodeDir)
-	if err := applyRedirectedTempVars(envMap, origKey, spec.TempRoot); err != nil {
-		return nil, err
+	if isolateTempAndSSL {
+		if err := applyRedirectedTempVars(envMap, origKey, spec.TempRoot); err != nil {
+			return nil, err
+		}
 	}
 
 	defaults := map[string]string{
 		"PYTHONIOENCODING":    "utf-8",
 		"PYTHONUTF8":          "1",
-		"GIT_SSL_BACKEND":     "openssl",
 		"GIT_TERMINAL_PROMPT": "0",
 		"GCM_INTERACTIVE":     "never",
 		"CI":                  "1",
 		"NO_COLOR":            "1",
 		"TERM":                "dumb",
+	}
+	if isolateTempAndSSL {
+		defaults["GIT_SSL_BACKEND"] = "openssl"
 	}
 	for k, v := range defaults {
 		upper := strings.ToUpper(k)

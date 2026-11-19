@@ -325,8 +325,14 @@ func (s *Service) End(id, state, detail string) (Operation, error) {
 	}
 	s.mu.Unlock()
 
+	if s.exec != nil {
+		s.exec.CleanupCallApproval(id, "cancelled")
+	}
 	s.fireEndHook(id, "before_drain")
 	s.sched.waitDrained(id)
+	if s.exec != nil {
+		s.exec.PurgeResolvedCallApproval(id)
+	}
 	s.fireEndHook(id, "after_drain")
 
 	observeAndFinalizeCall(c, violation, state, detail)
@@ -402,11 +408,35 @@ func observeAndFinalizeCall(c *call, violation, state, detail string) {
 	if len(detail) > 2048 {
 		detail = detail[:2048]
 	}
+	if detail == "" && (c.op.Detail == "denied_by_user" || c.op.Detail == "policy_denied" || c.op.Detail == "approval_timeout" || c.op.Detail == "approval_tampered") {
+		detail = c.op.Detail
+	}
 	c.op.State = state
 	c.op.Phase = PhaseTerminal
 	c.op.WaitReason = ""
 	c.op.Finished = time.Now().UTC()
 	c.op.Detail = detail
+	if c.op.Approval != nil {
+		cp := *c.op.Approval
+		cp.CommandPreview = ""
+		if cp.Status == "pending" {
+			switch state {
+			case "cancelled":
+				cp.Status = "cancelled"
+			default:
+				if detail == "denied_by_user" || detail == "policy_denied" {
+					cp.Status = "denied"
+				} else if detail == "approval_timeout" {
+					cp.Status = "expired"
+				} else if state == "completed" {
+					cp.Status = "approved"
+				} else {
+					cp.Status = "cancelled"
+				}
+			}
+		}
+		c.op.Approval = &cp
+	}
 	closeCall(c)
 	c.held = map[string]*heldFile{}
 }

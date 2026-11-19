@@ -23,7 +23,15 @@ export function chatPanel(bridge, editor) {
   let createOperation = '', listOffset = 0, lastListState = null;
   let creatingRequest = null;
   let draftDecision = null, historyLoaded = false, historyLoading = -1, readingOlder = false, refreshHistory = false;
+  let executionMode = '';
+  let activityOffset = 0, activityOp = '';
   let lastStatus = {kind: 'key', key: 'quickinput.chat_hint'};
+  const updateExecutionMode = mode => {
+    if (!mode) return;
+    executionMode = mode;
+    const badge = query('chat-turbo-badge');
+    if (badge) badge.hidden = executionMode !== 'turbo';
+  };
   const cleanup = [];
   const listen = (node, name, fn) => { node.addEventListener(name, fn); cleanup.push(() => node.removeEventListener(name, fn)); };
   const statusView = replyStatusView(status);
@@ -78,6 +86,7 @@ export function chatPanel(bridge, editor) {
     }
     outbox.observe(response.turn);
     if (response.turn?.delivery === 'rejected') editor.restoreSubmission(response.turn.operation_id);
+    if (response.execution_mode) updateExecutionMode(response.execution_mode);
     if (response.target?.node_id) ready = true;
     connection.visible(visible && expanded && ready);
     updateButtons();
@@ -86,7 +95,30 @@ export function chatPanel(bridge, editor) {
   const client = conversationClient(bridge, editor, envelope);
   const queue = operationQueue(client, outbox);
   const connection = connectionView(query('chat-connection'), client);
-  const render = messageRenderer(query('chat-messages'), {copy, expand: expandMessage});
+  function applyActivitiesPage(page) {
+    if (!page) return false;
+    if (page.execution_mode) updateExecutionMode(page.execution_mode);
+    if (typeof page.next === 'number' && page.next > activityOffset) {
+      activityOffset = page.next;
+    }
+    return windowState.mergeActivities(page.items ?? [], turn?.id || '');
+  }
+  async function approveTool(approvalID, decision) {
+    const id = selected, version = selection;
+    const response = await client.call('approve_tool', {
+      conversation_id: id,
+      approval_id: approvalID,
+      decision,
+      ...(turn?.operation_id ? {operation_id: turn.operation_id} : {}),
+    });
+    if (id !== selected || version !== selection) return;
+    if (response.execution_mode) updateExecutionMode(response.execution_mode);
+    applyActivitiesPage(response.activities);
+    paint();
+    updateButtons();
+    schedule();
+  }
+  const render = messageRenderer(query('chat-messages'), {copy, expand: expandMessage, approve: (approvalID, decision) => approveTool(approvalID, decision)});
 
   const atBottom = () => scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 48;
   const followsLatest = () => !readingOlder && atBottom();
@@ -153,6 +185,8 @@ export function chatPanel(bridge, editor) {
     selected = id;
     if (sendingOperation) outbox.bind(sendingOperation, id);
     turn = null;
+    activityOffset = 0;
+    activityOp = '';
     historyLoaded = false;
     refreshHistory = false;
     readingOlder = false;
@@ -295,7 +329,7 @@ export function chatPanel(bridge, editor) {
   function schedule() {
     clearTimeout(timer);
     timer = null;
-    if (visible && selected && (queue.waiting || expanded && (refreshHistory || nodeBusy) || unsettled(turn) || outbox.pending(selected) || pending?.conversation_id === selected)) {
+    if (visible && selected && (queue.waiting || expanded && (refreshHistory || nodeBusy) || unsettled(turn) || outbox.pending(selected) || pending?.conversation_id === selected || windowState.pendingTools())) {
       timer = setTimeout(poll, 500);
     }
   }
@@ -327,13 +361,22 @@ export function chatPanel(bridge, editor) {
         turn = queue.state.active;
       }
       const identity = outbox.pending(id) ?? (pending?.conversation_id === id ? pending : null);
+      const curOp = queue.enabled ? queue.state.active.operation_id : (identity ? identity.operation_id : '');
+      if (curOp !== activityOp) {
+        activityOp = curOp;
+        activityOffset = 0;
+      }
       const response = await client.call('reconcile', {conversation_id: id,
-        ...(queue.enabled ? {operation_id:queue.state.active.operation_id} : identity ? {operation_id: identity.operation_id} : {})});
+        ...(curOp ? {operation_id: curOp} : {}),
+        ...(activityOffset > 0 ? {offset: activityOffset} : {})});
       if (id !== selected || version !== selection) return;
       turn = newerTurn(turn, response.turn);
-      sayTurn();
+      const activitiesChanged = applyActivitiesPage(response.activities);
+      const hasAwaiting = (response.activities?.items ?? []).some(item => item.state === 'awaiting_approval' && item.approval?.status === 'pending');
+      sayTurn(!expanded && hasAwaiting ? 'quickinput.approval.pending_hint' : '');
       const follow = expanded && followsLatest();
-      if (response.live && follow) { windowState.live(response.live); paint(); }
+      if (response.live) { windowState.live(response.live); }
+      if ((response.live || activitiesChanged) && follow) { paint(); }
       if (refreshHistory || turn && (turn.assistant_message_id !== previous?.assistant_message_id || !unsettled(turn) && unsettled(previous) ||
           unsettled(turn) && windowState.pendingTools())) {
         if (!expanded) { historyLoaded = false; refreshHistory = true; }
@@ -468,6 +511,11 @@ export function chatPanel(bridge, editor) {
     query('chat-conversation-name').textContent = selected
       ? t('quickinput.conversation_label', {id: selected.slice(0, 8)})
       : t('quickinput.default_assistant');
+    const turboBadge = query('chat-turbo-badge');
+    if (turboBadge) {
+      turboBadge.textContent = t('quickinput.turbo_badge');
+      turboBadge.title = t('quickinput.turbo_badge_hint');
+    }
     connection.relocalize();
     render.relocalize();
     if (!list.hidden && lastListState) renderList();

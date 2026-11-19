@@ -19,8 +19,10 @@ func (a *App) workspacePolicyAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Enabled  bool   `json:"enabled"`
-		Revision string `json:"expected_revision"`
+		Enabled       *bool  `json:"enabled,omitempty"`
+		Revision      string `json:"expected_revision,omitempty"`
+		ExecutionMode string `json:"execution_mode,omitempty"`
+		RemoveRuleID  string `json:"remove_rule_id,omitempty"`
 	}
 	if err := read(w, r, &input); err != nil {
 		a.fail(w, r, 400, err)
@@ -28,7 +30,20 @@ func (a *App) workspacePolicyAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	state, err := a.Chat.SetWorkspacePolicy(r.Context(), input.Enabled, input.Revision)
+	if input.Enabled == nil && (input.ExecutionMode != "" || input.RemoveRuleID != "") {
+		state, err := a.Chat.SetWorkspaceTrustPolicy(r.Context(), input.ExecutionMode, input.RemoveRuleID)
+		if err != nil {
+			a.fail(w, r, 400, err)
+			return
+		}
+		send(w, 200, state)
+		return
+	}
+	enabled := false
+	if input.Enabled != nil {
+		enabled = *input.Enabled
+	}
+	state, err := a.Chat.SetWorkspacePolicy(r.Context(), enabled, input.Revision)
 	if err != nil {
 		a.fail(w, r, 409, err)
 		return

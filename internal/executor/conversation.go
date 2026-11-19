@@ -27,16 +27,35 @@ var chatBridgeFiles embed.FS
 // ConversationRuntime is independent of task Execute. It owns a private Gateway
 // and never adopts an existing listener or the user's personal OpenClaw home.
 type ConversationRuntime struct {
-	config      *config.Manager
-	gate        chan struct{}
-	process     *chatProcess
-	fingerprint string
-	startup     *chatStartup
-	start       chatStarter
-	ctx         context.Context
-	cancel      context.CancelFunc
-	workspaceMu sync.Mutex
-	workspace   *workspace.Service
+	config       *config.Manager
+	gate         chan struct{}
+	process      *chatProcess
+	fingerprint  string
+	startup      *chatStartup
+	start        chatStarter
+	ctx          context.Context
+	cancel       context.CancelFunc
+	workspaceMu  sync.Mutex
+	trustApplyMu sync.Mutex
+	workspace    *workspace.Service
+	onApproval   func()
+}
+
+// SetApprovalHandler registers a best-effort UI attention callback fired when an
+// escalated tool call enters the pending approval state.
+func (r *ConversationRuntime) SetApprovalHandler(handler func()) {
+	r.workspaceMu.Lock()
+	r.onApproval = handler
+	r.workspaceMu.Unlock()
+}
+
+func (r *ConversationRuntime) fireApprovalAttention() {
+	r.workspaceMu.Lock()
+	fn := r.onApproval
+	r.workspaceMu.Unlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 func NewConversationRuntime(manager *config.Manager) *ConversationRuntime {

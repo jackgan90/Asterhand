@@ -2,7 +2,9 @@
 
 ## 本机助手工具能力优先
 
-[工作区脚本与命令执行（第一阶段）](features/workspace-script-execution/plan.md)已完成实现、工程验证、独立审计修复复审与本机真实模型用户验收：在保持零频繁审批、出站网络可用及完整主流脚本工具链能力的前提下，通过 Go 服务经纪的 Windows `WRITE_RESTRICTED` 内核写沙箱、工作区控制桥令牌零落盘与敏感凭据保护、Turn 级进程树租约、`reconcileAfterExec` 配额与版本协调、四级统一聊天“停止”中断及跨平台 `SandboxBackend` 边界接入 `exec_command` 与 `process_control`；验证入口与双机/跨平台专项边界见[验证方案](features/workspace-script-execution/validation.md)。第二阶段（聊天内嵌审批提权与持久化信任）另行分批交付。
+[受控提权脚本与外部目录执行（第二阶段 / Tier 2 + 极速免审）](features/workspace-script-escalation/plan.md)已完成实现、工程验证、独立审计修复复审与本机真实模型用户验收：在保留第一阶段零审批工作区沙箱之上，面向非技术用户提供快捷输入原位交互确认卡片（零术语、用完即收起）与“按需询问 / 自动允许（极速）”双选（含零污染单次自动授权与空态隐藏的一键移除信任清单）；Go 服务端通过 `OrdinaryToken()` + 具名 `JobObject`、五层优先级评估、分片 `exec/approval_wait`、`approval_pending` 写屏障及启动前 `TOCTOU` 防篡改校验保障零 UAC 管理员提权与核心凭据隔离，并经独立 `TrustRevision` 实现 Gateway 零重启热切换；验证入口见[验证方案](features/workspace-script-escalation/validation.md)。
+
+[工作区脚本与命令执行（第一阶段）](features/workspace-script-execution/plan.md)已完成实现、工程验证、独立审计修复复审与本机真实模型用户验收：在保持零频繁审批、出站网络可用及完整主流脚本工具链能力的前提下，通过 Go 服务经纪的 Windows `WRITE_RESTRICTED` 内核写沙箱、工作区控制桥令牌零落盘与敏感凭据保护、Turn 级进程树租约、`reconcileAfterExec` 配额与版本协调、四级统一聊天“停止”中断及跨平台 `SandboxBackend` 边界接入 `exec_command` 与 `process_control`；验证入口与双机/跨平台专项边界见[验证方案](features/workspace-script-execution/validation.md)。
 
 [工作区工具细粒度并发](features/workspace-tool-concurrency/plan.md)已完成实现、工程验证、独立审计修复复审与本机真实模型用户验收：保留同工作区工具轮次串行，通过公开插件 SDK 委托九项统一工具，按 `(rootID, relPath)` 资源声明调度轮内文件、记忆与进度并行、同批盲覆写冲突拦截及公平等待，配套逐次低层效果校验、排空式取消、离线重名/别名预检与 `9×9` 组合及变异检测；见[验证方案](features/workspace-tool-concurrency/validation.md)。
 

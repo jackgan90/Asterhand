@@ -289,10 +289,15 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 	if diagnosticChanged {
 		c.InvalidateModelDiagnostic()
 	}
+	applySettings := func(latest config.Config) (config.Config, error) {
+		next := c
+		next.LocalTools = latest.LocalTools
+		return next, nil
+	}
 	if identity != nil {
-		err = a.Config.SaveOperation(c, *identity)
+		c, err = a.Config.UpdateOperation(*identity, applySettings)
 	} else {
-		err = a.Config.Save(c)
+		c, err = a.Config.Update(applySettings)
 	}
 	if err != nil {
 		a.fail(w, r, 500, err)

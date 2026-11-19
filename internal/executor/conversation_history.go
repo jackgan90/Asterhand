@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 
 	"github.com/jackgan90/Asterhand/internal/conversation"
-	"github.com/jackgan90/Asterhand/internal/conversation/wire"
 	"github.com/jackgan90/Asterhand/internal/workspace"
 )
 
@@ -28,28 +27,38 @@ func enrichHistoryTools(page *conversation.Page, conversationID string, files *w
 			if err != nil || op.Scope.Conversation != conversationID || op.Scope.Turn != message.Turn || op.Tool != block.Tool.Tool {
 				continue
 			}
+			projected := conversation.ProjectToolActivity(op)
 			activity := *block.Tool
-			state := op.State
-			if state == "started" && op.Phase == workspace.PhaseQueued {
-				state = "queued"
-			}
 			// A failed native callback must not become successful just because its
 			// file operation finished before the callback itself failed.
-			if !(activity.State == "failed" && state == "completed") {
-				activity.State = state
+			if !(activity.State == "failed" && projected.State == "completed") {
+				activity.State = projected.State
 			}
-			activity.Sequence = op.Sequence
-			if activity.Summary == "" && op.Summary != "" {
-				activity.Summary = op.Summary
+			activity.Sequence = projected.Sequence
+			if activity.Summary == "" && projected.Summary != "" {
+				activity.Summary = projected.Summary
 			}
-			activity.Progress = nil
-			for _, step := range op.Progress {
-				activity.Progress = append(activity.Progress, wire.ToolStep{Text: step.Text, Status: step.Status})
-			}
+			activity.ApprovalMode = projected.ApprovalMode
+			activity.Detail = projected.Detail
+			activity.Approval = projected.Approval
+			activity.Progress = projected.Progress
 			before, _ := json.Marshal(block.Tool)
 			after, _ := json.Marshal(activity)
+			if len(after)-len(before) > remaining && activity.Approval != nil && activity.Approval.CommandPreview != "" {
+				activity.Approval.CommandPreview = ""
+				after, _ = json.Marshal(activity)
+			}
 			if len(after)-len(before) > remaining {
 				activity.Progress = nil
+				after, _ = json.Marshal(activity)
+			}
+			if len(after)-len(before) > remaining {
+				activity.Approval = nil
+				after, _ = json.Marshal(activity)
+			}
+			if len(after)-len(before) > remaining {
+				activity.ApprovalMode = ""
+				activity.Detail = ""
 				after, _ = json.Marshal(activity)
 			}
 			if len(after)-len(before) > remaining {

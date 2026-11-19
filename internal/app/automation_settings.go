@@ -137,7 +137,11 @@ func (a *App) automationSettingsPatch(ctx context.Context, call automation.Call,
 	if changed {
 		c.InvalidateModelDiagnostic()
 	}
-	err = a.Config.SaveOperation(c, call.Identity)
+	_, err = a.Config.UpdateOperation(call.Identity, func(latest config.Config) (config.Config, error) {
+		next := c
+		next.LocalTools = latest.LocalTools
+		return next, nil
+	})
 	current := a.Config.Get()
 	published := current.Publication != nil && current.Publication.Identity == call.Identity
 	if published {

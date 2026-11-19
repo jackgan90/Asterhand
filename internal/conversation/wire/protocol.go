@@ -122,10 +122,13 @@ type Request struct {
 	Offset        int    `json:"offset,omitempty"`
 	Cursor        string `json:"cursor,omitempty"`
 	DraftRevision uint64 `json:"draft_revision,omitempty"`
+	ApprovalID    string `json:"approval_id,omitempty"`
+	Decision      string `json:"decision,omitempty"`
 }
 
 type Response struct {
 	Activities         *ToolActivityPage  `json:"activities,omitempty"`
+	ExecutionMode      string             `json:"execution_mode,omitempty"`
 	Connection         string             `json:"connection,omitempty"`
 	Queue              *QueueState        `json:"queue,omitempty"`
 	QueueItem          *QueueItem         `json:"queue_item,omitempty"`
@@ -234,21 +237,26 @@ func (r Request) Validate() error {
 	} else if !ValidID(r.Target.Node) || r.Target.Role != DefaultRole {
 		return FailKey("invalid_target", "err.conv.wire.invalid_target")
 	}
-	needsConversation := r.Action == "activities" || r.Action == "select" || r.Action == "history" || r.Action == "message" || r.Action == "submit" || r.Action == "enqueue" || r.Action == "queue_item" || r.Action == "reconcile" || r.Action == "cancel"
+	needsConversation := r.Action == "activities" || r.Action == "approve_tool" || r.Action == "select" || r.Action == "history" || r.Action == "message" || r.Action == "submit" || r.Action == "enqueue" || r.Action == "queue_item" || r.Action == "reconcile" || r.Action == "cancel"
 	needsOperation := r.Action == "create" || r.Action == "prepare" || r.Action == "submit" || r.Action == "enqueue" || r.Action == "queue_item"
 	if (needsConversation && !ValidID(r.Conversation)) || (!needsConversation && r.Conversation != "") ||
 		(needsOperation && !ValidID(r.Operation)) || (r.Operation != "" && !ValidID(r.Operation)) {
 		return FailKey("invalid_request", "err.conv.wire.invalid_ids")
 	}
 	if r.Action != "submit" && r.Action != "enqueue" && (r.Text != "" || r.DraftRevision != 0) || r.Action != "message" && r.Message != "" ||
-		r.Action != "activities" && r.Action != "history" && r.Action != "message" && r.Action != "list" && r.Offset != 0 || r.Action != "history" && r.Cursor != "" {
+		r.Action != "approve_tool" && (r.ApprovalID != "" || r.Decision != "") ||
+		r.Action != "activities" && r.Action != "reconcile" && r.Action != "history" && r.Action != "message" && r.Action != "list" && r.Offset != 0 || r.Action != "history" && r.Cursor != "" {
 		return FailKey("invalid_request", "err.conv.wire.extra_fields")
 	}
-	if r.Operation != "" && !needsOperation && r.Action != "activities" && r.Action != "reconcile" && r.Action != "cancel" {
+	if r.Operation != "" && !needsOperation && r.Action != "activities" && r.Action != "approve_tool" && r.Action != "reconcile" && r.Action != "cancel" {
 		return FailKey("invalid_request", "err.conv.wire.extra_op_id")
 	}
 	switch r.Action {
 	case "hello", "list", "connect", "connection", "select", "create", "prepare", "history", "reconcile", "cancel", "queue", "queue_item", "activities":
+	case "approve_tool":
+		if !ValidID(r.ApprovalID) || (r.Decision != "allow_once" && r.Decision != "allow_session" && r.Decision != "allow_always" && r.Decision != "deny") {
+			return FailKey("invalid_request", "err.conv.wire.invalid_ids")
+		}
 	case "message":
 		if !ValidID(r.Message) {
 			return FailKey("invalid_request", "err.conv.wire.invalid_message_id")

@@ -21,7 +21,7 @@ const (
 	MaxWorkspaceFiles = 10000
 	MaxVersionBytes   = 1 << 30
 	MaxActivityBytes  = 64 << 20
-	MaxCalls          = 100
+	MaxCalls          = 500
 	MaxOperationBytes = 8 << 10
 	MaxSummaryRunes   = 160
 	MaxSummaryBytes   = 240
@@ -35,16 +35,23 @@ const (
 	MaxQueuedCalls    = 64
 	DefaultRoot       = "workspace"
 
-	MaxExecSessionsPerTurn = 8
-	DefaultExecYieldMs     = 10000
-	MaxExecYieldMs         = 30000
-	MaxExecHttpPollMs      = 2500
-	DefaultExecTimeoutSec  = 120
-	MaxExecTimeoutSec      = 600
-	MaxExecPollBytes       = 64 << 10
-	MaxExecSessionBytes    = 256 << 10
-	MaxSandboxTempBytes    = 256 << 20
-	MaxSandboxTempFiles    = 10000
+	MaxExecSessionsPerTurn        = 8
+	DefaultExecYieldMs            = 10000
+	MaxExecYieldMs                = 30000
+	MaxExecHttpPollMs             = 2500
+	DefaultExecTimeoutSec         = 120
+	MaxExecTimeoutSec             = 600
+	MaxExecPollBytes              = 64 << 10
+	MaxExecSessionBytes           = 256 << 10
+	MaxSandboxTempBytes           = 256 << 20
+	MaxSandboxTempFiles           = 10000
+	ApprovalWaitTimeout           = 5 * time.Minute
+	MaxApprovalReasonBytes        = 200
+	MaxExternalPaths              = 8
+	MaxExecCommandBytes           = 256 << 10
+	MaxEscalationReasonInputBytes = 64 << 10
+	MaxVerifiableScriptBytes      = 16 << 20
+	MaxVerifiableExeBytes         = 64 << 20
 )
 
 type Error struct {
@@ -129,6 +136,26 @@ type SealBatch struct {
 	Items []SealItem `json:"items"`
 }
 
+// ApprovalView holds sanitized metadata for an in-chat escalation confirmation card.
+type ApprovalView struct {
+	ID             string   `json:"id"`
+	Status         string   `json:"status"` // "pending" | "approved" | "denied" | "expired" | "cancelled"
+	Kind           string   `json:"kind"`   // "folder" | "command" | "workspace_escalated"
+	Target         string   `json:"target,omitempty"`
+	Targets        []string `json:"targets,omitempty"`
+	Reason         string   `json:"reason"`
+	CommandPreview string   `json:"command_preview,omitempty"`
+	CanSession     bool     `json:"can_allow_session,omitempty"`
+	CanAlways      bool     `json:"can_allow_always,omitempty"`
+}
+
+// TrustItemView summarizes one user-managed persistent allow item for settings UI.
+type TrustItemView struct {
+	ID    string `json:"id"`
+	Kind  string `json:"kind"` // "folder" | "command"
+	Label string `json:"label"`
+}
+
 // Step is model-declared progress, separate from observed file changes.
 type Step struct {
 	Text   string `json:"step"`
@@ -144,21 +171,23 @@ type Change struct {
 	Content []byte `json:"content,omitempty"`
 }
 type Operation struct {
-	ID          string    `json:"id"`
-	Scope       Scope     `json:"scope"`
-	Tool        string    `json:"tool"`
-	Summary     string    `json:"summary,omitempty"`
-	Fingerprint string    `json:"fingerprint"`
-	Sequence    int64     `json:"sequence"`
-	Started     time.Time `json:"started"`
-	Finished    time.Time `json:"finished,omitempty"`
-	State       string    `json:"state"`
-	Phase       string    `json:"phase,omitempty"`
-	WaitReason  string    `json:"wait_reason,omitempty"`
-	Changes     []Change  `json:"changes"`
-	Detail      string    `json:"detail,omitempty"`
-	Progress    []Step    `json:"progress,omitempty"`
-	Resolution  string    `json:"resolution_id,omitempty"`
+	ID           string        `json:"id"`
+	Scope        Scope         `json:"scope"`
+	Tool         string        `json:"tool"`
+	Summary      string        `json:"summary,omitempty"`
+	Fingerprint  string        `json:"fingerprint"`
+	Sequence     int64         `json:"sequence"`
+	Started      time.Time     `json:"started"`
+	Finished     time.Time     `json:"finished,omitempty"`
+	State        string        `json:"state"`
+	Phase        string        `json:"phase,omitempty"`
+	WaitReason   string        `json:"wait_reason,omitempty"`
+	Changes      []Change      `json:"changes"`
+	Detail       string        `json:"detail,omitempty"`
+	Progress     []Step        `json:"progress,omitempty"`
+	Approval     *ApprovalView `json:"approval,omitempty"`
+	ApprovalMode string        `json:"approval_mode,omitempty"`
+	Resolution   string        `json:"resolution_id,omitempty"`
 	// These parents were absent at admission and may remain after partial
 	// completion. File restore never recursively removes directories.
 	ParentDirectories []string `json:"new_parent_directories,omitempty"`
@@ -199,16 +228,20 @@ type Artifact struct {
 }
 
 type Status struct {
-	ID           string           `json:"workspace_id"`
-	Supported    bool             `json:"supported"`
-	Authorized   bool             `json:"authorized"`
-	Ready        bool             `json:"ready"`
-	Policy       string           `json:"policy_revision"`
-	Reason       string           `json:"unavailable_reason,omitempty"`
-	Busy         bool             `json:"busy"`
-	Enforcement  string           `json:"enforcement"`
-	Capabilities []string         `json:"capabilities"`
-	Limits       map[string]int64 `json:"limits"`
+	ID             string           `json:"workspace_id"`
+	Supported      bool             `json:"supported"`
+	Authorized     bool             `json:"authorized"`
+	Ready          bool             `json:"ready"`
+	Policy         string           `json:"policy_revision"`
+	ExecutionMode  string           `json:"execution_mode,omitempty"`
+	TrustRevision  string           `json:"trust_revision,omitempty"`
+	TrustRuleCount int              `json:"trust_rule_count"`
+	AllowedItems   []TrustItemView  `json:"allowed_items,omitempty"`
+	Reason         string           `json:"unavailable_reason,omitempty"`
+	Busy           bool             `json:"busy"`
+	Enforcement    string           `json:"enforcement"`
+	Capabilities   []string         `json:"capabilities"`
+	Limits         map[string]int64 `json:"limits"`
 }
 
 // TraceEvent records bounded, non-secret low-level lifecycle and I/O checkpoints.
@@ -228,18 +261,33 @@ func publicOperation(op Operation) Operation {
 	for i := range op.Changes {
 		op.Changes[i].Content = nil
 	}
+	if op.Approval != nil {
+		cp := *op.Approval
+		cp.Targets = append([]string(nil), op.Approval.Targets...)
+		op.Approval = &cp
+	}
 	return op
 }
 func artifactID(op string, index int) string { return fmt.Sprintf("%s.%d", op, index) }
 
 // ExecStartRequest starts a sandboxed script session owned by an active exec_command call.
 type ExecStartRequest struct {
-	CallID     string            `json:"id"`
-	Command    string            `json:"command"`
-	Workdir    string            `json:"workdir,omitempty"`
-	Env        map[string]string `json:"env,omitempty"`
-	YieldMs    *int              `json:"yield_ms,omitempty"`
-	TimeoutSec int               `json:"timeout_sec,omitempty"`
+	CallID           string            `json:"id"`
+	Command          string            `json:"command"`
+	Workdir          string            `json:"workdir,omitempty"`
+	Env              map[string]string `json:"env,omitempty"`
+	YieldMs          *int              `json:"yield_ms,omitempty"`
+	TimeoutSec       int               `json:"timeout_sec,omitempty"`
+	Escalated        bool              `json:"escalated,omitempty"`
+	EscalationReason string            `json:"escalation_reason,omitempty"`
+	ExternalPaths    []string          `json:"external_paths,omitempty"`
+}
+
+// ExecApprovalWaitRequest long-polls for a pending user escalation decision.
+type ExecApprovalWaitRequest struct {
+	CallID     string `json:"id"`
+	ApprovalID string `json:"approval_id"`
+	WaitMs     *int   `json:"wait_ms,omitempty"`
 }
 
 // ExecPollRequest polls output/status for a background or finished script session.
@@ -269,28 +317,39 @@ type ExecKillRequest struct {
 
 // ExecSessionSummary describes public status of one script execution session.
 type ExecSessionSummary struct {
-	SessionID  string `json:"session_id"`
-	Status     string `json:"status"`
-	ExitCode   int    `json:"exit_code,omitempty"`
-	DurationMs int64  `json:"duration_ms,omitempty"`
-	TotalBytes int64  `json:"total_bytes"`
-	Truncated  bool   `json:"truncated,omitempty"`
-	TLSHint    string `json:"tls_hint,omitempty"`
-	Warning    string `json:"warning,omitempty"`
+	SessionID    string `json:"session_id"`
+	Status       string `json:"status"`
+	ExitCode     int    `json:"exit_code,omitempty"`
+	DurationMs   int64  `json:"duration_ms,omitempty"`
+	TotalBytes   int64  `json:"total_bytes"`
+	Truncated    bool   `json:"truncated,omitempty"`
+	Escalated    bool   `json:"escalated,omitempty"`
+	ApprovalMode string `json:"approval_mode,omitempty"`
+	TLSHint      string `json:"tls_hint,omitempty"`
+	Warning      string `json:"warning,omitempty"`
 }
 
 // ExecResult is returned to the OpenClaw workspace plugin for exec_command and process_control.
 type ExecResult struct {
-	Status     string               `json:"status"`
-	SessionID  string               `json:"session_id,omitempty"`
-	Output     string               `json:"output,omitempty"`
-	NextOffset int64                `json:"next_offset,omitempty"`
-	TotalBytes int64                `json:"total_bytes,omitempty"`
-	Truncated  bool                 `json:"truncated,omitempty"`
-	ExitCode   int                  `json:"exit_code,omitempty"`
-	DurationMs int64                `json:"duration_ms,omitempty"`
-	Reason     string               `json:"reason,omitempty"`
-	TLSHint    string               `json:"tls_hint,omitempty"`
-	Warning    string               `json:"warning,omitempty"`
-	Sessions   []ExecSessionSummary `json:"sessions,omitempty"`
+	Status              string               `json:"status"`
+	SessionID           string               `json:"session_id,omitempty"`
+	ApprovalID          string               `json:"approval_id,omitempty"`
+	Output              string               `json:"output,omitempty"`
+	NextOffset          int64                `json:"next_offset,omitempty"`
+	TotalBytes          int64                `json:"total_bytes,omitempty"`
+	Truncated           bool                 `json:"truncated,omitempty"`
+	ExitCode            int                  `json:"exit_code,omitempty"`
+	DurationMs          int64                `json:"duration_ms,omitempty"`
+	Reason              string               `json:"reason,omitempty"`
+	TLSHint             string               `json:"tls_hint,omitempty"`
+	Warning             string               `json:"warning,omitempty"`
+	RulePersistError    string               `json:"rule_persist_error,omitempty"`
+	Escalated           bool                 `json:"escalated,omitempty"`
+	ApprovalMode        string               `json:"approval_mode,omitempty"`
+	UserApproved        bool                 `json:"user_approved,omitempty"`
+	ApprovalDecision    string               `json:"approval_decision,omitempty"`
+	ApprovalWaitMs      int64                `json:"approval_wait_ms,omitempty"`
+	EscalationAvailable bool                 `json:"escalation_available,omitempty"`
+	EscalationDenied    bool                 `json:"escalation_denied,omitempty"`
+	Sessions            []ExecSessionSummary `json:"sessions,omitempty"`
 }

@@ -84,8 +84,17 @@ func (b *windowsBackend) Prepare(workspaceRoot, tempRoot string) error {
 }
 
 func (b *windowsBackend) Start(ctx context.Context, spec SpawnSpec) (SessionProcess, error) {
+	if ctx.Err() != nil {
+		return nil, fail("cancelled")
+	}
 	if spec.Command == "" {
 		return nil, fail("invalid_request")
+	}
+	if CheckElevationVerbs(spec.Command) {
+		return nil, fail("elevation_verb_denied")
+	}
+	if spec.Escalated {
+		return b.startEscalated(ctx, spec)
 	}
 	if label, bad := CheckSensitiveReferences(spec.Command, spec.WorkspaceRoot, spec.TempRoot, spec.ProtectedDirs); bad {
 		_ = label
@@ -105,7 +114,7 @@ func (b *windowsBackend) Start(ctx context.Context, spec SpawnSpec) (SessionProc
 	b.mu.Lock()
 	token := b.tok
 	b.mu.Unlock()
-	return spawnWindowsSession(ctx, token, spec, workdir, env)
+	return spawnWindowsSession(ctx, token, "", nil, spec, workdir, env)
 }
 
 func isNotFoundWinErr(err error) bool {
@@ -203,8 +212,8 @@ type windowsSession struct {
 	tempScript     string
 }
 
-func spawnWindowsSession(ctx context.Context, token windows.Token, spec SpawnSpec, workdir string, env []string) (SessionProcess, error) {
-	job, err := userprocess.NewKillOnCloseJob("", jobLimitDieOnUnhandledException)
+func spawnWindowsSession(ctx context.Context, token windows.Token, jobName string, afterSuspended func(windows.Handle) error, spec SpawnSpec, workdir string, env []string) (SessionProcess, error) {
+	job, err := userprocess.NewKillOnCloseJob(jobName, jobLimitDieOnUnhandledException)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +240,7 @@ func spawnWindowsSession(ctx context.Context, token windows.Token, spec SpawnSpe
 		return nil, err
 	}
 
-	shellPath, cmdLine, tempScript, err := buildShellInvocation(spec.Command, spec.TempRoot)
+	shellPath, cmdLine, tempScript, err := buildShellInvocation(spec)
 	if err != nil {
 		_ = windows.CloseHandle(nulHandle)
 		_ = outRead.Close()
@@ -243,15 +252,25 @@ func spawnWindowsSession(ctx context.Context, token windows.Token, spec SpawnSpe
 	}
 
 	res, err := userprocess.SpawnAttachedJob(userprocess.SpawnConfig{
-		Job:         job,
-		Token:       token,
-		Executable:  shellPath,
-		CommandLine: cmdLine,
-		WorkingDir:  workdir,
-		Environment: env,
-		Stdin:       nulHandle,
-		Stdout:      windows.Handle(outWrite.Fd()),
-		Stderr:      windows.Handle(errWrite.Fd()),
+		Job:            job,
+		Token:          token,
+		Executable:     shellPath,
+		CommandLine:    cmdLine,
+		WorkingDir:     workdir,
+		Environment:    env,
+		Stdin:          nulHandle,
+		Stdout:         windows.Handle(outWrite.Fd()),
+		Stderr:         windows.Handle(errWrite.Fd()),
+		AfterSuspended: afterSuspended,
+		AdmitResume: func(resume func() error) error {
+			if ctx.Err() != nil {
+				return fail("cancelled")
+			}
+			if spec.AdmitResume != nil {
+				return spec.AdmitResume(resume)
+			}
+			return resume()
+		},
 	})
 	_ = windows.CloseHandle(nulHandle)
 	_ = outWrite.Close()
@@ -265,6 +284,10 @@ func spawnWindowsSession(ctx context.Context, token windows.Token, spec SpawnSpe
 		_ = windows.CloseHandle(job)
 		if tempScript != "" {
 			_ = os.Remove(tempScript)
+		}
+		var se *Error
+		if errors.As(err, &se) && se.Code != "" {
+			return nil, se
 		}
 		return nil, fail("spawn_failed")
 	}
@@ -283,12 +306,38 @@ func spawnWindowsSession(ctx context.Context, token windows.Token, spec SpawnSpe
 	return s, nil
 }
 
-func buildShellInvocation(command, tempRoot string) (string, string, string, error) {
+func psUTF16DataExpr(s string) string {
+	return "([System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String('" + encodeUTF16Base64(s) + "')))"
+}
+
+func formatDirectPowerShellCall(exe, rawArgsTail string, fallbackArgs []string) string {
+	var b strings.Builder
+	b.WriteString("& ")
+	b.WriteString(psUTF16DataExpr(exe))
+	if rawArgsTail != "" {
+		if rawArgsTail[0] != ' ' && rawArgsTail[0] != '\t' {
+			b.WriteByte(' ')
+		}
+		b.WriteString(rawArgsTail)
+		return b.String()
+	}
+	for _, a := range fallbackArgs {
+		b.WriteByte(' ')
+		b.WriteString(psUTF16DataExpr(a))
+	}
+	return b.String()
+}
+
+func buildShellInvocation(spec SpawnSpec) (string, string, string, error) {
 	shell := resolvePowerShell()
+	body := spec.Command
+	if spec.DirectExe != "" {
+		body = formatDirectPowerShellCall(spec.DirectExe, spec.DirectRawArgs, spec.DirectArgs)
+	}
 	script := "$ProgressPreference = 'SilentlyContinue'\r\n" +
 		"try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}\r\n" +
 		"$OutputEncoding = [System.Text.Encoding]::UTF8\r\n" +
-		command + "\r\n" +
+		body + "\r\n" +
 		"if (-not $?) { if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; exit 1 }\r\n"
 	if len(script) <= maxEncodedPSChars {
 		encoded := encodeUTF16Base64(script)
@@ -298,7 +347,7 @@ func buildShellInvocation(command, tempRoot string) (string, string, string, err
 		}
 	}
 	// Fallback for long scripts: write UTF-8 with BOM to managed sandbox-temp.
-	f, err := os.CreateTemp(stripExtendedPrefix(filepath.Clean(tempRoot)), "asterhand-cmd-*.ps1")
+	f, err := os.CreateTemp(stripExtendedPrefix(filepath.Clean(spec.TempRoot)), "asterhand-cmd-*.ps1")
 	if err != nil {
 		return "", "", "", err
 	}
@@ -532,6 +581,67 @@ func (s *windowsSession) Close() error {
 	return nil
 }
 
+func finalPathByHandle(h windows.Handle) (string, error) {
+	var stack [windows.MAX_PATH]uint16
+	n, err := windows.GetFinalPathNameByHandle(h, &stack[0], uint32(len(stack)), 0)
+	if err == nil && n > 0 && n < uint32(len(stack)) {
+		return stripExtendedPrefix(filepath.Clean(windows.UTF16ToString(stack[:n]))), nil
+	}
+	if err == nil && n >= uint32(len(stack)) {
+		buf := make([]uint16, n+1)
+		written, bufErr := windows.GetFinalPathNameByHandle(h, &buf[0], uint32(len(buf)), 0)
+		if bufErr == nil && written > 0 && written < uint32(len(buf)) {
+			return stripExtendedPrefix(filepath.Clean(windows.UTF16ToString(buf[:written]))), nil
+		}
+	}
+	return "", err
+}
+
+// OpenSharedReadLocked opens an existing regular file (not a directory or reparse point)
+// with FILE_SHARE_READ so concurrent writers/deleters are blocked until Close, while child
+// processes can still read or execute the verified target.
+func OpenSharedReadLocked(path string) (*os.File, string, int64, int64, error) {
+	abs, err := filepath.Abs(stripExtendedPrefix(filepath.Clean(path)))
+	if err != nil {
+		return nil, "", 0, 0, fail("invalid_path")
+	}
+	openPath := stripExtendedPrefix(abs)
+	if len(openPath) >= 248 && len(openPath) >= 3 && openPath[1] == ':' && openPath[2] == '\\' && !strings.HasPrefix(openPath, `\\?\`) {
+		openPath = `\\?\` + openPath
+	}
+	ptr, err := windows.UTF16PtrFromString(openPath)
+	if err != nil {
+		return nil, "", 0, 0, fail("invalid_path")
+	}
+	h, err := windows.CreateFile(ptr, windows.GENERIC_READ, windows.FILE_SHARE_READ, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	if err != nil {
+		if os.IsNotExist(err) || errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
+			return nil, "", 0, 0, os.ErrNotExist
+		}
+		if errors.Is(err, windows.ERROR_SHARING_VIOLATION) || errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+			return nil, "", 0, 0, fail("io_error")
+		}
+		return nil, "", 0, 0, fail("invalid_path")
+	}
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(h, &info); err != nil {
+		_ = windows.CloseHandle(h)
+		return nil, "", 0, 0, fail("io_error")
+	}
+	if info.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+		_ = windows.CloseHandle(h)
+		return nil, "", 0, 0, fail("unsafe_links_detected")
+	}
+	finalPath, fpErr := finalPathByHandle(h)
+	if fpErr != nil || finalPath == "" {
+		_ = windows.CloseHandle(h)
+		return nil, "", 0, 0, fail("unsafe_links_detected")
+	}
+	size := int64(info.FileSizeHigh)<<32 | int64(info.FileSizeLow)
+	modNano := info.LastWriteTime.Nanoseconds()
+	return os.NewFile(uintptr(h), finalPath), finalPath, size, modNano, nil
+}
+
 func evalRealPath(p string) (string, error) {
 	abs, err := filepath.Abs(filepath.Clean(p))
 	if err != nil {
@@ -553,17 +663,8 @@ func evalRealPath(p string) (string, error) {
 		return filepath.EvalSymlinks(abs)
 	}
 	defer windows.CloseHandle(h)
-	var stack [windows.MAX_PATH]uint16
-	n, err := windows.GetFinalPathNameByHandle(h, &stack[0], uint32(len(stack)), 0)
-	if err == nil && n > 0 && n < uint32(len(stack)) {
-		return stripExtendedPrefix(filepath.Clean(windows.UTF16ToString(stack[:n]))), nil
-	}
-	if err == nil && n >= uint32(len(stack)) {
-		buf := make([]uint16, n+1)
-		written, bufErr := windows.GetFinalPathNameByHandle(h, &buf[0], uint32(len(buf)), 0)
-		if bufErr == nil && written > 0 && written < uint32(len(buf)) {
-			return stripExtendedPrefix(filepath.Clean(windows.UTF16ToString(buf[:written]))), nil
-		}
+	if finalPath, fpErr := finalPathByHandle(h); fpErr == nil && finalPath != "" {
+		return finalPath, nil
 	}
 	return filepath.EvalSymlinks(abs)
 }

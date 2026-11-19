@@ -58,6 +58,10 @@ type bridgeRequest struct {
 	YieldMs          *int              `json:"yield_ms"`
 	TimeoutSec       int               `json:"timeout_sec"`
 	SessionID        string            `json:"session_id"`
+	ApprovalID       string            `json:"approval_id"`
+	Escalated        bool              `json:"escalated"`
+	EscalationReason string            `json:"escalation_reason"`
+	ExternalPaths    []string          `json:"external_paths"`
 	Subaction        string            `json:"subaction"`
 	Offset           *int64            `json:"offset"`
 	Limit            int               `json:"limit"`
@@ -97,7 +101,7 @@ func (t *Transport) acquirePool(action string) (func(), bool) {
 	switch {
 	case isControlAction(action):
 		pool = t.controlSlots
-	case action == "acquire" || action == "exec/start" || action == "exec/poll":
+	case action == "acquire" || action == "exec/start" || action == "exec/approval_wait" || action == "exec/poll":
 		pool = t.waitSlots
 	default:
 		pool = t.ioSlots
@@ -242,9 +246,23 @@ func (t *Transport) call(ctx context.Context, req bridgeRequest) (any, error) {
 		return nil, s.Remove(req.ID, req.Path)
 	case "mkdir":
 		return nil, s.Mkdir(req.ID, req.Path)
+	case "exec/start", "exec/approval_wait", "exec/poll", "exec/control", "exec/kill":
+		return callExecBridge(ctx, s, req)
+	default:
+		return nil, fail("unsupported")
+	}
+}
+
+func callExecBridge(ctx context.Context, s *Service, req bridgeRequest) (any, error) {
+	switch req.Action {
 	case "exec/start":
 		return s.StartExec(ctx, ExecStartRequest{
 			CallID: req.ID, Command: req.Command, Workdir: req.Workdir, Env: req.Env, YieldMs: req.YieldMs, TimeoutSec: req.TimeoutSec,
+			Escalated: req.Escalated, EscalationReason: req.EscalationReason, ExternalPaths: req.ExternalPaths,
+		})
+	case "exec/approval_wait":
+		return s.WaitApproval(ctx, ExecApprovalWaitRequest{
+			CallID: req.ID, ApprovalID: req.ApprovalID, WaitMs: req.WaitMs,
 		})
 	case "exec/poll":
 		return s.PollExec(ctx, ExecPollRequest{

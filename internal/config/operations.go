@@ -15,6 +15,11 @@ func (m *Manager) SetJournal(j operations.Journal) error {
 }
 func (m *Manager) SaveOperation(c Config, i operations.Identity) error { return m.save(c, &i) }
 
+// UpdateOperation atomically updates config with an automation operation publication under writeMu.
+func (m *Manager) UpdateOperation(i operations.Identity, fn func(cur Config) (Config, error)) (Config, error) {
+	return m.update(&i, fn)
+}
+
 func (m *Manager) completePublication() error {
 	p := m.Get().Publication
 	if p == nil {

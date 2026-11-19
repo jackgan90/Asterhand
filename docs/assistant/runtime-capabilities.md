@@ -1,6 +1,6 @@
 # 本机工具能力与运行时适配
 
-当前实现：Windows 受限文件服务、受限工作区脚本执行沙箱与正式 OpenClaw 桥已接入；未设置过工具权限时默认开启，已有明确选择保持。人工可在“设置 → 助手”关闭或开启。原生宿主直写组合未通过 G3，现用实现及原因见[实施门槛](../development/features/local-runtime-tools/preflight.md)，第一阶段脚本执行与统一停止设计见[脚本执行计划](../development/features/workspace-script-execution/plan.md)。适用 R03/R04/R23/R27 与 AST-TOOLS、EXEC-TOOLS；实际验证范围分别见对应验证方案。
+当前实现：Windows 受限文件服务、受限工作区脚本执行沙箱（Tier 1 `WRITE_RESTRICTED`）、受控普通用户态提权执行（Tier 2 `OrdinaryToken` + 极速免审 `turbo` 模式）与正式 OpenClaw 桥已接入；未设置过工具权限时默认开启，已有明确选择保持。人工可在“设置 → 助手”关闭或开启，并在开启状态下切换“按需询问（推荐）/ 自动允许（极速）”与一键移除持久信任项目。原生宿主直写组合未通过 G3，现用实现及原因见[实施门槛](../development/features/local-runtime-tools/preflight.md)，第一阶段脚本执行与统一停止设计见[脚本执行计划](../development/features/workspace-script-execution/plan.md)，第二阶段受控提权、审批等待协议与极速模式设计见[受控提权执行计划](../development/features/workspace-script-escalation/plan.md)。适用 R03/R04/R23/R27 与 AST-TOOLS、EXEC-TOOLS；实际验证范围分别见对应验证方案。
 
 ## 公共边界
 
@@ -24,11 +24,11 @@ Asterhand 负责目标节点、授权、工作区身份、资源预算、公共�
 
 ## 能力描述与授权
 
-公共描述包含工作区 ID、语义能力 ID 列表、supported、authorized、ready、unavailable_reason、policy_revision、busy、enforcement 和带单位的限制。第一阶段 enforcement 为 `restricted_service`（含文件受限服务与内核写沙箱，当底层 `SandboxBackend.Supported()` 为真时额外宣告 `scripts.execute` 并导出 `exec_timeout_seconds`、`exec_output_bytes`、`exec_sessions_per_turn`、`sandbox_temp_bytes` 上限）；取消与恢复遵循下文规则。ready 是本机工作区服务可以接收工具调用，不预先发模型测试；模型就绪仍查询既有会话能力，有效工具策略由每次原生模型输入核对。
+公共描述包含工作区 ID、语义能力 ID 列表、supported、authorized、ready、unavailable_reason、policy_revision、execution_mode（`standard` | `turbo`）、trust_revision、trust_rule_count、allowed_items（用户可读已始终允许列表）、busy、enforcement 和带单位的限制。当前 enforcement 为 `restricted_service`（含文件受限服务与内核写沙箱；当底层 `SandboxBackend.Supported()` 为真时额外宣告 `scripts.execute` 与 `scripts.escalate`，并导出 `exec_timeout_seconds`、`exec_output_bytes`、`exec_sessions_per_turn`、`sandbox_temp_bytes` 上限）；取消与恢复遵循下文规则。ready 是本机工作区服务可以接收工具调用，不预先发模型测试；模型就绪仍查询既有会话能力，有效工具策略由每次原生模型输入核对。
 
-当前语义能力包括文件读取/变更/发现、受限工作区脚本执行（`scripts.execute`）、记忆检索、进度、产物读取和版本恢复；复合工具必须满足它全部可能副作用的授权。apply_patch 的移动/删除不能被描述为仅写入。工具缺失、原生策略不可落实或版本不匹配时拒绝该能力，基础聊天保持可用。
+当前语义能力包括文件读取/变更/发现、受限工作区脚本执行（`scripts.execute`）、受控普通用户态提权脚本执行（`scripts.escalate`）、记忆检索、进度、产物读取和版本恢复；复合工具必须满足它全部可能副作用的授权。apply_patch 的移动/删除不能被描述为仅写入。工具缺失、原生策略不可落实或版本不匹配时拒绝该能力，基础聊天保持可用。
 
-策略由受信任节点设置保存。新安装、缺失工具设置的旧配置，以及此前自动保存但没有权限修订的默认关闭配置，都按默认开启处理；已有非空权限修订的明确开启/关闭保持原值。默认策略带稳定修订，人工更改产生新修订；普通设置保存和重启不得覆盖明确选择。默认开启覆盖受限工作区工具与第一阶段受限工作区脚本沙箱；未来第二阶段跨工作区提权与持久化信任规则仍保持显式关闭与独立审批演进，见[默认工具权限决策](adr/011-default-assistant-tools.md)与[ADR-AST-012](adr/012-workspace-script-execution-boundary.md)。CLI/MCP 只能读取能力状态，不能更改内置助手权限。普通恢复是已有授权范围的业务操作，不是权限变更。
+策略由受信任节点设置保存。新安装、缺失工具设置的旧配置，以及此前自动保存但没有权限修订的默认关闭配置，都按默认开启处理；已有非空权限修订的明确开启/关闭保持原值。默认策略带稳定修订，人工更改产生新修订；普通设置保存和重启不得覆盖明确选择。开关修订 `Revision` 变更需停闭并随下一代 Gateway 生效；而确认模式 `ExecutionMode` 与持久化 `TrustRules` 绑定独立的 `TrustRevision`，由 Go 服务即时热更新且保留原有已存信任状态。相关决策见[默认工具权限决策](adr/011-default-assistant-tools.md)、[ADR-AST-012](adr/012-workspace-script-execution-boundary.md)与[ADR-AST-013](adr/013-controlled-escalated-script-execution.md)。CLI/MCP 只能读取能力状态及允许列表，不能更改内置助手权限或批准待确认提权。普通恢复是已有授权范围的业务操作，不是权限变更。
 
 每轮固定策略修订。人工更改权限先取得会话配置门禁；有活动、排队、创建中的会话操作或公共文件修改时返回 busy。用户先停止或等待收尾，再重试权限更改；成功前不声称已撤权。保存新修订前关闭旧 Gateway，后续轮次才应用新策略。未知文件操作仍需核对，重新启用权限不会解除该阻塞。
 
@@ -61,7 +61,7 @@ Hermes 的 read_file/write_file/patch/search_files 可映射相同语义，但�
 | 文件发现/内容搜索 | 每页 100 条、64 KiB 响应；每次最多扫描 10,000 项/64 MiB 内容、5 秒；达到上限返回截断与继续依据 |
 | 工作区托管数据 | 256 MiB、10,000 文件及目录；新增父目录也计数；禁止增加已超限的用量，允许读取、删除与缩小文件 |
 | 版本存储 | 1 GiB；最近 30 天且每文件最近 20 个版本，先达到者触发清理；活动/未知记录固定保留 |
-| 轮次 | 沿用现有 10 分钟预算，新增最多 100 次工具调用；达到上限停止新调用并收尾 |
+| 轮次 | 沿用现有 10 分钟预算，新增最多 500 次工具调用；达到上限停止新调用并收尾 |
 | 活动元数据 | 每调用摘要最多 8 KiB，总额 64 MiB；记录按 30 天清理，未收尾固定保留；不足时拒绝新工具轮次 |
 
 搜索对大目录使用可推进的游标/扫描预算，regex 必须有线性时间实现或显式超时，忽略内部索引、版本和秘密区域。文件结果和预览保持当前公共 IPC 响应上限；大文件通过有界片段读取，不扩大桥的单帧上限。
@@ -84,11 +84,11 @@ Windows 服务对修改调用从读取前像到发布结果持续持有目标及
 
 | 平台 | 隔离机制 | 写限制与管道 | 敏感目录读写边界（平台分层事实） | 进程树终止 |
 |---|---|---|---|---|
-| Windows（已实现） | `CreateRestrictedToken(DISABLE_MAX_PRIVILEGE \| LUA_TOKEN \| WRITE_RESTRICTED)` + Medium IL + `S-1-9-*` 能力 SID `S_sandbox` + `S-1-5-33` + `LogonSID` + `S-1-1-0 (Everyone)` + `TokenDefaultDacl` | 内核仅放开 `workspace` 与 `<journal>/sandbox-temp` 的 `(A;OICI;0x001301BF;;;<S_sandbox>)`（`Modify`，无 `WRITE_DAC`/`WRITE_OWNER`）；`cmd > nul`/Python 3.14/PowerShell/pwsh/Git/Node 正常工作（宿主机显式授 `Everyone:Modify` 目录例外） | 环境变量剥离 + 桥令牌不落盘 + 工作区外与常见用户凭据目录（`.ssh`/`.aws`/`.gnupg`/`.kube` 等）内核禁写与启动前规范化路径拦截（`sensitive_path_denied`）；**Windows 零 UAC 同用户不阻止内核读或 DPAPI 解封**（保留用户工具链可用性） | `PROC_THREAD_ATTRIBUTE_JOB_LIST` + Kill-on-close Job Object（`TerminateJobObject`） |
+| Windows（已实现） | Tier 1：`CreateRestrictedToken(DISABLE_MAX_PRIVILEGE \| LUA_TOKEN \| WRITE_RESTRICTED)` + Medium IL + `S-1-9-*` + `S-1-5-33` + `LogonSID` + `S-1-1-0 (Everyone)`<br>Tier 2：`OrdinaryToken()`（Medium IL `S-1-16-8192`，剥离管理员组与高危特权，零 UAC） | Tier 1 仅放开 `workspace` 与 `<journal>/sandbox-temp` `Modify`；Tier 2 运行期受当前普通用户 OS ACL 管辖，启动前执行外部目录/声明 `workdir` 白名单校验、原生 `TEMP`/`TMP` 与完整系统 Schannel HTTPS（拒绝对全盘/系统顶级目录授宽规则） | 环境变量剥离 + 桥令牌不落盘 + 启动前（含工作区引用脚本）`<HomeRoot>`/常见用户凭据目录硬拦截（`sensitive_path_denied`）+ 显式 UAC 提权动词拦截（`elevation_verb_denied`）；Tier 2 统一在启动前以 `FILE_SHARE_READ` 锁定并完成 `TOCTOU` 原始请求重解析与 `<= 16 MiB` 脚本/`<= 64 MiB` 可执行入口 SHA-256 校验（排除纯数据大文件）、经串行取消门禁启动后再发布规则与返回只读 `escalated`/`approval_mode`/`user_approved`/`approval_decision`/`approval_wait_ms` 元数据（持久规则保存失败独立返回 `rule_persist_error` 告警且保留执行结果；仍不宣称从内核阻断同用户普通代码读/DPAPI） | `PROC_THREAD_ATTRIBUTE_JOB_LIST` + Kill-on-close 具名 Job Object（Tier 2 为 `Local\Asterhand.Exec.<id>`） |
 | macOS（契约已对齐，未实现/未验证） | 预期 `sandbox-exec` 动态 Seatbelt SBPL | 预期 `(deny file-write*)` + 仅允许工作区/`sandbox-temp`/`/dev/null` 等 | 预期内核级 `(deny file-read* file-write* ...)`；SIP 与运行时签名兼容性待二期实机验证 | 预期 `-pgid` `SIGKILL` |
 | Linux（契约已对齐，未实现/未验证） | 预期 Bubblewrap (`bwrap`) user/mount namespace | 预期工作区与 `sandbox-temp` `--bind` 读写，其余 `--ro-bind` | 预期 `--tmpfs` 覆盖遮蔽自管凭据与用户敏感凭据目录；Ubuntu 24.04+ AppArmor userns 限制待二期实机验证 | 预期 `--die-with-parent` + `-pgid` `SIGKILL` |
 
-第一阶段默认允许出站网络，单次脚本最长执行 `600` 秒（默认 `120` 秒）、同步转后台阈值最多 `30` 秒（默认 `10` 秒，单次 HTTP 轮询等待切片上限 `2.5` 秒）、每流（stdout/stderr）保留上限 `256 KiB`（支持 UTF-8 / UTF-16LE / 中文 Windows GB18030 流式解码），单轮次最多同时运行 `8` 个并发脚本会话（进程退出或被杀即立即归还名额，受单轮 `100` 次总工具调用预算约束），`<journal>/sandbox-temp` 共享 `256 MiB / 10,000` 项上限并由 `2s` 看门狗监护，全部与对话 `turn` 生命周期绑定。Windows 清理环境中默认注入 `GIT_SSL_BACKEND=openssl` 以保障 Git HTTPS 正常执行；系统 Schannel/SSPI 工具（原生 `curl.exe` 报 `SEC_E_NO_CREDENTIALS` / `0x8009030E`，或 PowerShell `Invoke-WebRequest` 报 `"The underlying connection was closed"`）由服务端识别并返回 `tls_hint: "windows_schannel_restricted"`，引导改用 Python/Node HTTPS。
+第一阶段默认允许出站网络，单次脚本最长执行 `600` 秒（默认 `120` 秒）、同步转后台阈值最多 `30` 秒（默认 `10` 秒，单次 HTTP 轮询等待切片上限 `2.5` 秒）、每流（stdout/stderr）保留上限 `256 KiB`（支持 UTF-8 / UTF-16LE / 中文 Windows GB18030 流式解码），单轮次最多同时运行 `8` 个并发脚本会话（进程退出或被杀即立即归还名额，受单轮 `500` 次总工具调用预算约束），`<journal>/sandbox-temp` 共享 `256 MiB / 10,000` 项上限并由 `2s` 看门狗监护，全部与对话 `turn` 生命周期绑定。Windows 清理环境中默认注入 `GIT_SSL_BACKEND=openssl` 以保障 Git HTTPS 正常执行；系统 Schannel/SSPI 工具（原生 `curl.exe` 报 `SEC_E_NO_CREDENTIALS` / `0x8009030E`，或 PowerShell `Invoke-WebRequest` 报 `"The underlying connection was closed"`）由服务端识别并返回 `tls_hint: "windows_schannel_restricted"`，引导改用 Python/Node HTTPS。
 
 脚本结束后由服务端统一执行 `reconcileAfterExec`：推进 `publishGen` 并重算工作区磁盘占用与文件计数（忽略且记录非预期 reparse point 为 `unsafe_links_detected`）；若超出 `256 MiB` 或 `10,000` 项上限则锁存 `overQuota` 状态阻塞后续工具写入增长直至精简，且 `workspace_versions.restore` 在携带脚本前旧文件修订时必触发 `revision_conflict` 而不会静默覆盖脚本成果。
 
@@ -98,7 +98,7 @@ Windows 服务对修改调用从读取前像到发布结果持续持有目标及
 
 首批同一 workspace 所有获工具授权的轮次串行（包括可能写记忆的轮次），搜索/产物读取和纯历史查询不占修改槽。默认工具会话在整轮与收尾期间持有租约，不根据模型尚未调用 write 就提前允许另一个工具轮次。现有入队与容量规则保持，停止和核对留独立通道。
 
-公共事件包含 workspace/conversation/turn/call 身份、策略修订、单调顺序、状态、简短目标摘要（`summary`，由工具定义显式声明可展示的参数白名单并归一化为有界单行文本）、结果/产物引用。不公开原生 token、内部提示词、隐藏推理、完整工具入参（如写入正文、编辑前/后文本、补丁差异块）或秘密。工具状态为 started/queued/completed/failed/cancelled/unknown（工作区操作记录保持 `State = "started"` 并通过 `Phase` 细分排队与运行，会话活动与历史视图将 `PhaseQueued` 映射为 `queued`）；轮次终态依据原生明确终态及工具收尾，不能凭出现 assistant 消息判完成。
+公共事件包含 workspace/conversation/turn/call 身份、策略修订、单调顺序、状态、简短目标摘要（`summary`，由工具定义显式声明可展示的参数白名单并归一化为有界单行文本）、只读 `approval_mode`/`detail` 与结果/产物引用。不公开原生 token、内部提示词、隐藏推理、完整工具入参（如写入正文、编辑前/后文本、补丁差异块）或秘密。工具状态为 started/queued/awaiting_approval/completed/failed/denied/cancelled/unknown（工作区操作记录保持 `State = "started"` 并通过 `Phase` 细分排队、运行与等待确认，实时与历史视图共用 `ProjectToolActivity` 将 `PhaseQueued`、`PhaseAwaitingApproval` 及 `denied_by_user`/`policy_denied` 分别映射为 `queued`、`awaiting_approval` 与 `denied`，将 `approval_timeout` 映射为 `failed`）；轮次终态依据原生明确终态及工具收尾，不能凭出现 assistant 消息判完成。
 
 会话正文和原生工具正文仍归 harness。若原生历史不能稳定回读活动，节点只存有界活动元数据、结果引用及操作日志，和文件版本日志同域管理；不复制完整 transcript。UI 实时事件丢失后用游标/快照补读；历史中保留部分完成与未知标记。无法还原完整输出时给摘要/可读取产物和明确限制，不伪造连续事件。
 
@@ -120,14 +120,14 @@ Windows 服务对修改调用从读取前像到发布结果持续持有目标及
 
 产物引用绑定节点、workspace、会话/轮次和创建时文件修订；路径只是内部定位信息。每次读取重新验证授权、真实文件身份和修订；已删除/改动返回明确 stale/not_found，可另取当前版本。模型输出的 Markdown 路径不能自动取得宿主文件下载权限。
 
-首批日常界面仅在设置中提供“允许助手调用工具”开关，聊天保留工具活动与进度。文件目录/搜索、读取/下载、版本列表、显式恢复和未知操作核对保留在公共 CLI/MCP；不提供独立文件管理对话框。界面按普通用户使用频率安排，不为展示技术能力而增加低频控件。普通聊天澄清保持，不新增等待式 ask_user 工具。
+首批日常界面在设置“助手”页提供总开关、开启后可见的两项确认方式单选（“按需询问（推荐）/ 自动允许（极速）”）以及“空态隐藏、单行一键移除”的已始终允许项目；快捷聊天在需要时内联展开简洁确认卡片并支持 `极速免审` 轻量提示，拒绝或取消时立即折叠恢复。文件目录/搜索、读取/下载、版本列表、显式恢复和未知操作核对仍保留在公共 CLI/MCP，不额外增加复杂规则编辑器或独立文件管理器。
 
-统一 Web 的“设置 → 助手”通过专用人工 API 保存工具权限；点击即保存，不并入模型设置事务，保存成功后从下一轮生效，已有对话保留历史。保存结果未知时重新读取权限，未确认前不显示成功；加载、保存和错误均提供简短状态。活动状态变更推进单调序号，客户端按调用 ID 替换已有记录。公共恢复/核对继续使用稳定操作身份及收据，丢失响应时由调用方按同一身份核对或重试。文件公共读取每段最多 32 KiB（JSON 中为 base64），目录/搜索每页也受 32 KiB 限制，以满足公共响应 64 KiB 上限；单文件读取与变更均限 2 MiB。
+统一 Web 的“设置 → 助手”通过专用人工 API (`/api/workspace/permission`) 承载以上三类管理：总开关保存修订并在停止忙状态后从下一代 Gateway 生效；确认模式开关与规则移除通过 `TrustRevision` 毫秒级热生效且清理被覆盖的会话缓存，不中断或重启正在连接的 Gateway。活动状态（含 `awaiting_approval` 与审批元视图）变化推进单调序号，客户端按调用 ID 原位更新。文件公共读取与目录搜索上限维持 32 KiB 响应与 2 MiB 单文件读写上限。
 
-CLI/MCP 与 UI 复用同一服务、目标约束、分页和错误语义；文件读写业务可以通过受限工作区公共操作调用，并复用快照和租约，不能另开一条直接修改 runtime state 的通道。内置助手仅获得该工作区的窄服务身份，不继承外部当前用户自动化客户端的全量权力。
+CLI/MCP 与 UI 复用同一工作区服务；只读能力与配置状态可通过 `workspaces.get` / `turn_activities` / `workspace_operations` 获取，但切换确认模式、批准提权票据与移除信任项目保留为人工安全边界。
 
 ## 验证与演进
 
-文件工具实现门槛和场景见[本机工具验证方案](../development/features/local-runtime-tools/validation.md)，第一阶段脚本沙箱、秘密保护、四级停止与原生集成验证见[脚本执行验证方案](../development/features/workspace-script-execution/validation.md)。后续第二阶段审批提权、macOS/Linux 沙箱后端、媒体、委派与后台任务分别按独立计划扩展能力。旧任务路径、本机快捷命令与外部自动化的现有授权保持原契约。
+文件工具实现门槛见[本机工具验证方案](../development/features/local-runtime-tools/validation.md)，第一阶段脚本沙箱验证见[第一阶段验证方案](../development/features/workspace-script-execution/validation.md)，第二阶段受控提权、审批协议与极速免审验证见[第二阶段验证方案](../development/features/workspace-script-escalation/validation.md)。后续 macOS/Linux 沙箱实机适配、媒体、委派与后台任务按独立计划演进。
 
-[工作区工具细粒度并发计划](../development/features/workspace-tool-concurrency/plan.md)已在保留同工作区工具轮次串行的前提下实现轮内不冲突资源的并行执行：每项工具通过受信任描述声明资源范围，整批原子封存（同批内对同一已修改路径的后续盲覆写 `write_file` 以 `conflicting_batch_write` 拦截，其余冲突管线按批内顺序串行）后按序公平授予并在每次低层访问前校验身份与效果；记忆检索显式声明源文件与索引代次，取消等待在途子 I/O 排空。在此底座上，[工作区脚本与命令执行计划（第一阶段）](../development/features/workspace-script-execution/plan.md)进一步扩展 `DomainExec`、`execManager` 前台/后台生命周期管理与四级停止协同。公共文件入口共用同一调度器，操作记录可选暴露 `phase` 与 `wait_reason`，文件版本、原子预算和外部程序竞争保护完整保留。详细架构与验证入口见[资源调度设计](../development/features/workspace-tool-concurrency/design.md)与[并发验证方案](../development/features/workspace-tool-concurrency/validation.md)。
+[工作区工具细粒度并发计划](../development/features/workspace-tool-concurrency/plan.md)已在保留同工作区工具轮次串行的前提下实现轮内不冲突资源并发；在此底座上，[第一阶段计划](../development/features/workspace-script-execution/plan.md)与[第二阶段计划](../development/features/workspace-script-escalation/plan.md)分别交付受限工作区沙箱及受控 Tier 2 提权调度（含票据等待期间阻塞同轮受管文件写入的 `approval_pending` 屏障与 `reconcileAfterExec` 修订保护）。详细并发设计与验证见[资源调度设计](../development/features/workspace-tool-concurrency/design.md)与[并发验证方案](../development/features/workspace-tool-concurrency/validation.md)。

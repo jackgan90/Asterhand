@@ -30,6 +30,9 @@ func (e *Error) I18nKey() (string, map[string]string) {
 
 func fail(code string) error { return &Error{Code: code} }
 
+// NewError builds a structured sandbox error code safe for external admission callbacks.
+func NewError(code string) error { return &Error{Code: code} }
+
 // Code extracts the structured machine error code from err, defaulting to io_error.
 func Code(err error) string {
 	var e *Error
@@ -51,11 +54,18 @@ type SpawnSpec struct {
 	TempRoot       string
 	HomeRoot       string
 	Command        string
+	DirectExe      string
+	DirectArgs     []string
+	DirectRawArgs  string
+	AdmitResume    func(resume func() error) error
 	Workdir        string
 	Env            map[string]string
 	BundledNodeDir string
 	Timeout        time.Duration
 	ProtectedDirs  []ProtectedDir
+	Escalated      bool
+	ExternalDirs   []string
+	JobName        string
 }
 
 // OutputSlice holds a bounded UTF-8 window read from session output.

@@ -280,3 +280,123 @@ test('exec_command sends best-effort exec/kill without aborted signal when cance
   assert.ok(killCall && !killCall.hasSignal && killCall.payload.detail === 'cancelled');
   assert.equal(endCall?.payload?.state, 'cancelled');
 });
+
+test('exec_command normalizes escalation parameters, passes external workdir, and loops exec/approval_wait', async () => {
+  const calls = [];
+  let waitCount = 0;
+  const client = {
+    workspace: 'F:/synthetic-workspace',
+    relative: p => {
+      if (p.includes('D:/Data')) throw Object.assign(new Error('outside'), {code: 'outside_workspace'});
+      return p.replaceAll('\\', '/');
+    },
+    createBridge: () => ({}),
+    request: async (action, payload) => {
+      calls.push({action, payload});
+      if (action === 'register') return {id: payload.id};
+      if (action === 'seal') return {sealed: true};
+      if (action === 'acquire') return {granted: true, operation: {id: payload.id, state: 'started'}};
+      if (action === 'exec/start') return {status: 'approval_required', approval_id: 'ap_1234567890123456'};
+      if (action === 'exec/approval_wait') {
+        waitCount++;
+        return waitCount === 1
+          ? {status: 'approval_required', approval_id: 'ap_1234567890123456'}
+          : {status: 'completed', output: 'done', exit_code: 0};
+      }
+      if (action === 'end') return {state: payload.state};
+      throw new Error(`unexpected ${action}`);
+    },
+  };
+  const coord = createBatchCoordinator(client);
+  const [execTool] = createExecTools(client, coord);
+  const ctx = {runId: 'run-esc', sessionKey: 'agent:main:asterhand:conv-esc', toolCallId: 'e1'};
+  const prepared = execTool.prepareArguments({
+    command: 'dir',
+    workdir: 'D:/Data',
+    escalated: true,
+    escalation_reason: 'Need to inspect export folder',
+    external_paths: ['D:/Data'],
+  });
+  await coord.beforeToolCall({toolName: 'exec_command', toolCallId: 'e1', params: prepared}, ctx);
+  const res = await execTool.execute('e1', prepared);
+  const startCall = calls.find(c => c.action === 'exec/start');
+  assert.equal(startCall?.payload?.escalated, true);
+  assert.equal(startCall?.payload?.workdir, 'D:/Data');
+  assert.equal(startCall?.payload?.escalation_reason, 'Need to inspect export folder');
+  assert.deepEqual(startCall?.payload?.external_paths, ['D:/Data']);
+  assert.equal(waitCount, 2);
+  assert.deepEqual(JSON.parse(res.content[0].text), {status: 'completed', output: 'done', exit_code: 0});
+});
+
+test('exec_command sends exec/kill if cancelled while looping exec/approval_wait', async () => {
+  const calls = [];
+  const client = {
+    workspace: 'F:/synthetic-workspace',
+    relative: p => p.replaceAll('\\', '/'),
+    createBridge: () => ({}),
+    request: async (action, payload) => {
+      calls.push({action, payload});
+      if (action === 'register') return {id: payload.id};
+      if (action === 'seal') return {sealed: true};
+      if (action === 'acquire') return {granted: true, operation: {id: payload.id, state: 'started'}};
+      if (action === 'exec/start') return {status: 'approval_required', approval_id: 'ap_abort_123456789'};
+      if (action === 'exec/approval_wait') return {status: 'approval_required', approval_id: 'ap_abort_123456789'};
+      if (action === 'cancel' || action === 'exec/kill') return {killed: true};
+      if (action === 'end') return {state: payload.state};
+      throw new Error(`unexpected ${action}`);
+    },
+  };
+  const coord = createBatchCoordinator(client);
+  const [execTool] = createExecTools(client, coord);
+  const ctx = {runId: 'run-wait-abort', sessionKey: 'agent:main:asterhand:conv-esc', toolCallId: 'e2'};
+  await coord.beforeToolCall({toolName: 'exec_command', toolCallId: 'e2', params: {command: 'dir', escalated: true, escalationReason: 'list'}}, ctx);
+  const ac = new AbortController();
+  let waits = 0;
+  const origReq = client.request;
+  client.request = async (action, payload) => {
+    if (action === 'exec/approval_wait' && ++waits === 1) ac.abort();
+    return origReq(action, payload);
+  };
+  await assert.rejects(execTool.execute('e2', {command: 'dir', escalated: true, escalationReason: 'list'}, ac.signal), err => err?.code === 'cancelled' || err?.name === 'AbortError');
+  assert.ok(calls.some(c => c.action === 'exec/kill'));
+});
+
+test('exec_command forwards denied_by_user endDetail without failing model return and rejects oversized reason', async () => {
+  const endCalls = [];
+  const client = {
+    workspace: 'F:/synthetic-workspace',
+    relative: p => p.replaceAll('\\', '/'),
+    createBridge: () => ({}),
+    request: async (action, payload) => {
+      if (action === 'register') return {id: payload.id};
+      if (action === 'seal') return {sealed: true};
+      if (action === 'acquire') return {granted: true, operation: {id: payload.id, state: 'started'}};
+      if (action === 'exec/start') return {status: 'denied_by_user', escalation_denied: true};
+      if (action === 'end') {
+        endCalls.push(payload);
+        return {state: payload.state, detail: payload.detail};
+      }
+      throw new Error(`unexpected ${action}`);
+    },
+  };
+  const coord = createBatchCoordinator(client);
+  const [execTool] = createExecTools(client, coord);
+  await coord.beforeToolCall(
+    {toolName: 'exec_command', toolCallId: 'e-deny', params: {command: 'dir', escalated: true, escalationReason: 'list'}},
+    {runId: 'run-deny', sessionKey: 'agent:main:asterhand:conv-esc', toolCallId: 'e-deny'},
+  );
+  const res = await execTool.execute('e-deny', {command: 'dir', escalated: true, escalationReason: 'list'});
+  assert.deepEqual(JSON.parse(res.content[0].text), {status: 'denied_by_user', escalation_denied: true});
+  assert.equal(Object.hasOwn(res, 'endDetail') && res.propertyIsEnumerable('endDetail'), false);
+  assert.deepEqual(endCalls, [{id: endCalls[0].id, state: 'completed', detail: 'denied_by_user'}]);
+
+  const bigReason = 'r'.repeat(65 * 1024);
+  await coord.beforeToolCall(
+    {toolName: 'exec_command', toolCallId: 'e-big', params: {command: 'dir', escalated: true, escalationReason: bigReason}},
+    {runId: 'run-big', sessionKey: 'agent:main:asterhand:conv-esc', toolCallId: 'e-big'},
+  );
+  await assert.rejects(
+    execTool.execute('e-big', {command: 'dir', escalated: true, escalationReason: bigReason}),
+    err => err?.code === 'invalid_request',
+  );
+});

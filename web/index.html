@@ -151,6 +151,23 @@
               <div>
                 <label class="toggle-row"><span data-i18n="web.settings.tools.label">允许助手调用工具</span><input id="assistant-tools-enabled" type="checkbox" class="switch" form="assistant-tools-picker" aria-describedby="assistant-tools-status" disabled /></label>
                 <small id="assistant-tools-status" role="status" data-i18n="web.settings.tools.hint">让助手在自己的文件夹中处理文件、保存记忆。更改后从下一条消息生效。</small>
+                <div id="assistant-tools-trust" class="tools-trust" hidden>
+                  <div class="tools-mode-group" role="radiogroup" aria-labelledby="assistant-tools-mode-label">
+                    <span id="assistant-tools-mode-label" class="tools-sublabel" data-i18n="web.settings.tools.mode_label">访问工作区外文件夹或系统能力时</span>
+                    <label class="tools-radio">
+                      <input id="assistant-tools-mode-standard" type="radio" name="assistant-execution-mode" value="standard" form="assistant-tools-picker" checked />
+                      <span><strong data-i18n="web.settings.tools.mode_standard">按需询问（推荐）</strong><small data-i18n="web.settings.tools.mode_standard_hint">遇到需要确认的操作会在聊天中弹出确认卡片。</small></span>
+                    </label>
+                    <label class="tools-radio">
+                      <input id="assistant-tools-mode-turbo" type="radio" name="assistant-execution-mode" value="turbo" form="assistant-tools-picker" />
+                      <span><strong data-i18n="web.settings.tools.mode_turbo">自动允许（极速）</strong><small data-i18n="web.settings.tools.mode_turbo_hint">以当前 Windows 账户权限直接运行脚本，可能访问助手文件夹之外的文件（管理员提权与显式敏感路径仍会拦截）。</small></span>
+                    </label>
+                  </div>
+                  <div id="assistant-tools-allowed" class="tools-allowed" hidden>
+                    <div class="tools-sublabel" data-i18n="web.settings.tools.allowed_title">已始终允许的项目</div>
+                    <ul id="assistant-tools-allowed-list" class="tools-allowed-list"></ul>
+                  </div>
+                </div>
               </div>
               <div class="field-grid">
                 <label class="field"><span data-i18n="web.settings.model.provider_label">模型服务</span><select name="provider"></select></label>

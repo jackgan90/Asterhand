@@ -180,7 +180,7 @@ func (s *Service) Status() Status {
 		"page_bytes": PageBytes, "active_calls": MaxActiveCalls, "modifying_calls": MaxModifyingCalls, "queued_calls": MaxQueuedCalls,
 	}
 	if s.exec != nil && s.exec.Supported() {
-		caps = append(caps, "scripts.execute")
+		caps = append(caps, "scripts.execute", "scripts.escalate")
 		limits["exec_timeout_seconds"] = DefaultExecTimeoutSec
 		limits["exec_max_timeout_seconds"] = MaxExecTimeoutSec
 		limits["exec_output_bytes"] = MaxExecSessionBytes
@@ -188,8 +188,10 @@ func (s *Service) Status() Status {
 		limits["sandbox_temp_bytes"] = MaxSandboxTempBytes
 		limits["sandbox_temp_files"] = MaxSandboxTempFiles
 	}
+	execMode, trustRev, trustCount, allowedItems := s.exec.trustSnapshot()
 	state := Status{
 		ID: s.id, Supported: platformSupported(), Authorized: s.enabled, Policy: s.policy,
+		ExecutionMode: execMode, TrustRevision: trustRev, TrustRuleCount: trustCount, AllowedItems: allowedItems,
 		Ready: platformSupported() && s.enabled && !s.blocked, Busy: s.busyLocked(), Enforcement: "restricted_service",
 		Capabilities: caps,
 		Limits:       limits,

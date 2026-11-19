@@ -96,3 +96,9 @@
 ### 本机工作区受限脚本与命令执行（第一阶段）
 
 [工作区脚本与命令执行计划（第一阶段）](../development/features/workspace-script-execution/plan.md)由内置助手在既有“允许助手调用工具”权限控制下调用 `exec_command` 与 `process_control`，不引入新的人类独立对话框或设置开关，也不开放通过 CLI/MCP 绕过会话权限任意执行外部模型沙箱脚本的入口（人类本机预注册脚本继续由 `commands.*` 管理）。第一阶段新增的 `scripts.execute` 能力声明、`exec_timeout_seconds`/`exec_output_bytes`/`exec_sessions_per_turn`/`sandbox_temp_bytes` 限制以及 `exec_command`/`process_control` 工具活动摘要和收据均直接通过既有公共操作（`workspaces.get`、`conversations.capabilities`、`turn_activities.list/get`、`workspace_operations.get`、`messages.list`）保持 UI/CLI/MCP 一致读取；开启/撤销权限继续按人工例外规则保留在“设置 → 助手”。
+
+### 受控提权确认、极速免审与信任清单管理（第二阶段）
+
+[受控提权脚本与外部目录执行计划（第二阶段）](../development/features/workspace-script-escalation/plan.md)扩展人工例外边界如下：
+- **只读与状态一致性（UI/CLI/MCP 等价读取）**：`workspaces.get` / `conversations.capabilities` 返回只读 `execution_mode`（`standard` | `turbo`）、`trust_revision`、`trust_rule_count` 及用户可读的 `allowed_items`（`{id, kind, label}`），`turn_activities.list/get`、`workspace_operations.get` 与 `messages.list` 暴露 `awaiting_approval` 状态、`approval` 脱敏元视图与 `approval_mode` 审计结果；
+- **人工例外（不开放模型或普通 CLI/MCP 写入，按 `AUTO-19`/`AUTO-20` 保留）**：原生对话动作 `approve_tool`（在聊天内联卡片批准或拒绝待确认票据）与 `/api/workspace/permission` 的 `execution_mode` / `remove_rule_id` 修改均登记为 `"human"` 人工例外，防止模型或未受人类直接确认的脚本扩大执行边界或自行切入无审批模式。

@@ -166,14 +166,18 @@ function fragmentControls(parent, state, id, expand, transient) {
   return relocalize;
 }
 
-function messageBody(message, copy, expand, math) {
+function messageBody(message, copy, expand, approve, math, toolCache) {
   const body = element('div', undefined, 'chat-message-body');
   const tools = [], fragments = [];
   const structured = message.blocks?.some(block => block.type === 'tool' || block.id);
   if (!structured) body.append(markdown(messageText(message), copy, math));
   else for (const block of message.blocks) {
     if (block.type === 'tool' && block.tool) {
-      const node = toolActivity(block.tool);
+      let node = block.tool.id ? toolCache?.get(block.tool.id) : null;
+      if (!node) {
+        node = toolActivity(block.tool, approve);
+        if (block.tool.id) toolCache?.set(block.tool.id, node);
+      }
       tools.push(node); body.append(node);
     } else if (block.type === 'text') {
       const section = element('div', undefined, 'chat-message-text');
@@ -190,12 +194,22 @@ function bodyIdentity(message) {
     {type: block.type, id: block.tool?.id, tool: block.tool?.tool} : block));
 }
 
-export function messageRenderer(container, {copy, expand}) {
+export function messageRenderer(container, {copy, expand, approve}) {
   const cache = new Map();
+  const toolCache = new Map();
   const math = mathRenderer();
   let mathNodes = 0;
   const render = messages => {
     math.beginRender();
+    const activeToolIDs = new Set();
+    for (const message of messages) {
+      for (const block of message.blocks ?? []) {
+        if (block.type === 'tool' && block.tool?.id) activeToolIDs.add(block.tool.id);
+      }
+    }
+    for (const id of [...toolCache.keys()]) {
+      if (!activeToolIDs.has(id)) toolCache.delete(id);
+    }
     const identities = new Set(messages.map(message => message.ui_id ?? message.id));
     for (const [id, entry] of cache) {
       if (!identities.has(id)) { mathNodes -= entry.mathNodes; entry.node.remove(); cache.delete(id); }
@@ -215,7 +229,7 @@ export function messageRenderer(container, {copy, expand}) {
         entry.node.classList.toggle('chat-user', message.role === 'user');
         mathNodes -= entry.mathNodes;
         const formulaBudget = math.message(MAX_WINDOW_MATH_NODES - mathNodes);
-        const {body, tools, fragments, structured} = messageBody(message, copy, expand, formulaBudget);
+        const {body, tools, fragments, structured} = messageBody(message, copy, expand, approve, formulaBudget, toolCache);
         entry.mathNodes = formulaBudget.nodes;
         mathNodes += entry.mathNodes;
         const author = element('div', undefined, 'chat-author');
@@ -269,6 +283,6 @@ export function messageRenderer(container, {copy, expand}) {
       relocalizeBodyControls(m.body);
     }
   };
-  render.dispose = () => { cache.clear(); math.clear(); mathNodes = 0; };
+  render.dispose = () => { cache.clear(); toolCache.clear(); math.clear(); mathNodes = 0; };
   return render;
 }

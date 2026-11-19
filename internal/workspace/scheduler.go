@@ -8,12 +8,13 @@ import (
 )
 
 const (
-	PhaseRegistered = "registered"
-	PhaseQueued     = "queued"
-	PhasePreparing  = "preparing"
-	PhaseRunning    = "running"
-	PhaseDraining   = "draining"
-	PhaseTerminal   = "terminal"
+	PhaseRegistered       = "registered"
+	PhaseQueued           = "queued"
+	PhaseAwaitingApproval = "awaiting_approval"
+	PhasePreparing        = "preparing"
+	PhaseRunning          = "running"
+	PhaseDraining         = "draining"
+	PhaseTerminal         = "terminal"
 )
 
 type schedBatch struct {
@@ -62,20 +63,21 @@ type mutationFaultHooks struct {
 }
 
 type scheduler struct {
-	mu            sync.Mutex
-	notify        chan struct{}
-	nextTicket    int64
-	entries       map[string]*schedEntry
-	batches       map[string]*schedBatch
-	activeCalls   int
-	modifyCalls   int
-	indexCalls    int
-	maxActive     int
-	maxModifying  int
-	maxIndex      int
-	maxQueued     int
-	activeExec    atomic.Int32
-	faults        *mutationFaultHooks
+	mu               sync.Mutex
+	notify           chan struct{}
+	nextTicket       int64
+	entries          map[string]*schedEntry
+	batches          map[string]*schedBatch
+	activeCalls      int
+	modifyCalls      int
+	indexCalls       int
+	maxActive        int
+	maxModifying     int
+	maxIndex         int
+	maxQueued        int
+	activeExec       atomic.Int32
+	awaitingApproval atomic.Int32
+	faults           *mutationFaultHooks
 }
 
 func (sc *scheduler) wake() {
@@ -198,8 +200,13 @@ func (sc *scheduler) canGrantLocked(e *schedEntry) (bool, string) {
 	if e.plan.Modifying && sc.modifyCalls >= sc.maxModifying {
 		return false, "modifying_limit"
 	}
-	if e.plan.Modifying && e.tool != "exec_command" && sc.activeExec.Load() > 0 {
-		return false, "exec_active"
+	if e.plan.Modifying && e.tool != "exec_command" {
+		if sc.activeExec.Load() > 0 {
+			return false, "exec_active"
+		}
+		if sc.awaitingApproval.Load() > 0 {
+			return false, "approval_pending"
+		}
 	}
 	if e.plan.Indexing && sc.indexCalls >= sc.maxIndex {
 		return false, "index_limit"

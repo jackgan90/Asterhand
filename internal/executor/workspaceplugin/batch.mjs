@@ -89,6 +89,8 @@ async function executeGrantedCall(client, record, signal, executeFn) {
     if (result?.isError) {
       endState = 'failed';
       endDetail = 'native_tool_failed';
+    } else if (typeof result?.endDetail === 'string' && result.endDetail) {
+      endDetail = result.endDetail;
     }
     return result;
   } catch (err) {

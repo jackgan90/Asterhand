@@ -251,7 +251,8 @@
       "reconcile": "chat",
       "select": "chat",
       "submit": "chat",
-      "activities": "workspace"
+      "activities": "workspace",
+      "approve_tool": "human"
     },
     "internal/quickinput/hostipc/editor.go": {
       "list": "drafts",

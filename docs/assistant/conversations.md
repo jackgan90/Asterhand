@@ -65,6 +65,7 @@
 | CancelTurn | 请求停止指定已确认接收的模型轮次，保留用户消息，不暂停后续队列；迟到取消不能取消新的轮次 |
 | Prepare / Enqueue | 登记异步创建和绑定明确会话的待发文本，返回节点内存托管状态 `queued` |
 | Queue / QueueItem | 读取带单调修订号的节点队列及近期失败快照；单条读取正文或已离队操作的真实轮次，供宿主重建和回执补读；不暴露撤回、暂停或恢复队列操作 |
+| ApproveTool | 闭合协议动作 `approve_tool`（带 `conversation_id`、`approval_id`、`decision` 四选一枚举），对等待中的工具提权票据提交人类授权决议并返回刷新后的活动页；仅经本地快捷输入人工操作入口触发 |
 
 持久会话、历史访问和发送结果核对是聊天基础要求。首个 OpenClaw 适配器必须验证流式回复和停止；其他 harness 通过能力协商暴露差异，不使用空实现宣称支持。未知能力、协议版本或 runtime 返回可诊断的不支持错误，不回退另一节点、模型或运行时。
 
@@ -126,7 +127,7 @@ Gateway 连接只取得 `operator.read` 与 `operator.write`。`sessions.compact
 
 会话配置/state/workspace 位于节点数据目录内独立且受保护的子目录，与现有 `runs/<attempt>/state`、个人 OpenClaw home 和其他节点的数据目录隔离。Gateway 和一次性执行不共享需要独占写入的 state。地址由实例管理分配并认证，不能固定全机唯一端口或接管已存在的不明 Gateway。
 
-配置继承当前节点选择的 provider/model/credential_ref；密钥由适配器在后端注入，UI、任务文本、会话目录和诊断中不出现明文。默认聊天角色禁用所有工具；人工启用本机工作区后的九项白名单及记忆配置见[能力设计](runtime-capabilities.md)。两种模式均禁用 shell、skills 执行、任意插件发现、外部渠道发送与自动任务。以下零工具配置仅适用于默认模式。只加载所需模型 provider 和应用自带的可信聊天提示词插件，关闭默认 memory 插件槽，并以真实有效工具集合和拒绝用例验证。OpenClaw 配置同时设置 `tools.deny: ["*"]`、`tools.toolSearch: false` 和 `tools.codeMode.enabled: false`；仅 deny 列表不足以移除模型请求中的包装工具。管理命令设置 `commands.allowFrom: {"*": []}`，适配器另行拒绝去除前导空白后以 `/` 开头的输入并保留草稿。
+配置继承当前节点选择的 provider/model/credential_ref；密钥由适配器在后端注入，UI、任务文本、会话目录和诊断中不出现明文。默认聊天角色禁用所有工具；人工启用本机工作区后的十一项白名单及记忆配置见[能力设计](runtime-capabilities.md)。两种模式均禁用 shell、skills 执行、任意插件发现、外部渠道发送与自动任务。以下零工具配置仅适用于默认模式。只加载所需模型 provider 和应用自带的可信聊天提示词插件，关闭默认 memory 插件槽，并以真实有效工具集合和拒绝用例验证。OpenClaw 配置同时设置 `tools.deny: ["*"]`、`tools.toolSearch: false` 和 `tools.codeMode.enabled: false`；仅 deny 列表不足以移除模型请求中的包装工具。管理命令设置 `commands.allowFrom: {"*": []}`，适配器另行拒绝去除前导空白后以 `/` 开头的输入并保留草稿。
 
 普通文本不进入 runtime 管理命令分派。优先使用已验证的纯文本调用入口；若该版本不能可靠关闭命令/skill 语法，相关输入在适配器调用前明确拒绝且保留草稿，不静默执行 `/reset`、`/new` 或配置命令。应用“新对话”调用自身受限操作，不借用户文本绕过权限。
 
@@ -162,7 +163,7 @@ Hermes、DeepSeek harness、Pi 等仅为候选，不声明已支持。每个适�
 
 ### 工具、代码与任务
 
-Conversation / Turn / Task 分离。未来轮次可以产生工具活动、问答、审批、产物和关联任务块，按真实事件渲染；Task 仍由目标节点的任务契约管理。聊天轮次停止与任务取消是不同操作。工具循环留给 harness，权限、执行范围、去重与产物证据在执行边界落实；允许经过验证的 harness/worker 实施动作，不要求每个副作用都由 agentd 亲自执行。本机文件/记忆/进度与产物事件现按[工作区设计](runtime-capabilities.md)实现；代码执行、审批和任务委派仍未开放。
+Conversation / Turn / Task 分离。未来轮次可以产生工具活动、问答、产物和关联任务块，按真实事件渲染；Task 仍由目标节点的任务契约管理。聊天轮次停止与任务取消是不同操作。工具循环留给 harness，权限、执行范围、去重与产物证据在执行边界落实；允许经过验证的 harness/worker 实施动作，不要求每个副作用都由 agentd 亲自执行。本机文件/记忆/进度、受限与受控提权脚本及内联交互确认已按[工作区设计](runtime-capabilities.md)实现（`turbo` 模式亦经同一受控执行器热生效），审批状态随活动与 `reconcile` 原位流转；普通任意任务委派与远端跨节点审批仍未开放。
 
 ### 单机多节点与角色
 

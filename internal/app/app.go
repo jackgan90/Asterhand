@@ -126,6 +126,7 @@ func New(c *config.Manager, x executor.Executor) (*App, error) {
 	a.Chat = conversation.New(c.Get().NodeID, s, executor.NewConversationRuntime(c))
 	a.Input.SetConversationClient(conversation.Client{Target: a.Chat.Target(), Transport: a.Chat})
 	a.Chat.SetCompletionHandler(a.Input.ReplyCompleted)
+	a.Chat.SetApprovalHandler(a.Input.ReplyCompleted)
 	a.desktopRequests = make(chan struct{}, 8)
 	if err = a.prepareAutomation(); err != nil {
 		a.Close()

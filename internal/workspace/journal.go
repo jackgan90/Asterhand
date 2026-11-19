@@ -324,12 +324,17 @@ func (s *Service) Operations(turn string, after int64) ([]Operation, int64) {
 func (s *Service) Activities(conversation, turn string, after int64) ([]Operation, int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	items := []Operation{}
-	bytes := 0
-	for _, op := range s.sortedLocked() {
+	matched := make([]Operation, 0, min(len(s.records), 32))
+	for _, op := range s.records {
 		if op.Sequence <= after || (turn != "" && turn != op.Scope.Turn) || (conversation != "" && conversation != op.Scope.Conversation) {
 			continue
 		}
+		matched = append(matched, op)
+	}
+	sort.Slice(matched, func(i, j int) bool { return matched[i].Sequence < matched[j].Sequence })
+	items := []Operation{}
+	bytes := 0
+	for _, op := range matched {
 		op = publicOperation(op)
 		op.Changes = nil
 		encoded, _ := json.Marshal(op)

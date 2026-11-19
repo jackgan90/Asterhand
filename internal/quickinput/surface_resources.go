@@ -29,7 +29,7 @@ func resourceTypes() map[string]string {
 		allowed["icons/"+name+".svg"] = "image/svg+xml"
 	}
 	for _, name := range []string{"input.js", "i18n.mjs", "i18n-catalog.mjs", "input-model.mjs", "composer-layout.mjs", "webview2-bridge.mjs", "chat-client.mjs",
-		"chat-model.mjs", "chat-renderer.mjs", "chat-ui.mjs", "chat-activities.mjs", "live-input.mjs", "chat-outbox.mjs", "chat-status.mjs", "chat-queue.mjs", "chat-connection.mjs", "notification.mjs",
+		"chat-model.mjs", "chat-renderer.mjs", "chat-ui.mjs", "chat-activities.mjs", "chat-approval.mjs", "live-input.mjs", "chat-outbox.mjs", "chat-status.mjs", "chat-queue.mjs", "chat-connection.mjs", "notification.mjs",
 		"chat-markup.mjs", "chat-math.mjs", "command-client.mjs", "command-model.mjs", "command-results.mjs", "command-ui.mjs", "command-log.mjs", "command-run.mjs", "log-model.mjs", "legacy-log-decoder.mjs", "legacy-log-tables.mjs", "log-graph.mjs", "log-node.mjs", "log-reader.mjs", "log-pane.mjs"} {
 		allowed[name] = "application/javascript; charset=utf-8"
 	}

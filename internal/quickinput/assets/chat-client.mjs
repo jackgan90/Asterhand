@@ -12,7 +12,7 @@ export function conversationClient(bridge, editor, onEnvelope) {
     const entry = pending.get(message.id);
     const response = envelope.response ?? {};
     if (response.target?.node_id) target = response.target;
-    if (envelope.response?.connection === undefined && !['connect', 'connection', 'activities'].includes(entry?.action)) onEnvelope(envelope);
+    if (envelope.response?.connection === undefined && !['connect', 'connection', 'activities', 'approve_tool'].includes(entry?.action)) onEnvelope(envelope);
     if (!entry) return;
     pending.delete(message.id);
     clearTimeout(entry.timer);
@@ -31,7 +31,7 @@ export function conversationClient(bridge, editor, onEnvelope) {
   });
 
   function dispatch(action, fields) {
-    const priority = ['select','prepare','enqueue','queue','queue_item','cancel'].includes(action);
+    const priority = ['select','prepare','enqueue','queue','queue_item','cancel','approve_tool'].includes(action);
     if (pending.size >= (priority ? 8 : 4)) return Promise.reject(Object.assign(new Error(t('quickinput.client.busy')), {notDispatched: true, messageKey: 'quickinput.client.busy'}));
     if (action !== 'hello' && !target) return Promise.reject(Object.assign(new Error(t('quickinput.client.connect_first')), {notDispatched: true, messageKey: 'quickinput.client.connect_first'}));
     const id = crypto.randomUUID();

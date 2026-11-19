@@ -2,7 +2,6 @@ package workspace
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"strings"
@@ -23,7 +22,7 @@ func (s *Service) SetBundledNodeDir(dir string) {
 	s.mu.Unlock()
 }
 
-func (s *Service) enterExecCall(id, expectedTool string) (*call, *schedEntry, Scope, string, string, string, error) {
+func (s *Service) enterExecCall(id, expectedTool string, allowAwaiting bool) (*call, *schedEntry, Scope, string, string, string, error) {
 	s.mu.Lock()
 	if !s.enabled || !platformSupported() {
 		s.mu.Unlock()
@@ -42,7 +41,8 @@ func (s *Service) enterExecCall(id, expectedTool string) (*call, *schedEntry, Sc
 	}
 	e := c.entry
 	s.sched.mu.Lock()
-	if e.tool != expectedTool || (e.phase != PhaseRunning && e.phase != PhasePreparing) || e.admissionClosed {
+	phaseOK := e.phase == PhaseRunning || e.phase == PhasePreparing || (allowAwaiting && e.phase == PhaseAwaitingApproval)
+	if e.tool != expectedTool || !phaseOK || e.admissionClosed {
 		reason := "invalid_call"
 		if e.admissionClosed {
 			reason = "cancelled"
@@ -56,19 +56,37 @@ func (s *Service) enterExecCall(id, expectedTool string) (*call, *schedEntry, Sc
 }
 
 func (s *Service) StartExec(ctx context.Context, req ExecStartRequest) (ExecResult, error) {
-	if strings.TrimSpace(req.Command) == "" {
+	if strings.TrimSpace(req.Command) == "" || len(req.Command) > MaxExecCommandBytes || len(req.EscalationReason) > MaxEscalationReasonInputBytes || len(req.ExternalPaths) > MaxExternalPaths {
 		return ExecResult{}, fail("invalid_request")
 	}
 	if !s.exec.Supported() {
 		return ExecResult{}, fail("unsupported_platform")
 	}
-	c, e, scope, summary, homeRoot, nodeDir, err := s.enterExecCall(req.CallID, "exec_command")
+	c, e, scope, summary, homeRoot, nodeDir, err := s.enterExecCall(req.CallID, "exec_command", false)
 	if err != nil {
 		return ExecResult{}, err
 	}
 	defer s.leaveCallIO(e, EffectWrite, DefaultRoot, "")
 	if scope.Turn == "" {
 		return ExecResult{}, fail("invalid_call")
+	}
+	decision, err := s.evaluateExecPolicy(scope.Conversation, summary, req, homeRoot, nodeDir)
+	if err != nil {
+		return ExecResult{}, err
+	}
+	switch decision.kind {
+	case decisionDeny:
+		s.updateCallApprovalRecord(c.op.ID, "", "", "denied", decision.code, nil)
+		return ExecResult{Status: decision.code, EscalationDenied: true}, nil
+	case decisionAsk:
+		if ctx.Err() != nil {
+			return ExecResult{}, fail("cancelled")
+		}
+		yieldDur, timeoutDur := clampExecDurations(req.YieldMs, req.TimeoutSec)
+		return s.startApprovalTicket(c, e, scope, req, decision, homeRoot, nodeDir, yieldDur, timeoutDur)
+	}
+	if decision.approvalMode != "" {
+		s.updateCallApprovalRecord(c.op.ID, "", "", decision.approvalMode, "", nil)
 	}
 	if err := s.ensureExecQuotaAndActivity(); err != nil {
 		return ExecResult{}, err
@@ -84,8 +102,13 @@ func (s *Service) StartExec(ctx context.Context, req ExecStartRequest) (ExecResu
 		return ExecResult{}, fail("cancelled")
 	}
 	yieldDur, timeoutDur := clampExecDurations(req.YieldMs, req.TimeoutSec)
-	sess, err := s.spawnExecSession(c.op.ID, scope, summary, req, homeRoot, nodeDir, timeoutDur)
+	escalated := decision.kind == decisionAllowTier2
+	meta := execApprovalMeta{approvalMode: decision.approvalMode}
+	sess, err := s.spawnExecSession(c.op.ID, scope, summary, req, decision.externalDirs, escalated, decision.inv.resolvedExe, nil, true, homeRoot, nodeDir, timeoutDur, meta)
 	if err != nil {
+		if !escalated && Code(err) == "sensitive_path_denied" && isOutsideWorkspaceWorkdirCandidate(req.Workdir, s.root, s.exec.tempRoot, homeRoot) {
+			return ExecResult{Status: "failed", Reason: "outside_workspace", EscalationAvailable: true}, nil
+		}
 		return ExecResult{}, err
 	}
 	res, keepActivity, err := s.runForegroundExecWait(ctx, e, sess, yieldDur)
@@ -149,78 +172,56 @@ func clampExecDurations(yieldMsPtr *int, timeoutSec int) (yieldDur, timeoutDur t
 	return time.Duration(yieldMs) * time.Millisecond, time.Duration(timeoutSec) * time.Second
 }
 
-func (s *Service) spawnExecSession(callID string, scope Scope, summary string, req ExecStartRequest, homeRoot, nodeDir string, timeout time.Duration) (*execSession, error) {
+func (s *Service) spawnExecSession(callID string, scope Scope, summary string, req ExecStartRequest, externalDirs []string, escalated bool, expectedExe string, tk *approvalTicket, skipStaticCmdScan bool, homeRoot, nodeDir string, timeout time.Duration, approvalMeta execApprovalMeta) (*execSession, error) {
+	if err := s.checkCallCancelled(callID, scope.Turn); err != nil {
+		return nil, err
+	}
+	verifiedInv, lockedFiles, err := s.verifyAndLockPreSpawn(req, externalDirs, escalated, expectedExe, tk, skipStaticCmdScan, homeRoot, nodeDir)
+	if err != nil {
+		return nil, err
+	}
 	m := s.exec
-	m.mu.Lock()
-	if m.turnStopped[scope.Turn] != "" {
-		m.mu.Unlock()
-		return nil, fail("cancelled")
+	launchCtx, cancelLaunch := context.WithCancel(context.Background())
+	sess, err := m.preRegisterSpawningSession(callID, scope, summary, req.Command, escalated, approvalMeta, lockedFiles, cancelLaunch)
+	if err != nil {
+		cancelLaunch()
+		closeLockedHandles(lockedFiles)
+		return nil, err
 	}
-	if m.turnCounts[scope.Turn] >= MaxExecSessionsPerTurn {
-		m.mu.Unlock()
-		return nil, fail("exec_session_limit")
+	if err := s.checkCallCancelled(callID, scope.Turn); err != nil {
+		cancelLaunch()
+		m.rollbackSpawningSession(callID, sess)
+		return nil, err
 	}
-	m.turnCounts[scope.Turn]++
-	m.mu.Unlock()
-
-	if summary == "" {
-		if clean, err := sanitizeSummary(redactCommandSummary(req.Command)); err == nil {
-			summary = clean
-		}
-	}
-	spec := sandbox.SpawnSpec{
-		WorkspaceRoot:  s.root,
-		TempRoot:       m.tempRoot,
-		HomeRoot:       homeRoot,
-		Command:        req.Command,
-		Workdir:        req.Workdir,
-		Env:            req.Env,
-		BundledNodeDir: nodeDir,
-		Timeout:        timeout,
-		ProtectedDirs:  sandbox.DefaultProtectedDirs(homeRoot),
+	spec := buildExecSpawnSpec(s.root, m.tempRoot, homeRoot, nodeDir, sess.id, req, externalDirs, escalated, timeout, verifiedInv)
+	spec.AdmitResume = func(resume func() error) error {
+		return s.admitSessionResume(callID, scope.Turn, sess, resume)
 	}
 	m.cleanMu.RLock()
 	// Background-capable exec sessions outlive the originating HTTP request; foreground
-	// cancellation is enforced below by runForegroundExecWait, while detached sessions
-	// are stopped explicitly via Timeout, KillExec, InitiateTurnStop, or StopAll.
-	proc, err := m.backend.Start(context.Background(), spec)
+	// cancellation is enforced via launchCtx, admitSessionResume, and runForegroundExecWait.
+	proc, err := m.backend.Start(launchCtx, spec)
 	if err != nil {
-		m.mu.Lock()
-		m.decrementTurnCountLocked(scope.Turn)
-		m.mu.Unlock()
+		cancelLaunch()
 		m.cleanMu.RUnlock()
+		m.rollbackSpawningSession(callID, sess)
 		var se *sandbox.Error
 		if errors.As(err, &se) && se.Code != "" {
 			return nil, fail(se.Code)
 		}
 		return nil, err
 	}
-
-	sess := &execSession{
-		id:         "es_" + rand.Text(),
-		scope:      scope,
-		turn:       scope.Turn,
-		callID:     callID,
-		summary:    summary,
-		proc:       proc,
-		started:    time.Now().UTC(),
-		slotHeld:   true,
-		inFgWait:   true,
-		fgCancelCh: make(chan struct{}),
-		detachCh:   make(chan struct{}),
-	}
-	m.mu.Lock()
-	stopped := m.turnStopped[scope.Turn] != ""
-	m.sessions[sess.id] = sess
-	if !stopped {
-		m.fgByCall[callID] = sess
-	}
-	m.mu.Unlock()
+	stopped, stopReason := m.attachLaunchedProc(callID, scope.Turn, sess, proc)
 	m.cleanMu.RUnlock()
-
+	if !stopped {
+		if cerr := s.checkCallCancelled(callID, scope.Turn); cerr != nil {
+			stopped, stopReason = true, Code(cerr)
+			m.clearFgCall(callID)
+		}
+	}
 	if stopped {
 		abortStoppedSpawn(m, sess)
-		return nil, fail("cancelled")
+		return nil, fail(stopReason)
 	}
 	m.ensureWatchdog(scope.Turn)
 	go s.waitDetachedSession(sess)
@@ -228,12 +229,19 @@ func (s *Service) spawnExecSession(callID string, scope Scope, summary string, r
 }
 
 func abortStoppedSpawn(m *execManager, sess *execSession) {
-	sess.proc.Terminate("cancelled")
+	m.mu.Lock()
+	reason := sess.stopReason
+	m.mu.Unlock()
+	if reason == "" {
+		reason = "cancelled"
+	}
+	sess.proc.Terminate(reason)
 	select {
 	case <-sess.proc.Done():
 	case <-time.After(3 * time.Second):
 	}
 	waitSessionProcessesStopped(sess.proc, 1500*time.Millisecond)
+	sess.closeLockedFiles()
 	m.mu.Lock()
 	sess.exited = true
 	sess.inFgWait = false
@@ -304,6 +312,7 @@ func waitSessionProcessesStopped(proc sandbox.SessionProcess, budget time.Durati
 
 func (s *Service) finishSyncExec(sess *execSession) (ExecResult, error) {
 	waitSessionProcessesStopped(sess.proc, 1500*time.Millisecond)
+	sess.closeLockedFiles()
 	m := s.exec
 	m.mu.Lock()
 	delete(m.fgByCall, sess.callID)
@@ -311,6 +320,7 @@ func (s *Service) finishSyncExec(sess *execSession) (ExecResult, error) {
 	sess.inFgWait = false
 	m.releaseTurnSlotLocked(sess)
 	stopReason := sess.stopReason
+	meta := sess.approvalMetaLocked()
 	close(sess.detachCh)
 	m.broadcastSettledLocked()
 	m.mu.Unlock()
@@ -319,7 +329,7 @@ func (s *Service) finishSyncExec(sess *execSession) (ExecResult, error) {
 	m.mu.Lock()
 	sess.unsafeLinks = unsafe
 	m.mu.Unlock()
-	res := buildExecResult(sess, stopReason)
+	res := buildExecResult(sess, stopReason, meta)
 	if recErr != nil {
 		return res, recErr
 	}
@@ -341,6 +351,7 @@ func (s *Service) abortSyncExec(sess *execSession) (ExecResult, error) {
 	case <-time.After(3 * time.Second):
 	}
 	waitSessionProcessesStopped(sess.proc, 1500*time.Millisecond)
+	sess.closeLockedFiles()
 
 	m.mu.Lock()
 	delete(m.fgByCall, sess.callID)
@@ -400,17 +411,23 @@ func (s *Service) detachExec(sess *execSession) (ExecResult, bool, error) {
 	sess.inFgWait = false
 	sess.pollCursor = slice.NextOffset
 	sess.activeDec = true
+	meta := sess.approvalMetaLocked()
 	s.sched.activeExec.Add(1)
 	close(sess.detachCh)
 	m.mu.Unlock()
 
 	return ExecResult{
-		Status:     "running",
-		SessionID:  sess.id,
-		Output:     slice.Output,
-		NextOffset: slice.NextOffset,
-		TotalBytes: slice.TotalBytes,
-		Truncated:  slice.Truncated,
+		Status:           "running",
+		SessionID:        sess.id,
+		Output:           slice.Output,
+		NextOffset:       slice.NextOffset,
+		TotalBytes:       slice.TotalBytes,
+		Truncated:        slice.Truncated,
+		Escalated:        sess.escalated,
+		ApprovalMode:     meta.approvalMode,
+		UserApproved:     meta.userApproved,
+		ApprovalDecision: meta.approvalDecision,
+		ApprovalWaitMs:   meta.approvalWaitMs,
 	}, true, nil
 }
 
@@ -425,6 +442,7 @@ func (s *Service) waitDetachedSession(sess *execSession) {
 	}
 	<-sess.proc.Done()
 	waitSessionProcessesStopped(sess.proc, 1500*time.Millisecond)
+	sess.closeLockedFiles()
 	info := sess.proc.ExitInfo()
 
 	m.mu.Lock()
@@ -520,7 +538,7 @@ func (s *Service) persistDetachedTerminal(sess *execSession, state, detail strin
 }
 
 func (s *Service) PollExec(ctx context.Context, req ExecPollRequest) (ExecResult, error) {
-	_, e, scope, _, _, _, err := s.enterExecCall(req.CallID, "process_control")
+	_, e, scope, _, _, _, err := s.enterExecCall(req.CallID, "process_control", false)
 	if err != nil {
 		return ExecResult{}, err
 	}
@@ -573,7 +591,7 @@ doneWait:
 }
 
 func (s *Service) ControlExec(req ExecControlRequest) (ExecResult, error) {
-	_, e, scope, _, _, _, err := s.enterExecCall(req.CallID, "process_control")
+	_, e, scope, _, _, _, err := s.enterExecCall(req.CallID, "process_control", false)
 	if err != nil {
 		return ExecResult{}, err
 	}
@@ -610,7 +628,7 @@ func (s *Service) KillExec(req ExecKillRequest) (ExecResult, error) {
 		reason = "cancelled"
 	}
 	if req.SessionID != "" {
-		_, e, scope, _, _, _, err := s.enterExecCall(req.CallID, "process_control")
+		_, e, scope, _, _, _, err := s.enterExecCall(req.CallID, "process_control", false)
 		if err != nil {
 			return ExecResult{}, err
 		}
@@ -653,8 +671,9 @@ func (s *Service) lookupTurnSession(sessionID, turn string) (*execSession, error
 	}
 	s.exec.mu.Lock()
 	sess := s.exec.sessions[sessionID]
+	hasProc := sess != nil && sess.turn == turn && sess.proc != nil
 	s.exec.mu.Unlock()
-	if sess == nil || sess.turn != turn {
+	if !hasProc {
 		return nil, fail("not_found")
 	}
 	return sess, nil
@@ -664,7 +683,7 @@ func (s *Service) listTurnExecSessions(turn string) ExecResult {
 	s.exec.mu.Lock()
 	var items []*execSession
 	for _, sess := range s.exec.sessions {
-		if sess.turn == turn {
+		if sess.turn == turn && sess.proc != nil {
 			items = append(items, sess)
 		}
 	}
@@ -673,14 +692,16 @@ func (s *Service) listTurnExecSessions(turn string) ExecResult {
 	for _, sess := range items {
 		res := s.snapshotExecResult(sess, 0, 0, false)
 		out = append(out, ExecSessionSummary{
-			SessionID:  sess.id,
-			Status:     res.Status,
-			ExitCode:   res.ExitCode,
-			DurationMs: res.DurationMs,
-			TotalBytes: res.TotalBytes,
-			Truncated:  res.Truncated,
-			TLSHint:    res.TLSHint,
-			Warning:    res.Warning,
+			SessionID:    sess.id,
+			Status:       res.Status,
+			ExitCode:     res.ExitCode,
+			DurationMs:   res.DurationMs,
+			TotalBytes:   res.TotalBytes,
+			Truncated:    res.Truncated,
+			Escalated:    res.Escalated,
+			ApprovalMode: res.ApprovalMode,
+			TLSHint:      res.TLSHint,
+			Warning:      res.Warning,
 		})
 	}
 	sortExecSessionSummaries(out)
@@ -711,19 +732,41 @@ func clampPollWait(waitMs *int) time.Duration {
 	return time.Duration(v) * time.Millisecond
 }
 
+func (sess *execSession) approvalMetaLocked() execApprovalMeta {
+	return execApprovalMeta{
+		approvalMode:     sess.approvalMode,
+		userApproved:     sess.userApproved,
+		approvalDecision: sess.approvalDecision,
+		approvalWaitMs:   sess.approvalWaitMs,
+	}
+}
+
 func (s *Service) snapshotExecResult(sess *execSession, offset int64, limit int, advanceCursor bool) ExecResult {
 	if limit <= 0 || limit > MaxExecPollBytes {
 		limit = MaxExecPollBytes
 	}
 	s.exec.mu.Lock()
+	proc := sess.proc
 	stopReason := sess.stopReason
 	unsafe := sess.unsafeLinks
+	meta := sess.approvalMetaLocked()
 	if advanceCursor || offset < 0 {
 		offset = sess.pollCursor
 	}
 	s.exec.mu.Unlock()
+	if proc == nil {
+		return ExecResult{
+			Status:           "running",
+			SessionID:        sess.id,
+			Escalated:        sess.escalated,
+			ApprovalMode:     meta.approvalMode,
+			UserApproved:     meta.userApproved,
+			ApprovalDecision: meta.approvalDecision,
+			ApprovalWaitMs:   meta.approvalWaitMs,
+		}
+	}
 
-	slice := sess.proc.OutputSnapshot(offset, limit)
+	slice := proc.OutputSnapshot(offset, limit)
 	if advanceCursor {
 		s.exec.mu.Lock()
 		if slice.NextOffset > sess.pollCursor {
@@ -731,31 +774,33 @@ func (s *Service) snapshotExecResult(sess *execSession, offset int64, limit int,
 		}
 		s.exec.mu.Unlock()
 	}
-	res := buildExecResultWithSlice(sess, slice, stopReason)
+	res := buildExecResultWithSlice(sess, slice, stopReason, meta)
 	if unsafe {
 		res.Warning = "unsafe_links_detected"
 	}
 	return res
 }
 
-func buildExecResult(sess *execSession, stopReason string) ExecResult {
+func buildExecResult(sess *execSession, stopReason string, meta execApprovalMeta) ExecResult {
 	slice := sess.proc.OutputSnapshot(0, MaxExecPollBytes)
-	res := buildExecResultWithSlice(sess, slice, stopReason)
+	res := buildExecResultWithSlice(sess, slice, stopReason, meta)
 	if sess.unsafeLinks {
 		res.Warning = "unsafe_links_detected"
 	}
 	return res
 }
 
-func buildExecResultWithSlice(sess *execSession, slice sandbox.OutputSlice, stopReason string) ExecResult {
+func buildExecResultWithSlice(sess *execSession, slice sandbox.OutputSlice, stopReason string, meta execApprovalMeta) ExecResult {
 	info := sess.proc.ExitInfo()
 	status := "running"
 	reason := ""
 	tlsHint := info.TLSHint
+	escalationAvail := false
 	if info.Exited {
 		if tlsHint == "" && info.ExitCode != 0 {
 			tlsHint = sandbox.DetectWindowsTLSHint(info.ExitCode, slice.Output)
 		}
+		escalationAvail = !sess.escalated && info.ExitCode != 0 && (tlsHint == "windows_schannel_restricted" || sessionIndicatesRestrictedAccess(sess, slice.Output, info.Reason))
 		switch {
 		case stopReason == "cancelled" || info.Reason == "cancelled":
 			status, reason = "cancelled", "cancelled"
@@ -770,17 +815,73 @@ func buildExecResultWithSlice(sess *execSession, slice sandbox.OutputSlice, stop
 		}
 	}
 	return ExecResult{
-		Status:     status,
-		SessionID:  sess.id,
-		Output:     slice.Output,
-		NextOffset: slice.NextOffset,
-		TotalBytes: slice.TotalBytes,
-		Truncated:  slice.Truncated,
-		ExitCode:   info.ExitCode,
-		DurationMs: info.DurationMs,
-		Reason:     reason,
-		TLSHint:    tlsHint,
+		Status:              status,
+		SessionID:           sess.id,
+		Output:              slice.Output,
+		NextOffset:          slice.NextOffset,
+		TotalBytes:          slice.TotalBytes,
+		Truncated:           slice.Truncated,
+		ExitCode:            info.ExitCode,
+		DurationMs:          info.DurationMs,
+		Reason:              reason,
+		TLSHint:             tlsHint,
+		Escalated:           sess.escalated,
+		ApprovalMode:        meta.approvalMode,
+		UserApproved:        meta.userApproved,
+		ApprovalDecision:    meta.approvalDecision,
+		ApprovalWaitMs:      meta.approvalWaitMs,
+		EscalationAvailable: escalationAvail,
 	}
+}
+
+func isOutsideWorkspaceWorkdirCandidate(rawWorkdir, wsRoot, tempRoot, homeRoot string) bool {
+	trimmed := strings.TrimSpace(rawWorkdir)
+	if trimmed == "" || trimmed == "." {
+		return false
+	}
+	if _, bad := sandbox.PathTargetsProtected(trimmed, wsRoot, tempRoot, sandbox.DefaultProtectedDirs(homeRoot)); bad {
+		return false
+	}
+	wsReal := sandbox.ResolveRealishPath(wsRoot)
+	candReal := sandbox.ResolveRealishPath(trimmed)
+	return candReal != "" && !sandbox.PathWithin(candReal, wsReal)
+}
+
+func sessionIndicatesRestrictedAccess(sess *execSession, output, reason string) bool {
+	if outputIndicatesRestrictedAccess(output, reason) {
+		return true
+	}
+	low := strings.ToLower(output + "\n" + reason)
+	zhNotFound := string([]byte{0xe6, 0x9c, 0xaa, 0xe8, 0x83, 0xbd, 0xe6, 0x89, 0xbe, 0xe5, 0x88, 0xb0, 0xe6, 0x96, 0x87, 0xe4, 0xbb, 0xb6})
+	if !strings.Contains(low, "could not find file") && !strings.Contains(low, zhNotFound) {
+		return false
+	}
+	if sess == nil || sess.wsRoot == "" {
+		return false
+	}
+	return len(sandbox.ExtractExternalPathCandidates(output, sess.wsRoot, sess.tempRoot)) > 0
+}
+
+func outputIndicatesRestrictedAccess(output, reason string) bool {
+	low := strings.ToLower(output + "\n" + reason)
+	for _, needle := range []string{
+		"access is denied",
+		"access to the path",
+		"access_denied",
+		"unauthorizedaccessexception",
+		"permissionerror",
+		"eperm",
+		"eacces",
+		string([]byte{0xe6, 0x8b, 0x92, 0xe7, 0xbb, 0x9d, 0xe8, 0xae, 0xbf, 0xe9, 0x97, 0xae}),
+		string([]byte{0xe8, 0xae, 0xbf, 0xe9, 0x97, 0xae, 0xe8, 0xa2, 0xab, 0xe6, 0x8b, 0x92, 0xe7, 0xbb, 0x9d}),
+		"cannot create item",
+		"write-protected",
+	} {
+		if strings.Contains(low, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func classifyExecTerminal(info sandbox.ExitInfo, stopReason string, unsafe bool, recErr error) (string, string) {

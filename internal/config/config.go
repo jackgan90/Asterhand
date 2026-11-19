@@ -58,11 +58,29 @@ type Config struct {
 	AcceptanceDelay        int                        `json:"acceptance_delay_seconds,omitempty"`
 }
 
+const (
+	ExecutionModeStandard = "standard"
+	ExecutionModeTurbo    = "turbo"
+)
+
+// TrustRule stores a user-managed persistent rule for escalated workspace execution.
+type TrustRule struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"` // "folder" | "command"
+	Pattern   string `json:"pattern"`
+	Action    string `json:"action"` // "allow" | "ask" | "deny"
+	Label     string `json:"label,omitempty"`
+	CreatedAt string `json:"created_at,omitempty"`
+}
+
 // LocalToolPolicy defaults on until configured. Later changes are made only
 // through the dedicated human permission control and receive a new revision.
 type LocalToolPolicy struct {
-	Enabled  bool   `json:"enabled"`
-	Revision string `json:"revision,omitempty"`
+	Enabled       bool        `json:"enabled"`
+	Revision      string      `json:"revision,omitempty"`
+	ExecutionMode string      `json:"execution_mode,omitempty"`
+	TrustRevision string      `json:"trust_revision,omitempty"`
+	TrustRules    []TrustRule `json:"trust_rules,omitempty"`
 }
 type Manager struct {
 	writeMu sync.Mutex
@@ -143,18 +161,43 @@ func (m *Manager) Get() Config {
 	c.Projects = append([]Project(nil), c.Projects...)
 	c.RuntimeOptions = cloneOptions(c.RuntimeOptions)
 	c.RuntimeOptionsExplicit = maps.Clone(c.RuntimeOptionsExplicit)
+	c.LocalTools.TrustRules = cloneTrustRules(c.LocalTools.TrustRules)
 	return c
 }
 func (m *Manager) Save(c Config) error {
 	return m.save(c, nil)
 }
 
+// Update atomically reads the latest config, applies fn, and persists the result under writeMu.
+func (m *Manager) Update(fn func(cur Config) (Config, error)) (Config, error) {
+	return m.update(nil, fn)
+}
+
+func (m *Manager) update(identity *operations.Identity, fn func(cur Config) (Config, error)) (Config, error) {
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
+	cur := m.Get()
+	next, err := fn(cur)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := m.saveLocked(next, identity); err != nil {
+		return Config{}, err
+	}
+	return m.Get(), nil
+}
+
 func (m *Manager) save(c Config, identity *operations.Identity) error {
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
+	return m.saveLocked(c, identity)
+}
+
+func (m *Manager) saveLocked(c Config, identity *operations.Identity) error {
 	c = normalize(c)
 	c.RuntimeOptions = cloneOptions(c.RuntimeOptions)
 	c.RuntimeOptionsExplicit = maps.Clone(c.RuntimeOptionsExplicit)
+	c.LocalTools.TrustRules = cloneTrustRules(c.LocalTools.TrustRules)
 	if m.journal != nil {
 		if err := m.completePublication(); err != nil {
 			return err

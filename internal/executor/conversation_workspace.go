@@ -28,24 +28,103 @@ func workspaceError(err error) error {
 
 func (r *ConversationRuntime) Workspace() (*workspace.Service, error) {
 	r.workspaceMu.Lock()
-	defer r.workspaceMu.Unlock()
 	c := r.config.Get()
 	if r.workspace == nil {
 		root := filepath.Join(r.config.Home, "conversations", "runtime-"+chatBindingID())
 		var err error
-		r.workspace, err = workspace.Open(filepath.Join(root, "workspace"), filepath.Join(root, "file-versions"), model.Digest([]byte(c.NodeID+":"+chatBindingID()))[:32])
+		r.workspace, err = workspace.Open(filepath.Join(root, "workspace"), filepath.Join(root, "file-versions"), model.Digest([]byte(c.NodeID + ":" + chatBindingID()))[:32])
 		if err != nil {
+			r.workspaceMu.Unlock()
 			return nil, err
 		}
 		r.workspace.SetHomeRoot(r.config.Home)
+		r.workspace.SetTrustCallbacks(r.persistTrustRules, r.fireApprovalAttention)
+		r.workspace.ConfigureTrust(c.LocalTools.ExecutionMode, c.LocalTools.TrustRevision, c.LocalTools.TrustRules)
 	}
-	state := r.workspace.Status()
+	files := r.workspace
+	state := files.Status()
 	if state.Authorized != c.LocalTools.Enabled || state.Policy != c.LocalTools.Revision {
-		if err := r.workspace.Configure(c.LocalTools.Enabled, c.LocalTools.Revision); err != nil {
+		if err := files.Configure(c.LocalTools.Enabled, c.LocalTools.Revision); err != nil {
+			r.workspaceMu.Unlock()
 			return nil, err
 		}
 	}
-	return r.workspace, nil
+	r.workspaceMu.Unlock()
+
+	r.syncWorkspaceTrust(files)
+	return files, nil
+}
+
+func (r *ConversationRuntime) syncWorkspaceTrust(files *workspace.Service) {
+	if files == nil {
+		return
+	}
+	r.trustApplyMu.Lock()
+	defer r.trustApplyMu.Unlock()
+	lt := r.config.Get().LocalTools
+	state := files.Status()
+	if state.ExecutionMode != lt.ExecutionMode || state.TrustRevision != lt.TrustRevision {
+		files.ConfigureTrust(lt.ExecutionMode, lt.TrustRevision, lt.TrustRules)
+	}
+}
+
+func (r *ConversationRuntime) persistTrustRules(rules []config.TrustRule) error {
+	if len(rules) == 0 {
+		return nil
+	}
+	r.workspaceMu.Lock()
+	files := r.workspace
+	r.workspaceMu.Unlock()
+
+	r.trustApplyMu.Lock()
+	defer r.trustApplyMu.Unlock()
+	saved, err := r.config.UpdateLocalToolsTrust(func(cur config.LocalToolPolicy) (config.LocalToolPolicy, error) {
+		cur.TrustRules = append(cur.TrustRules, rules...)
+		return cur, nil
+	})
+	if err != nil {
+		return err
+	}
+	if files != nil {
+		files.ConfigureTrust(saved.ExecutionMode, saved.TrustRevision, saved.TrustRules)
+	}
+	return nil
+}
+
+// SetWorkspaceTrustPolicy updates confirmation mode or removes a persistent
+// trust rule immediately without stopping or restarting the chat Gateway.
+func (r *ConversationRuntime) SetWorkspaceTrustPolicy(_ context.Context, executionMode, removeRuleID string) (workspace.Status, error) {
+	mode := strings.ToLower(strings.TrimSpace(executionMode))
+	removeID := strings.TrimSpace(removeRuleID)
+	if (mode != "" && mode != config.ExecutionModeStandard && mode != config.ExecutionModeTurbo) || (mode == "" && removeID == "") {
+		return workspace.Status{}, conversation.FailKey("invalid_request", "err.workspace.operation", map[string]string{"code": "invalid_request"})
+	}
+	files, err := r.Workspace()
+	if err != nil {
+		return workspace.Status{}, err
+	}
+	r.trustApplyMu.Lock()
+	defer r.trustApplyMu.Unlock()
+	saved, err := r.config.UpdateLocalToolsTrust(func(cur config.LocalToolPolicy) (config.LocalToolPolicy, error) {
+		if mode != "" {
+			cur.ExecutionMode = mode
+		}
+		if removeID != "" && len(cur.TrustRules) > 0 {
+			filtered := cur.TrustRules[:0]
+			for _, rule := range cur.TrustRules {
+				if rule.ID != removeID {
+					filtered = append(filtered, rule)
+				}
+			}
+			cur.TrustRules = filtered
+		}
+		return cur, nil
+	})
+	if err != nil {
+		return workspace.Status{}, err
+	}
+	files.ConfigureTrust(saved.ExecutionMode, saved.TrustRevision, saved.TrustRules)
+	return files.Status(), nil
 }
 
 func (r *ConversationRuntime) startWithWorkspace(ctx context.Context, c config.Config, options openClawOptions, provider providerBridge, key, root string) (*chatProcess, error) {
@@ -122,12 +201,20 @@ func (r *ConversationRuntime) SetWorkspacePolicy(ctx context.Context, enabled bo
 		}
 		r.process, r.fingerprint = nil, ""
 	}
+	nextRev := model.ID()
 	previous := c.LocalTools
-	c.LocalTools = config.LocalToolPolicy{Enabled: enabled, Revision: model.ID()}
-	if err = files.Configure(enabled, c.LocalTools.Revision); err != nil {
+	if err = files.Configure(enabled, nextRev); err != nil {
 		return workspace.Status{}, err
 	}
-	if err = r.config.Save(c); err != nil {
+	if _, err = r.config.Update(func(latest config.Config) (config.Config, error) {
+		if latest.LocalTools.Revision != expected {
+			return config.Config{}, conversation.Fail("revision_conflict", "err.workspace.conflict")
+		}
+		previous = latest.LocalTools
+		latest.LocalTools.Enabled = enabled
+		latest.LocalTools.Revision = nextRev
+		return latest, nil
+	}); err != nil {
 		_ = files.Configure(previous.Enabled, previous.Revision)
 		return workspace.Status{}, err
 	}

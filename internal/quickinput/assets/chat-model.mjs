@@ -16,10 +16,24 @@ export class ChatWindow {
 
   apply(page, older = false) {
     if (page.reset) older = false;
+    const transientTools = older ? [] : this.messages.filter(item => item.transient === 'tool');
     const incoming = page.messages ?? [];
-    const combined = older ? [...incoming, ...this.messages] : incoming;
+    const persisted = older ? [...incoming, ...this.messages.filter(item => !item.transient)] : incoming;
     const seen = new Set();
-    this.messages = combined.filter(message => !seen.has(message.id) && seen.add(message.id));
+    const base = persisted.filter(message => !seen.has(message.id) && seen.add(message.id));
+    const persistedToolIDs = new Set();
+    for (const msg of base) {
+      for (const block of msg.blocks ?? []) {
+        if (block.type === 'tool' && block.tool?.id) persistedToolIDs.add(block.tool.id);
+      }
+    }
+    this.messages = [
+      ...base,
+      ...transientTools.filter(item => {
+        const tool = item.blocks?.[0]?.tool;
+        return tool && !persistedToolIDs.has(tool.id) && ['awaiting_approval', 'started', 'queued'].includes(tool.state);
+      }),
+    ];
     this.cursor = page.cursor;
     this.next = page.next_offset ?? 0;
     this.hasMore = page.has_more;
@@ -27,9 +41,64 @@ export class ChatWindow {
   }
 
   live(message) {
-    this.messages = this.messages.filter(item => !item.transient);
+    const liveTools = this.messages.filter(item => item.transient === 'tool');
+    this.messages = [...this.messages.filter(item => !item.transient), ...liveTools];
     if (message) this.messages.push(message);
     this.trim(false);
+  }
+
+  mergeActivities(items = [], activeTurnID = '') {
+    let changed = false;
+    const byID = new Map();
+    for (const act of items) {
+      if (act?.id) byID.set(act.id, act);
+    }
+    const persistedIDs = new Set();
+    for (const msg of this.messages) {
+      if (msg.transient) continue;
+      for (const block of msg.blocks ?? []) {
+        if (block.type === 'tool' && block.tool?.id) {
+          persistedIDs.add(block.tool.id);
+          const next = byID.get(block.tool.id);
+          if (next) {
+            block.tool = {...block.tool, ...next};
+            changed = true;
+          }
+        }
+      }
+    }
+    const nextMessages = [];
+    for (const msg of this.messages) {
+      if (msg.transient !== 'tool') {
+        nextMessages.push(msg);
+        continue;
+      }
+      const id = msg.blocks?.[0]?.tool?.id;
+      if (id && persistedIDs.has(id)) { changed = true; continue; }
+      const updated = id ? byID.get(id) : null;
+      const curTool = updated ?? msg.blocks?.[0]?.tool;
+      const keep = curTool && (curTool.state === 'awaiting_approval' || curTool.state === 'started' || curTool.state === 'queued' || (activeTurnID && curTool.turn_id === activeTurnID));
+      if (!keep) { changed = true; continue; }
+      if (updated) {
+        msg.blocks = [{type: 'tool', tool: updated}];
+        changed = true;
+      }
+      nextMessages.push(msg);
+    }
+    const existingLiveIDs = new Set(nextMessages.filter(m => m.transient === 'tool').map(m => m.blocks?.[0]?.tool?.id).filter(Boolean));
+    for (const act of items) {
+      if (!act?.id || persistedIDs.has(act.id) || existingLiveIDs.has(act.id)) continue;
+      if (act.state === 'awaiting_approval' || (activeTurnID && act.turn_id === activeTurnID && ['queued', 'started'].includes(act.state))) {
+        const liveTextIdx = nextMessages.findIndex(m => m.transient === true);
+        const liveToolMsg = {id: 'live-tool-' + act.id, role: 'assistant', turn_id: act.turn_id, transient: 'tool', blocks: [{type: 'tool', tool: act}]};
+        if (liveTextIdx >= 0) nextMessages.splice(liveTextIdx, 0, liveToolMsg);
+        else nextMessages.push(liveToolMsg);
+        changed = true;
+      }
+    }
+    this.messages = nextMessages;
+    this.trim(false);
+    return changed;
   }
 
   replace(id, text, truncated, start = 0, next = 0) {
@@ -57,7 +126,7 @@ export class ChatWindow {
 
   pendingTools() {
     return this.messages.some(message => message.blocks?.some(block => block.type === 'tool' &&
-      ['queued', 'started', 'unknown'].includes(block.tool?.state)));
+      ['queued', 'started', 'awaiting_approval', 'unknown'].includes(block.tool?.state)));
   }
 
   makeRoom(id, requestedBytes) {

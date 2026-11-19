@@ -134,6 +134,11 @@ func (s *Service) Call(ctx context.Context, request Request) (response Response,
 	descriptor, describeErr := s.runtime.Describe()
 	response.Capabilities, response.CanSend = descriptor.Capabilities, descriptor.CanSend
 	response.Prompt = descriptor.Prompt.Normalize()
+	if files, wsErr := s.Workspace(); wsErr == nil && files != nil {
+		if st := files.Status(); st.Authorized && st.ExecutionMode != "" {
+			response.ExecutionMode = st.ExecutionMode
+		}
+	}
 	if describeErr == nil {
 		caps := descriptor.Capabilities
 		if (request.Action == "create" || request.Action == "submit" || request.Action == "prepare" || request.Action == "enqueue") && (!caps.History || !caps.DurableReceipts) ||
@@ -144,6 +149,9 @@ func (s *Service) Call(ctx context.Context, request Request) (response Response,
 	switch request.Action {
 	case "activities":
 		response.Activities, err = s.activities(request)
+		return response, err
+	case "approve_tool":
+		response.Activities, err = s.approveTool(request)
 		return response, err
 	case "connect", "connection":
 		if runtime, ok := s.runtime.(interface {
@@ -237,6 +245,11 @@ func (s *Service) readOrCancel(ctx context.Context, request Request, response Re
 	case "reconcile":
 		if response.Turn != nil {
 			response.Turn, response.Live, err = s.reconcile(ctx, response.Turn.Operation)
+			if err == nil {
+				if acts, actErr := s.activities(Request{Conversation: request.Conversation, Operation: response.Turn.Operation, Offset: request.Offset}); actErr == nil && acts != nil {
+					response.Activities = acts
+				}
+			}
 		}
 		return response, err
 	}

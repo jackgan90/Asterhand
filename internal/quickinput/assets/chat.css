@@ -86,10 +86,42 @@ main:has(#command-panel:not([hidden])) .chat-actions:has(#chat-status[data-idle=
 .chat-delivery-status { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
 .chat-message.chat-tool-only { border: 0; padding-block: 0; margin-block: 4px; }
 .tool-activity { padding: 6px 10px; margin-block: 5px; border-left: 2px solid var(--line); color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-.tool-activity[data-state=started] { border-left-color: var(--accent); }
-.tool-activity[data-state=failed], .tool-activity[data-state=unknown] { border-left-style: dashed; }
+.tool-activity[data-state=started], .tool-activity[data-state=awaiting_approval] { border-left-color: var(--accent); }
+.tool-activity[data-state=failed], .tool-activity[data-state=denied], .tool-activity[data-state=unknown] { border-left-style: dashed; }
 .tool-activity-head { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; line-height: 1.4; }
 .tool-activity-name { color: var(--fg); font-weight: 500; }
 .tool-activity-target { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 11.5px; margin-inline-start: 2px; }
 .tool-activity small { display: block; opacity: .7; }
 .tool-activity ul { margin: 4px 0; padding-left: 20px; }
+#chat-turbo-badge {
+  flex: none; padding: 1px 7px; border-radius: 999px; font-size: 11px; line-height: 1.5;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.tool-approval-card {
+  margin-top: 7px; padding: 9px 11px; border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  color: var(--fg);
+}
+.tool-approval-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 4px; }
+.tool-approval-title { font-weight: 600; font-size: 12.5px; }
+.tool-approval-pill {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 11.5px;
+  padding: 1px 6px; border-radius: 5px; background: color-mix(in srgb, var(--fg) 8%, transparent);
+  word-break: break-all;
+}
+.tool-approval-reason { margin: 4px 0 4px; font-size: 12px; color: var(--fg); white-space: normal; }
+.tool-approval-note { margin: 0 0 6px; font-size: 11px; line-height: 1.35; opacity: 0.72; white-space: normal; }
+.tool-approval-details { margin: 0 0 8px; font-size: 11.5px; color: var(--muted); }
+.tool-approval-details > summary { cursor: pointer; user-select: none; }
+.tool-approval-cmd {
+  display: block; margin-top: 5px; padding: 6px 8px; border-radius: 5px;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  white-space: pre-wrap; word-break: break-all; color: var(--fg);
+}
+.tool-approval-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.tool-approval-actions > button { font-size: 12px; padding: 4px 10px; }
+.tool-approval-primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.tool-approval-primary:hover:not(:disabled) { color: var(--bg); opacity: .92; }

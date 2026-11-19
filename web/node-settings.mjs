@@ -45,7 +45,7 @@ export function nodeSettings({api, post, session, desktop, shortcut, tools, guar
   // inside this form's DOM but are not submitted with the node settings.
   const edited = event => {
     const id = event.target?.id;
-    const immediate = id === "settings-locale" || id === "desktop-shortcut" || id === "assistant-tools-enabled" || event.target?.name === "ui-theme";
+    const immediate = id === "settings-locale" || id === "desktop-shortcut" || id === "assistant-tools-enabled" || event.target?.name === "ui-theme" || event.target?.name === "assistant-execution-mode";
     if (!immediate && !["model", "name"].includes(event.target?.name)) otherDirty = true;
     if (!immediate) markDirty(true);
   };

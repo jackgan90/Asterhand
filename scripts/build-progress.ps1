@@ -1,5 +1,11 @@
 #requires -Version 7.0
 # Progress for build-owned processes. Never used to control installed nodes.
+$script:BuildUtf8Encoding = [Text.UTF8Encoding]::new($false)
+if ([Console]::IsOutputRedirected -or [Console]::IsErrorRedirected) {
+    [Console]::OutputEncoding = $script:BuildUtf8Encoding
+    $OutputEncoding = $script:BuildUtf8Encoding
+}
+
 function Invoke-BuildProcess {
     param([string]$Label, [string]$Executable, [string[]]$Arguments, [int]$MaximumExitCode = 0, [int]$TimeoutSeconds = 1800)
     Write-Host "[start] $Label"
@@ -10,6 +16,8 @@ function Invoke-BuildProcess {
     $process.StartInfo.CreateNoWindow = $true
     $process.StartInfo.RedirectStandardOutput = $true
     $process.StartInfo.RedirectStandardError = $true
+    $process.StartInfo.StandardOutputEncoding = $script:BuildUtf8Encoding
+    $process.StartInfo.StandardErrorEncoding = $script:BuildUtf8Encoding
     foreach ($argument in $Arguments) { $process.StartInfo.ArgumentList.Add($argument) }
     $started = $false
     try {

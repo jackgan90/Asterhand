@@ -12,6 +12,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'build-progress.ps1')
 if (-not $OutputDir) { $OutputDir = Join-Path $repo 'dist' }
 $OutputDir = [IO.Path]::GetFullPath($OutputDir)
 $versionSource = Get-Content (Join-Path $repo 'internal\config\config.go') -Raw
@@ -30,7 +31,6 @@ $windows = Join-Path $stageRoot 'windows'
 
 . (Join-Path $PSScriptRoot 'dependency-tools.ps1')
 $catalog = Assert-PreparedDependencies $repo $NodeDistribution $RuntimeRoot $Go
-. (Join-Path $PSScriptRoot 'build-progress.ps1')
 $sourceDigest = Get-SourceFingerprint $repo
 # Application assembly is identical for local directory candidates and release ZIPs.
 & (Join-Path $PSScriptRoot 'build-application.ps1') -Go $Go -Node (Join-Path $NodeDistribution 'node.exe') -OutputDirectory $windows -SourceDigest $sourceDigest

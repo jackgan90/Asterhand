@@ -8,6 +8,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'build-progress.ps1')
 . (Join-Path $PSScriptRoot 'dependency-tools.ps1')
 if (-not $CatalogPath) { $CatalogPath = Join-Path $repo 'packaging\dependencies.json' }
 $catalog = Read-DependencyCatalog $CatalogPath

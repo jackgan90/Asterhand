@@ -151,6 +151,48 @@ try {
     Expect-Failure { & (Join-Path $repo 'install.ps1') -PackagePath 'unused' -BeforeLocalActivation {} -InstallDir $program -DataDir $data } 'require a local'
     Expect-Failure { & (Join-Path $PSScriptRoot 'install-local.ps1') -RepairDependencies -PreparedPath 'unused' } 'cannot be combined'
     $checks.Add('app-cache-hashes-exact-inventory-path-rejection-repair-version-identity-and-mode-boundaries')
+
+    $encodingDir = Join-Path $OutputDirectory 'encoding'
+    [IO.Directory]::CreateDirectory($encodingDir) | Out-Null
+    $leafScript = Join-Path $encodingDir 'leaf.ps1'
+    $middleScript = Join-Path $encodingDir 'middle.ps1'
+    $outerScript = Join-Path $encodingDir 'outer.ps1'
+    $transcriptPath = Join-Path $encodingDir 'nested.log'
+    $progressPath = Join-Path $PSScriptRoot 'build-progress.ps1'
+    $pwshExe = Join-Path $PSHOME 'pwsh.exe'
+    Write-Text $leafScript @'
+$utf8 = [Text.UTF8Encoding]::new($false)
+$stdoutLine = "$([char]0x2714) $([char]0x2139) $([char]0x4E2D)$([char]0x6587) stdout`n"
+$stderrLine = "$([char]0x2139) $([char]0x4E2D)$([char]0x6587) stderr`n"
+$outStream = [Console]::OpenStandardOutput()
+$outBytes = $utf8.GetBytes($stdoutLine)
+$outStream.Write($outBytes, 0, $outBytes.Length)
+$outStream.Flush()
+$errStream = [Console]::OpenStandardError()
+$errBytes = $utf8.GetBytes($stderrLine)
+$errStream.Write($errBytes, 0, $errBytes.Length)
+$errStream.Flush()
+'@
+    Write-Text $middleScript @"
+. '$($progressPath.Replace("'","''"))'
+Invoke-BuildProcess 'Leaf UTF-8 check' '$($pwshExe.Replace("'","''"))' @('-NoProfile','-File','$($leafScript.Replace("'","''"))')
+"@
+    Write-Text $outerScript @"
+. '$($progressPath.Replace("'","''"))'
+Start-Transcript -LiteralPath '$($transcriptPath.Replace("'","''"))' | Out-Null
+try {
+    Invoke-BuildProcess 'Nested UTF-8 check' '$($pwshExe.Replace("'","''"))' @('-NoProfile','-File','$($middleScript.Replace("'","''"))')
+} finally { Stop-Transcript | Out-Null }
+"@
+    $cmdLine = "chcp 936 >nul && `"$pwshExe`" -NoProfile -File `"$outerScript`""
+    & cmd.exe /d /c $cmdLine | Out-Null
+    Assert ($LASTEXITCODE -eq 0) 'Nested UTF-8 build-progress probe failed.'
+    $nestedLog = Get-Content -LiteralPath $transcriptPath -Raw -Encoding UTF8
+    $expectedStdout = "$([char]0x2714) $([char]0x2139) $([char]0x4E2D)$([char]0x6587) stdout"
+    $expectedStderr = "$([char]0x2139) $([char]0x4E2D)$([char]0x6587) stderr"
+    Assert ($nestedLog.Contains($expectedStdout)) 'Nested Invoke-BuildProcess corrupted UTF-8 stdout under CP936.'
+    Assert ($nestedLog.Contains($expectedStderr)) 'Nested Invoke-BuildProcess corrupted UTF-8 stderr under CP936.'
+    $checks.Add('nested-build-progress-preserves-utf8-stdout-and-stderr-under-cp936')
     $report.status = 'passed'
 } catch { $report.status='failed'; $report.error=$_.Exception.Message; throw }
 finally { Write-LocalRecord $report (Join-Path $OutputDirectory 'fast-local-install.json') }

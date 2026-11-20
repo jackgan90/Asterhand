@@ -5,8 +5,8 @@ param([string]$Go = 'go', [Parameter(Mandatory)][string]$Node,
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repo = Split-Path -Parent $PSScriptRoot
-. (Join-Path $PSScriptRoot 'dependency-tools.ps1')
 . (Join-Path $PSScriptRoot 'build-progress.ps1')
+. (Join-Path $PSScriptRoot 'dependency-tools.ps1')
 $catalog = Read-DependencyCatalog (Join-Path $repo 'packaging/dependencies.json')
 if ((& $Go version) -notmatch ('go' + [regex]::Escape($catalog.go.version) + '\s') -or $LASTEXITCODE -ne 0) { throw 'Go compiler version mismatch.' }
 if ($SourceDigest -ne (Get-SourceFingerprint $repo)) { throw 'Source changed before application build.' }

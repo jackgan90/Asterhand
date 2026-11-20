@@ -22,6 +22,8 @@ $guard = $null
 $transcribing = $false
 $savedCache = $env:GOCACHE
 $savedModCache = $env:GOMODCACHE
+$savedOutputEncoding = [Console]::OutputEncoding
+$savedPipeEncoding = $OutputEncoding
 $stages = [Collections.Generic.List[object]]::new()
 $report = [ordered]@{status='running';mode=$Mode;stages=$stages;runtime_reused=$false;application_reused=$false}
 
@@ -74,6 +76,9 @@ function Find-LocalPackage([string]$Source) {
 }
 
 try {
+    $utf8 = [Text.UTF8Encoding]::new($false)
+    [Console]::OutputEncoding = $utf8
+    $OutputEncoding = $utf8
     try { $guard = [IO.File]::Open((Join-Path $workspace '.run.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None) }
     catch { throw 'Another local build/install is running. Wait for it to finish.' }
     if (-not $env:GOCACHE) { $env:GOCACHE = Join-Path $repo 'out/cache/go-build' }
@@ -149,5 +154,7 @@ finally {
         if ($null -ne $guard) { $guard.Dispose() }
         $env:GOCACHE = $savedCache
         $env:GOMODCACHE = $savedModCache
+        if ($null -ne $savedOutputEncoding) { [Console]::OutputEncoding = $savedOutputEncoding }
+        if ($null -ne $savedPipeEncoding) { $OutputEncoding = $savedPipeEncoding }
     }
 }

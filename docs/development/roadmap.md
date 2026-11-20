@@ -28,6 +28,8 @@
 
 [本地命令完成通知](features/local-command-completion-notifications/plan.md)：Windows 桌面右下角显示跟随主题的完成卡片，默认可读停留 3 秒，提供按内容调整的紧凑高度、自然进退动画、有限堆叠、溢出排队和命令级默认开启的通知开关；公共规则与平台展示分离，macOS/Linux 后续接入。实现、相关工程验证、独立审计修复复审及本机用户验收已完成，专项环境边界见[验证说明](features/local-command-completion-notifications/validation.md)。
 
+普通应用遮挡通知的修复已通过桌面层级、命中和宿主恢复回归，以及安装后的本机用户验收。
+
 ## 已实现的 Windows 助手基础
 
 脚本图编辑历史的实现、工程验证与本机用户验收已完成，包含实体中文输入法切换后的节点名称设置与重命名，见[撤销重做计划](features/graph-edit-history/plan.md)。

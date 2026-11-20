@@ -17,7 +17,7 @@ git diff --check
 
 ```powershell
 $env:ASTERHAND_DESKTOP_TEST = '1'
-go test ./internal/quickinput -run TestNativeNotificationRendering -count=1 -v
+go test ./internal/quickinput -run '^(TestNativeNotificationRendering|TestNotificationRevealVerifiesWindowOrder)$' -count=1 -v
 pwsh -NoProfile -File scripts/build-input-host.ps1 -Go go -OutputDirectory out/completion-notification-validation/input-host
 $env:ASTERHAND_INPUT_HOST_TEST_DIRECTORY = (Resolve-Path out/completion-notification-validation/input-host).Path
 go test ./internal/quickinput -run 'TestNotification(HostIndependentProcess|ExitingCardKeepsExitDuringReposition)' -count=1 -v -timeout=120s
@@ -38,7 +38,10 @@ Remove-Item Env:ASTERHAND_DESKTOP_TEST, Env:ASTERHAND_INPUT_HOST_TEST_DIRECTORY
 - [独立宿主](../../../../internal/quickinput/notification_process_windows_test.go)：正式启动参数、进程/协议校验、宿主退出后重建、恢复可见身份和最终退出；[日志宿主](../../../../internal/quickinput/log_host_test.go)核对原 run ID 穿过 IPC。
 - [显示与退出动画](../../../../internal/quickinput/notification_animation_windows_test.go)：旧延迟显示计时器不能绕过当前内容的尺寸确认；三卡显示时，中间卡片先退出，顶部卡片紧接退出，移除中间卡片后仍能收到顶部卡片的退出回执，防止补位占住显示名额。
 - [会话状态](../../../../internal/quickinput/notification_session_windows_test.go)：初始锁屏、断连及未知状态暂停，电源恢复不覆盖锁屏，睡眠不被会话变化解除；原生查询用例核对 Windows 当前交互会话，实体锁屏顺序仍需人工验收。
-- [实际应用装配](../../../../internal/app/command_notifications_windows_test.go)：将 `go test -c` 编译的 app 测试程序放到上述 `input-host` 目录旁，设置 `ASTERHAND_NOTIFICATION_APP_TEST=1` 后运行 `-test.run=TestCommandNotificationsRealWindowsApp -test.v`。隔离节点执行真实 Windows 成功、失败、超时、关闭通知和主动停止脚本，确认实际通知出现并按时退场；无需模型凭据。
+- [窗口层级回归](../../../../internal/quickinput/notification_zorder_windows_test.go)使用真实 HWND 模拟置顶请求返回成功但置顶位缺失，分别检查可恢复的普通窗口和持续拒绝置顶的窗口。后者应隐藏并报告宿主故障，不能发出进入回执。
+- [实际应用装配](../../../../internal/app/command_notifications_windows_test.go)：将 `go test -c` 编译的 app 测试程序放到上述 `input-host` 目录内，设置 `ASTERHAND_NOTIFICATION_APP_TEST=1` 后运行 `-test.run=TestCommandNotificationsRealWindowsApp -test.v`。隔离节点执行真实 Windows 成功、失败、超时、关闭通知和主动停止脚本，检查队列接纳、退场及过滤。桌面遮挡由原生显示测试另行检查。
+
+检查桌面遮挡时，在当前工作屏右下角保留普通应用窗口，收起会覆盖卡片的其他置顶浮层。原生显示测试在两种主题下检查三张卡片的 `WS_EX_TOPMOST`，用 `WindowFromPoint` 命中卡片中心，再用 `GetAncestor(GA_ROOT)` 将 WebView2 子窗口归到卡片 HWND。显示前后的前台窗口应一致。排查实际安装节点时可按同一方法采样完全不透明的卡片，同时记录运行实例、HWND 和前台窗口。队列计数和 WebView2 截图无法发现普通窗口遮挡。
 
 ## 桌面验收与支持边界
 

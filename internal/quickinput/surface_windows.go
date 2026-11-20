@@ -220,9 +220,9 @@ func (s *nativeSurface) createWindow() error {
 	windowStyle := uintptr(0x80000000 | 0x00080000 | 0x00020000) // POPUP | SYSMENU | MINIMIZEBOX
 	extendedStyle := uintptr(appWindow)
 	if s.notification != nil {
-		extendedStyle = 0x08000000 | 0x00000080 | 0x00080000
+		extendedStyle = 0x08000000 | 0x00000080 | 0x00080000 | wsExTopmost // NOACTIVATE | TOOLWINDOW | LAYERED | TOPMOST
 		windowStyle = 0x80000000
-	} // NOACTIVATE | TOOLWINDOW | LAYERED
+	}
 	if s.log != nil {
 		windowStyle = 0x00cf0000
 	}

@@ -5,6 +5,7 @@ package quickinput
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
 	"time"
@@ -15,6 +16,12 @@ import (
 )
 
 var notificationGDI = windows.NewLazySystemDLL("gdi32.dll")
+
+const (
+	wsExTopmost   = 0x00000008
+	swpNoActivate = 0x0010
+	swpNoZOrder   = 0x0004
+)
 
 type notificationSurface struct {
 	desktop                         *notificationDesktop
@@ -106,7 +113,9 @@ func (s *nativeSurface) applyNotification(card notifications.Card, bounds native
 	if !n.shown && !paused {
 		// Measure using the destination width/DPI while the native window is hidden.
 		n.current, n.alpha = bounds, 0
-		s.positionNotification()
+		if !s.positionNotification() {
+			return
+		}
 	}
 	_ = s.postJSON(map[string]any{"kind": "notification", "card": card, "layout": n.layout, "theme": s.theme, "locale": s.locale})
 	if paused {
@@ -146,27 +155,32 @@ func (s *nativeSurface) revealNotification() {
 		return
 	}
 	uiDLL.NewProc("KillTimer").Call(s.hwnd.Load(), 72)
-	n.shown = true
-	s.showContent(true)
-	if n.card.Phase == "entering" {
-		n.current = n.target
+	if n.card.Phase == "exiting" {
+		s.hideNotification()
+		n.emit("exited")
+		return
+	}
+	entering := n.card.Phase == "entering"
+	n.current, n.alpha = n.target, 255
+	if entering {
 		if !n.reduced {
 			offset := scaled(24, max(96, n.dpi))
 			n.current.Left += offset
 			n.current.Right += offset
 		}
 		n.alpha = 0
-		s.positionNotification()
-		uiDLL.NewProc("ShowWindow").Call(s.hwnd.Load(), 4)
+	}
+	if !s.positionNotification() {
+		return
+	}
+	s.showContent(true)
+	if err := showNotificationWindow(s.hwnd.Load()); err != nil {
+		s.failNotification(err)
+		return
+	}
+	n.shown = true
+	if entering {
 		s.startNotificationAnimation(255, 240*time.Millisecond)
-	} else if n.card.Phase == "exiting" {
-		s.hideNotification()
-		n.emit("exited")
-	} else {
-		n.current = n.target
-		n.alpha = 255
-		s.positionNotification()
-		uiDLL.NewProc("ShowWindow").Call(s.hwnd.Load(), 4)
 	}
 }
 
@@ -201,8 +215,7 @@ func (s *nativeSurface) animateNotification() {
 	interpolate := func(a, b int32) int32 { return a + int32(math.Round(float64(b-a)*ease)) }
 	n.current = nativeRect{Left: interpolate(n.from.Left, target.Left), Top: interpolate(n.from.Top, target.Top), Right: interpolate(n.from.Right, target.Right), Bottom: interpolate(n.from.Bottom, target.Bottom)}
 	n.alpha = n.fromAlpha + (n.targetAlpha-n.fromAlpha)*ease
-	s.positionNotification()
-	if t < 1 {
+	if !s.positionNotification() || t < 1 {
 		return
 	}
 	uiDLL.NewProc("KillTimer").Call(s.hwnd.Load(), 71)
@@ -210,17 +223,64 @@ func (s *nativeSurface) animateNotification() {
 		s.hideNotification()
 		n.emit("exited")
 	} else if n.card.Phase == "entering" {
+		if err := checkNotificationWindow(s.hwnd.Load()); err != nil {
+			s.failNotification(err)
+			return
+		}
 		n.emit("entered")
 	}
 }
 
-func (s *nativeSurface) positionNotification() {
+func (s *nativeSurface) positionNotification() bool {
 	n := s.notification
 	r := n.current
 	s.placing = true
-	uiDLL.NewProc("SetWindowPos").Call(s.hwnd.Load(), ^uintptr(0), uintptr(r.Left), uintptr(r.Top), uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top), 0x10)
+	hwnd := s.hwnd.Load()
+	ok, _, err := uiDLL.NewProc("SetWindowPos").Call(hwnd, 0, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top), swpNoActivate|swpNoZOrder)
 	s.placing = false
-	uiDLL.NewProc("SetLayeredWindowAttributes").Call(s.hwnd.Load(), 0, uintptr(math.Round(n.alpha)), 2)
+	if ok != 0 {
+		ok, _, err = uiDLL.NewProc("SetLayeredWindowAttributes").Call(hwnd, 0, uintptr(math.Round(n.alpha)), 2)
+	}
+	if ok == 0 {
+		s.failNotification(err)
+		return false
+	}
+	return true
+}
+
+func notificationTopmost(hwnd uintptr) bool {
+	ex, _, _ := uiDLL.NewProc("GetWindowLongPtrW").Call(hwnd, ^uintptr(19)) // GWL_EXSTYLE
+	return ex&wsExTopmost != 0
+}
+
+func showNotificationWindow(hwnd uintptr) error {
+	const keepBounds = 0x0001 | 0x0002 | swpNoActivate // SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
+	const showWindow = 0x0040
+	setPos := uiDLL.NewProc("SetWindowPos")
+	if !notificationTopmost(hwnd) {
+		// A direct HWND_TOPMOST request can succeed without promoting the HWND.
+		// Reset its Z position while hidden, before showing any content.
+		if ok, _, err := setPos.Call(hwnd, 1, 0, 0, 0, 0, keepBounds); ok == 0 { // HWND_BOTTOM
+			return err
+		}
+	}
+	if ok, _, err := setPos.Call(hwnd, ^uintptr(0), 0, 0, 0, 0, keepBounds|showWindow); ok == 0 {
+		return err
+	}
+	return checkNotificationWindow(hwnd)
+}
+
+func checkNotificationWindow(hwnd uintptr) error {
+	visible, _, _ := uiDLL.NewProc("IsWindowVisible").Call(hwnd)
+	if visible == 0 || !notificationTopmost(hwnd) {
+		return errors.New("notification window did not become visible and topmost")
+	}
+	return nil
+}
+
+func (s *nativeSurface) failNotification(err error) {
+	s.hideNotification()
+	s.notification.desktop.peer.fail(err)
 }
 
 func (s *nativeSurface) hideNotification() {

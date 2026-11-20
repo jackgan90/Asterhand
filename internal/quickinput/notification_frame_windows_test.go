@@ -53,6 +53,7 @@ func checkNotificationCorners(t *testing.T, home, theme string) {
 		filename := filepath.Join(directory, fmt.Sprintf("notification-%s-%d.png", theme, s.notification.slot))
 		captureExperience(t, s, filename)
 		checkNotificationImageCorners(t, filename)
+		checkNotificationDesktopHit(t, s)
 		surfaceSync(t, s, func() {
 			var bounds nativeRect
 			hwnd := s.hwnd.Load()
@@ -80,6 +81,32 @@ func checkNotificationCorners(t *testing.T, home, theme string) {
 	}
 	if len(surfaces) != 3 {
 		t.Fatalf("expected three notification windows, got %d", len(surfaces))
+	}
+}
+
+func checkNotificationDesktopHit(t *testing.T, s *nativeSurface) {
+	t.Helper()
+	hwnd := s.hwnd.Load()
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		var root, ex, coveringEx uintptr
+		surfaceSync(t, s, func() {
+			var r nativeRect
+			uiDLL.NewProc("GetWindowRect").Call(hwnd, uintptr(unsafe.Pointer(&r)))
+			x, y := r.Left+(r.Right-r.Left)/2, r.Top+(r.Bottom-r.Top)/2
+			point := uint64(uint32(x)) | uint64(uint32(y))<<32
+			hit, _, _ := uiDLL.NewProc("WindowFromPoint").Call(uintptr(point))
+			root, _, _ = uiDLL.NewProc("GetAncestor").Call(hit, 2) // GA_ROOT includes WebView2 child hits.
+			ex, _, _ = uiDLL.NewProc("GetWindowLongPtrW").Call(hwnd, ^uintptr(19))
+			coveringEx, _, _ = uiDLL.NewProc("GetWindowLongPtrW").Call(root, ^uintptr(19))
+		})
+		if ex&8 != 0 && root == hwnd {
+			return
+		}
+		// Give an unrelated topmost shell popup time to leave the test point.
+		if ex&8 == 0 || coveringEx&8 == 0 || time.Now().After(deadline) {
+			t.Fatalf("card center obscured: hwnd=%#x ex=%#x hit root=%#x covering ex=%#x", hwnd, ex, root, coveringEx)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 

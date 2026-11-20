@@ -109,7 +109,9 @@ ready:
 			s := value.(*nativeSurface)
 			if s.notification != nil {
 				_ = s.dispatch(ctx, func() {
-					uiDLL.NewProc("SetWindowLongPtrW").Call(s.hwnd.Load(), ^uintptr(19), 0x08000000|0x00040000|0x00080000)
+					hwnd := s.hwnd.Load()
+					ex, _, _ := uiDLL.NewProc("GetWindowLongPtrW").Call(hwnd, ^uintptr(19))
+					uiDLL.NewProc("SetWindowLongPtrW").Call(hwnd, ^uintptr(19), ex&^0x80|0x40000)
 				})
 			}
 			return true

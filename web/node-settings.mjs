@@ -10,7 +10,7 @@ const probeKeys = {
   stale: "web.settings.probe.stale",
 };
 
-export function nodeSettings({api, post, session, desktop, shortcut, tools, guarded, notice, refreshPeers, listen, editors}) {
+export function nodeSettings({api, post, session, desktop, shortcut, tools, harnesses, guarded, notice, refreshPeers, listen, editors}) {
   let probeTimer, probeGeneration = 0, openGeneration = 0;
   let loadedData = null, lastProbe = null, lastNetwork = null, statusState = null;
   let nameDirty = false, renderedDefaultName = "";
@@ -115,6 +115,7 @@ export function nodeSettings({api, post, session, desktop, shortcut, tools, guar
     void desktop.open();
     void shortcut?.open?.();
     void tools?.open?.();
+    void harnesses?.open?.();
     const data = await api("/api/settings"),
       c = data.config;
     if (!scope?.active || generation !== openGeneration) return;

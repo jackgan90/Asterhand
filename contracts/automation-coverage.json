@@ -186,6 +186,27 @@
         "artifacts.get",
         "artifacts.read"
       ]
+    },
+    {
+      "id": "workers",
+      "ui": "多 Coding Harness 协作 Worker 创建、派发、有界等待、分页结果/日志、精确取消、关闭与人工核对",
+      "tests": [
+        "internal/harnesses/service_test.go",
+        "internal/workers/service_test.go",
+        "internal/app/automation_workers_test.go"
+      ],
+      "operations": [
+        "workers.create",
+        "workers.list",
+        "workers.get",
+        "workers.send",
+        "workers.wait",
+        "workers.result",
+        "workers.logs",
+        "workers.cancel",
+        "workers.close",
+        "workers.resolve"
+      ]
     }
   ],
   "web_endpoints": {
@@ -220,7 +241,10 @@
     "/api/automation/editor": "drafts",
     "/api/local-commands/delete": "commands",
     "/api/local-commands/delete-batch": "commands",
-    "/api/workspace/permission": "human"
+    "/api/workspace/permission": "human",
+    "/api/harnesses/status": "human",
+    "/api/harnesses/policy": "human",
+    "/api/harnesses/turn-action": "human"
   },
   "native_actions": {
     "internal/localcommands/wire/protocol.go": {

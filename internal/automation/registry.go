@@ -59,10 +59,15 @@ func Register[T any](r *Registry, d Definition, target func(T) string, access fu
 	r.definitions[d.Name] = d
 }
 
+func (r *Registry) Definition(name string) (Definition, bool) {
+	d, ok := r.definitions[name]
+	return d, ok
+}
+
 func (r *Registry) Definitions(p Principal) []Definition {
 	out := []Definition{}
 	for _, d := range r.definitions {
-		if p.Role(d.Role) {
+		if p.Role(d.Role) && p.AllowsToolset(d.EffectiveToolset()) {
 			out = append(out, d)
 		}
 	}
@@ -93,7 +98,7 @@ func (r *Registry) dispatchGuarded(ctx context.Context, token string, request Re
 // automation transports must always use Dispatch with their subject token.
 func (r *Registry) DispatchHuman(ctx context.Context, request Request) Response {
 	return r.dispatchAuthorized(ctx, func() (Principal, error) {
-		return Principal{ID: "human:web", Name: "Local human", Roles: []string{"read", "edit", "execute"}, Scopes: map[string][]string{"node": {"*"}, "commands": {"*"}, "conversations": {"*"}, "workspaces": {"*"}, "projects": {"*"}}}, nil
+		return Principal{ID: "human:web", Name: "Local human", Roles: []string{"read", "edit", "execute"}, Scopes: map[string][]string{"node": {"*"}, "commands": {"*"}, "conversations": {"*"}, "workspaces": {"*"}, "workers": {"*"}, "projects": {"*"}}}, nil
 	}, request, nil)
 }
 
@@ -117,6 +122,10 @@ func (r *Registry) dispatchAuthorized(ctx context.Context, authorize func() (Pri
 		response.Error = Fail("forbidden", "Operation is not available to this subject")
 		return response
 	}
+	if !p.AllowsToolset(d.EffectiveToolset()) {
+		response.Error = Fail("toolset_disabled", "This toolset is disabled for the current caller")
+		return response
+	}
 	value, err := d.normalize(request.Arguments)
 	if err != nil {
 		response.Error = PublicError(err)
@@ -129,6 +138,9 @@ func (r *Registry) dispatchAuthorized(ctx context.Context, authorize func() (Pri
 		}
 		if current.ID != p.ID || !current.Role(d.Role) {
 			return Fail("forbidden", "Authorization was revoked")
+		}
+		if !current.AllowsToolset(d.EffectiveToolset()) {
+			return Fail("toolset_disabled", "This toolset is disabled for the current caller")
 		}
 		if err = d.access(current, value); err != nil {
 			return err
@@ -186,7 +198,7 @@ func (r *Registry) dispatchAuthorized(ctx context.Context, authorize func() (Pri
 	if d.Write {
 		callContext = r.Context
 	} // The node owns an accepted operation, not its observer.
-	call := Call{Principal: p, Identity: identity, Check: check}
+	call := Call{Principal: p, Identity: identity, Authorize: authorize, Check: check}
 	call.Run = func(inner context.Context, req Request, extra func() error) Response {
 		return r.dispatchAuthorized(inner, authorize, req, func() error {
 			if err := check(); err != nil {

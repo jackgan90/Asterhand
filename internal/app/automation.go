@@ -32,6 +32,9 @@ func (a *App) prepareAutomation() error {
 	if err = r.LoadCursorKey(a.Config.Home); err != nil {
 		return err
 	}
+	if a.Harnesses != nil {
+		access.ResolveCaller = a.Harnesses.AuthenticateCaller
+	}
 	r.Authorize = access.Authenticate
 	r.Reconcile = a.reconcileAutomationOperation
 	a.registerAutomation(r)
@@ -69,6 +72,7 @@ func (a *App) registerAutomation(r *automation.Registry) {
 	a.registerLiveEditors(r)
 	a.registerAutomationDiagnostics(r)
 	a.registerAutomationBatches(r)
+	a.registerAutomationWorkers(r)
 	describeAutomationResults(r)
 }
 
@@ -81,9 +85,9 @@ func AutomationDefinitions() []automation.Definition {
 }
 
 func (a *App) registerAutomationCore(r *automation.Registry) {
-	automation.Register(r, automation.Definition{Name: "operations.new_id", Description: "Create an immutable write identity using the node clock before submitting a side effect", Role: "read"}, nil, nil,
+	automation.Register(r, automation.Definition{Name: "operations.new_id", Description: "Create an immutable write identity using the node clock before submitting a side effect", Role: "read", Toolset: automation.ToolsetCore}, nil, nil,
 		func(ctx context.Context, call automation.Call, v struct {
-			Operation string `json:"operation,omitempty"`
+			Operation string `json:"operation,omitempty" description:"Optional target write operation name (e.g. \"workers.create\" or \"workers.send\")"`
 		}) (automation.Outcome, error) {
 			if v.Operation != "" {
 				found := false
@@ -99,18 +103,22 @@ func (a *App) registerAutomationCore(r *automation.Registry) {
 			}
 			return automation.Outcome{Data: map[string]string{"operation_id": operations.NewIDFor(v.Operation, r.Now())}}, nil
 		})
-	automation.Register(r, automation.Definition{Name: "capabilities", Description: "Discover granted operations, API version, node instance, server time and limits", Role: "read"}, nil, nil,
+	automation.Register(r, automation.Definition{Name: "capabilities", Description: "Discover granted operations, API version, node instance, server time and limits", Role: "read", Toolset: automation.ToolsetCore}, nil, nil,
 		func(ctx context.Context, call automation.Call, v automation.Empty) (automation.Outcome, error) {
 			names := []map[string]any{}
 			for _, d := range r.Definitions(call.Principal) {
-				names = append(names, map[string]any{"name": d.Name, "write": d.Write, "batch": d.Batch, "role": d.Role})
+				names = append(names, map[string]any{"name": d.Name, "write": d.Write, "batch": d.Batch, "role": d.Role, "toolset": d.EffectiveToolset()})
 			}
-			return automation.Outcome{Data: map[string]any{"api_version": automation.APIVersion, "node_id": r.Node, "instance_id": r.Instance, "server_time_ms": r.Now().UnixMilli(), "operations": names, "limits": map[string]any{"request_bytes": automation.MaxRequest, "response_bytes": automation.MaxResponse, "page": 200, "batch": 32, "wait_seconds": 30, "waits_per_actor": 4, "waits_per_node": 16, "writes_per_actor": 4, "writes_per_node": 16}}}, nil
+			toolsets := call.Principal.Toolsets
+			if toolsets == nil {
+				toolsets = map[string]bool{automation.ToolsetCore: true, automation.ToolsetGeneral: true, automation.ToolsetCollab: true}
+			}
+			return automation.Outcome{Data: map[string]any{"api_version": automation.APIVersion, "node_id": r.Node, "instance_id": r.Instance, "caller_id": call.Principal.CallerID, "policy_revision": call.Principal.PolicyRevision, "roles": call.Principal.Roles, "toolsets": toolsets, "server_time_ms": r.Now().UnixMilli(), "operations": names, "limits": map[string]any{"request_bytes": automation.MaxRequest, "response_bytes": automation.MaxResponse, "page": 200, "batch": 32, "wait_seconds": 30, "waits_per_actor": 4, "waits_per_node": 16, "writes_per_actor": 4, "writes_per_node": 16}}}, nil
 		})
 	type receiptInput struct {
-		ID string `json:"operation_id"`
+		ID string `json:"operation_id" description:"Operation identity previously returned by operations.new_id"`
 	}
-	automation.Register(r, automation.Definition{Name: "operations.get", Description: "Read the original durable write receipt without executing it again", Role: "read", Control: true}, nil, nil,
+	automation.Register(r, automation.Definition{Name: "operations.get", Description: "Read the original durable write receipt without executing it again", Role: "read", Toolset: automation.ToolsetCore, Control: true}, nil, nil,
 		func(ctx context.Context, call automation.Call, v receiptInput) (automation.Outcome, error) {
 			if _, err := operations.IDTime(v.ID); err != nil {
 				return automation.Outcome{}, err
@@ -119,12 +127,23 @@ func (a *App) registerAutomationCore(r *automation.Registry) {
 			if err != nil {
 				return automation.Outcome{}, err
 			}
-			if err = authorizeReceipt(call.Principal, receipt); err != nil {
+			if err = authorizeReceipt(r, call.Principal, receipt); err != nil {
 				return automation.Outcome{}, err
 			}
 			receipt, err = a.reconcileAutomationOperation(receipt)
 			if err != nil {
 				return automation.Outcome{}, err
+			}
+			// Re-verify receipt authorization with the latest Principal immediately
+			// before returning so mid-flight toolset revocation cannot leak old receipts.
+			if call.Authorize != nil {
+				latest, authErr := call.Authorize()
+				if authErr != nil {
+					return automation.Outcome{}, authErr
+				}
+				if err = authorizeReceipt(r, latest, receipt); err != nil {
+					return automation.Outcome{}, err
+				}
 			}
 			return automation.Outcome{Data: receipt}, nil
 		})
@@ -134,21 +153,30 @@ func (a *App) registerAutomationCore(r *automation.Registry) {
 		})
 }
 
-func authorizeReceipt(p automation.Principal, r operations.Receipt) error {
+func authorizeReceipt(r *automation.Registry, p automation.Principal, rec operations.Receipt) error {
+	if r != nil {
+		if def, ok := r.Definition(rec.Name); ok {
+			if !p.AllowsToolset(def.EffectiveToolset()) {
+				return automation.Fail("toolset_disabled", "This toolset is disabled for the current caller")
+			}
+		}
+	}
 	family := "node"
 	switch {
-	case strings.HasPrefix(r.Name, "commands."), strings.HasPrefix(r.Name, "runs."), strings.HasPrefix(r.Name, "logs."):
+	case strings.HasPrefix(rec.Name, "commands."), strings.HasPrefix(rec.Name, "runs."), strings.HasPrefix(rec.Name, "logs."):
 		family = "commands"
-	case strings.HasPrefix(r.Name, "conversations."), strings.HasPrefix(r.Name, "turns."), strings.HasPrefix(r.Name, "messages."):
+	case strings.HasPrefix(rec.Name, "conversations."), strings.HasPrefix(rec.Name, "turns."), strings.HasPrefix(rec.Name, "messages."):
 		family = "conversations"
-	case strings.HasPrefix(r.Name, "tasks."):
+	case strings.HasPrefix(rec.Name, "tasks."):
 		family = "projects"
-	case strings.HasPrefix(r.Name, "workspace_"):
+	case strings.HasPrefix(rec.Name, "workspace_"):
 		family = "workspaces"
-	case strings.HasPrefix(r.Name, "drafts."), strings.HasPrefix(r.Name, "batches."):
+	case strings.HasPrefix(rec.Name, "workers."):
+		family = "workers"
+	case strings.HasPrefix(rec.Name, "drafts."), strings.HasPrefix(rec.Name, "batches."):
 		return nil // Draft receipts contain only identities owned by this actor.
 	}
-	return p.Require(family, r.Target)
+	return p.Require(family, rec.Target)
 }
 
 func (a *App) automationHumanAPI(w http.ResponseWriter, r *http.Request) bool {

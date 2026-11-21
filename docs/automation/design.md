@@ -124,3 +124,12 @@ Web 批量删除是公共 `commands.delete` 的有界组合：同源适配 `POST
 使用[官方 Go SDK v1.7.0](https://github.com/modelcontextprotocol/go-sdk/tree/v1.7.0)处理 stdio 协议协商和工具调用。固定模块及传递依赖见 [go.mod](../../go.mod) / [go.sum](../../go.sum)，校验使用 `go mod verify`；构建脚本收集每个模块的 LICENSE/NOTICE，额外分发 WHATWG 编码表许可。实际兼容证据是同版 SDK 客户端连接构建出的 MCP 进程；其他客户端需独立验证，不能把 SDK 支持列表当作产品实测。
 
 验收状态、验证方法与专项环境边界见[验证说明](../development/features/agent-automation/validation.md)。操作覆盖登记与构建守卫见[开发治理设计](../development/design.md)。
+
+## 多 Harness 工具集裁剪与稳定 MCP 入口（Milestone 1 已实现核心机制，稳定转发入口归属 Milestone 2）
+
+本节对应[多 Coding Harness 中介计划](../development/features/multi-harness-broker/plan.md)与 [ADR-005](adr/005-harness-mcp-lifecycle-and-dynamic-toolsets.md)：
+
+- **工具集分层与受限主体**：在 `automation.Definition` 上增加工具集标签（`core`、`general`、`collab`）。每个受管 Harness 建立可撤销的受限调用身份与独立 `Principal`，其有效权限统一作用于 `tools/list`、`Dispatch`、`batches.submit` 子项、`operations.get` 与 `batches.get` 逐项收据查询（返回前均按原操作所属工具集与最新权限复核，防止查询期间撤权泄漏旧协作收据）与客户端本地 `node.start`；吊销整份凭据与仅关闭单个工具集开关（按剩余开关实时重算权限）严格区分；长驻 MCP 子进程在每次调用与定期轮询时自动与磁盘凭据同步（删除即失效，重签自动恢复）；无 `--caller` 的既有直连入口明确定位为当前 Windows 用户显式全量本机入口，同时在文档中诚实声明同 Windows 账户下的策略保证边界。
+- **受管 MCP 对外工具名规范（仅限 `[a-zA-Z0-9_-]`，禁止 `.`）**：经实测，Antigravity 懒加载 MCP Schema 缓存对名称含 `.` 的工具会将 `parameters` 置为 `null`，且 OpenAI / Anthropic 等主流模型工具注册表均要求工具名仅包含 `[a-zA-Z0-9_-]`。因此 `MCPHost` 对所有受管 Coding Harness 调用方（`--caller` 非空）统一在 MCP 传输边界将内部规范操作名中的 `.` 映射为 `_`（如 `workers_create`、`operations_new_id`），在 `operations_new_id` / 批处理参数中自动反解回内部规范名，并由 [automation_coverage_test.go](../../internal/app/automation_coverage_test.go) 守卫检查全部操作映射后的字符集合法性与零命名冲突；所有公开写/读入参 struct 字段均须附带清晰的 `description` tag。内部逻辑、CLI、HTTP 及无 `--caller` 的旧直连 MCP 保留原点号规范名不变。
+- **双通道模型可读响应与预算分离**：`mcpResult` 对 `operations.new_id`、`operations.get`、`capabilities` 及全部 `harnesses.*`、`workers.*` 在保留 `structuredContent` 的同时，向 `content[].text` 投影有界、面向模型的结构化文本（确保纯文本客户端从生成首个 `operation_id` 到断线按原 ID 找回 `turn_id` 与读取审查正文全链路不断链）；`workers.send` 为纯写立即返回 `turn_id`（不混入 `wait_seconds`，避开 40s/45s 超时与幂等摘要冲突；`workers.create/send/cancel/close` 接入 `reconcileAutomationOperation` 修复领域落盘后、公共收据完成前的崩溃窗口），等待走独立 `workers.wait`（上限 `30s`）；长审查正文与日志独立于 `8 KiB` 收据存储，通过 `workers.result` 与 `workers.logs` 按 `64 KiB` 响应预算分页读取；`ServerOptions.Instructions` 按当前开启的工具集动态拼接极简概要（每工具集一句，避免膨胀）。
+- **稳定入口、对账与受管隔离**：Milestone 1 节点启动自动刷新已托管的 Antigravity `mcp_config.json` 路径；Milestone 2 交付安装根目录 `asterhand-mcp.exe` 复用 `launch.ReadInstallation` 校验并自动向活动版本 `asterhand.exe mcp` 透传 `--home <Installation.Data>`；外部 MCP 托管维护期望/观察状态对账且严禁整文件备份外部含凭据配置；关闭权限先在服务端闸门即时生效并发出 `notifications/tools/list_changed`。

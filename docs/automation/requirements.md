@@ -45,4 +45,16 @@ AUTO-NTF-01：`commands.create/get/list/validate/patch/clone` 与命令草稿支
 | AUTO-24 | 新增/变更功能同时维护覆盖清单、公共操作、两种 agent 入口及等价行为测试；全部本期清单完成前不得声称日常能力已全覆盖 |
 | AUTO-25 | 外部 agent 可直接读、改并提交打开窗口内未保存的普通草稿；按目标和修订定位，在途状态和敏感字段不被误提交。 |
 
+## 多 Coding Harness 托管与动态工具集（Milestone 1 已交付并通过本机用户验收，Milestone 2—4 规划中）
+
+以下需求对应[多 Coding Harness 中介计划](../development/features/multi-harness-broker/plan.md)与 [ADR-005](adr/005-harness-mcp-lifecycle-and-dynamic-toolsets.md)：Milestone 1 的工具集裁剪、受管无点号 MCP 工具名映射、双通道响应与 Antigravity 托管对账已实现并通过本机用户验收；`harnesses.list/get` 与其余三家托管归属 Milestone 2：
+
+| ID | 要求 |
+|---|---|
+| AUTO-HARNESS-01 | 每个已发现/配置的 Coding Harness 独立维护三项正交开关：`general_tools_enabled`、`collab_caller_enabled`、`collab_worker_enabled`，全部 8 种组合均有确定预期行为；分别维护期望状态与观察状态以支持可重试对账，外部 MCP 仅在 `general_tools_enabled || collab_caller_enabled` 为真时注册 |
+| AUTO-HARNESS-02 | MCP 公共操作按 `core`、`general`、`collab` 工具集分组；每个受管 Harness 绑定可撤销的受限主体与有效工具集，统一作用于 `tools/list`、`Dispatch`、`batches.submit` 子项、`operations.get` 收据作用域及客户端本地 `node.start`，支持 `notifications/tools/list_changed` 刷新；无 `--caller` 兼容入口明确定位为本机全量入口 |
+| AUTO-HARNESS-03 | `harnesses.list/get` 与 `workers.create/list/get/send/wait/result/logs/cancel/close` 统一提供 CLI 与 MCP、共用机器 schema 与幂等操作收据，并随对应里程碑实现同步登记至 `contracts/automation-coverage.json`；`workers.send` 为纯写接纳、`workers.wait` 上限对齐 `30s`、`workers.result/logs` 支持长正文与日志有界分页 |
+| AUTO-HARNESS-04 | 外部 Harness 的 MCP 注册/反注册、冲突接管、路径覆盖、授权工作区与三开关变更按 `AUTO-19` 保留为 Web 专用人工例外；写入优先官方 CLI 或单键原子修改，严禁整文件备份外部含凭据配置，发现非托管同名条目时拒绝静默覆盖 |
+| AUTO-HARNESS-05 | MCP 工具响应在保留 `structuredContent` 的同时，须对 `core` 底座（`operations.new_id`、`operations.get`、`capabilities`）与全部 `harnesses.*`、`workers.*` 向 `content[].text` 输出面向发起方模型的有界结构化文本（包含 `operation_id`、`worker_id`、`turn_id`、状态、审查正文或分页/轮询指引），确保仅读取文本通道的客户端从首次生成 ID 到断线找回与读正文全链路不断链 |
+
 总体业务架构见[全局设计](../overview/design.md)，公共操作与生命周期见[自动化设计](design.md)，治理要求见[开发治理](../development/requirements.md)。

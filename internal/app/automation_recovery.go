@@ -48,6 +48,18 @@ func (a *App) reconcileAutomationOperation(receipt operations.Receipt) (operatio
 		} else if receipt.Name == "conversations.send" && turn != nil {
 			summary = map[string]any{"conversation_id": turn.Conversation, "turn_operation_id": receipt.NativeID(), "delivery": turn.Delivery, "turn_id": turn.ID}
 		}
+	case "workers.create", "workers.send":
+		if a.Workers == nil {
+			return receipt, nil
+		}
+		s, found, err := a.Workers.OperationLookup(receipt.Name, receipt.ID)
+		if err != nil {
+			return receipt, err
+		}
+		if !found {
+			return receipt, nil
+		}
+		summary = s
 	case "tasks.submit":
 		job, err := a.Store.RequestJob(receipt.Node, receipt.NativeID())
 		if errors.Is(err, store.ErrNotFound) {

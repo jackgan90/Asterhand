@@ -102,3 +102,15 @@
 [受控提权脚本与外部目录执行计划（第二阶段）](../development/features/workspace-script-escalation/plan.md)扩展人工例外边界如下：
 - **只读与状态一致性（UI/CLI/MCP 等价读取）**：`workspaces.get` / `conversations.capabilities` 返回只读 `execution_mode`（`standard` | `turbo`）、`trust_revision`、`trust_rule_count` 及用户可读的 `allowed_items`（`{id, kind, label}`），`turn_activities.list/get`、`workspace_operations.get` 与 `messages.list` 暴露 `awaiting_approval` 状态、`approval` 脱敏元视图与 `approval_mode` 审计结果；
 - **人工例外（不开放模型或普通 CLI/MCP 写入，按 `AUTO-19`/`AUTO-20` 保留）**：原生对话动作 `approve_tool`（在聊天内联卡片批准或拒绝待确认票据）与 `/api/workspace/permission` 的 `execution_mode` / `remove_rule_id` 修改均登记为 `"human"` 人工例外，防止模型或未受人类直接确认的脚本扩大执行边界或自行切入无审批模式。
+
+## 多 Coding Harness 发现、托管接入与协作
+
+对应[多 Coding Harness 中介计划](../development/features/multi-harness-broker/plan.md)与[M1 验证说明](../development/features/multi-harness-broker/validation.md)：Milestone 1 的全部 `workers.*` 公共操作以及 `/api/harnesses*`、`/api/workers*` 人工入口分类已落地并同步登记至 [contracts/automation-coverage.json](../../contracts/automation-coverage.json)；Milestone 2 的 `harnesses.list` / `harnesses.get` 与 Milestone 4 的人工审批入口随对应里程碑交付：
+
+| 人类操作 / 入口 | 公共操作（CLI 与 MCP 等价） | 分类与规则 |
+|---|---|---|
+| 创建、查询、纯写派发、有界等待、分页读正文/日志、精确取消、关闭与人工核对协作 Worker | `workers.create/list/get/send/wait/result/logs/cancel/close/resolve`（Milestone 1 已实现） | 归属 `collab` 工具集；写操作统一使用 `operation_id` 幂等收据、单 Worker 活跃锁与规范化工作树写互斥；`cancel` 必填 `turn_id` |
+| Web 查看活跃/待核对 Worker 轮次、一键停止与人工核对关闭 | `workers.list/get/wait/result/logs/cancel/resolve`（Milestone 1 已实现） | 业务状态、日志分页、取消与核对关闭完全等价；界面滚动/筛选属展示等价 |
+| 修改 Harness 权限开关、执行外部配置接管/重新接入 | 无（Web「设置 → Coding Harness」`/api/harnesses*` 人工专用入口，Milestone 1 已实现） | **人工例外**（`AUTO-19`）：修改本机外部工具全局配置与协作权限边界，禁止开放给模型自动写入；日常任意常规本地项目免逐项目登记直通，敏感系统与凭据目录由服务端内置拦截 |
+| 查看全部已发现的 Coding Harness、版本、三开关、期望/观察 MCP 托管状态与授权工作区 | `harnesses.list`、`harnesses.get`（Milestone 2 待实现） | 公共只读查询，不含凭据或内部 token |
+| 批准或拒绝被控 Harness B 的高危权限请求（Milestone 4 待实现） | 无（Asterhand 原位人工确认卡片/桌面入口） | **人工例外**（`AUTO-20`）：绝不开放给发起方 A 的模型代批 |

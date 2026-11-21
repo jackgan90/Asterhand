@@ -11,5 +11,6 @@
 - [006-unified-command-runs — 统一脚本图命令、多实例及延迟日志清理](006-unified-command-runs.md)
 
 - [007-workspace-resource-scheduling — 按资源声明与公开插件委托实现工作区工具细粒度并发](007-workspace-resource-scheduling.md)
+- [008-multi-harness-broker-and-native-adapters — 多 Coding Harness 本地中介层与官方原生协议适配（proposed）](008-multi-harness-broker-and-native-adapters.md)
 
 新增决策使用 [ADR 模板](../../development/templates/adr.md)。历史决定通过新 ADR 替代，不改写历史理由。

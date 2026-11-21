@@ -28,7 +28,7 @@ type batchState struct {
 
 func (a *App) registerAutomationBatches(r *automation.Registry) {
 	automation.Register(r, automation.Definition{Name: "batches.submit", Description: "Admit up to 32 fixed write items; up to four dispatch concurrently, with per-item receipts and no restart replay", Write: true}, nil, nil, a.automationBatchSubmit)
-	automation.Register(r, automation.Definition{Name: "batches.get", Description: "Read original per-item outcomes; undispatched work is never resumed after a restart", Role: "read", Control: true}, nil, nil, a.automationBatchGet)
+	automation.Register(r, automation.Definition{Name: "batches.get", Description: "Read original per-item outcomes; undispatched work is never resumed after a restart", Role: "read", Toolset: automation.ToolsetCore, Control: true}, nil, nil, a.automationBatchGet)
 	automation.Register(r, automation.Definition{Name: "read.many", Description: "Read up to 100 explicitly identified objects with bounded response pages and per-item errors", Role: "read"}, nil, nil, a.automationMultiRead)
 }
 
@@ -179,11 +179,29 @@ func (a *App) automationBatchGet(ctx context.Context, call automation.Call, v au
 	for _, item := range batch.Items[start:end] {
 		current, e := a.Store.Lookup(call.Principal.ID, r.Node, item.ID)
 		if e == nil {
-			if err = authorizeReceipt(call.Principal, current); err != nil {
+			latest := call.Principal
+			if call.Authorize != nil {
+				if fresh, authErr := call.Authorize(); authErr != nil {
+					return automation.Outcome{}, authErr
+				} else {
+					latest = fresh
+				}
+			}
+			if err = authorizeReceipt(r, latest, current); err != nil {
 				items = append(items, map[string]string{"operation_id": item.ID, "state": "forbidden"})
 				continue
 			}
 			current, e = a.reconcileAutomationOperation(current)
+			if e == nil && call.Authorize != nil {
+				latest, authErr := call.Authorize()
+				if authErr != nil {
+					return automation.Outcome{}, authErr
+				}
+				if err = authorizeReceipt(r, latest, current); err != nil {
+					items = append(items, map[string]string{"operation_id": item.ID, "state": "forbidden"})
+					continue
+				}
+			}
 		}
 		if e == nil {
 			items = append(items, map[string]any{"operation_id": item.ID, "state": current.State, "receipt": current})

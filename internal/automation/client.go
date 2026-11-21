@@ -8,17 +8,20 @@ import (
 	"io"
 	"net"
 	"net/http"
-
+	"os"
 	"path/filepath"
-
+	"strings"
+	"sync"
 	"time"
 )
 
 type Client struct {
-	home    string
-	Profile Profile
-	token   string
-	http    *http.Client
+	home     string
+	callerID string
+	Profile  Profile
+	tokenMu  sync.RWMutex
+	token    string
+	http     *http.Client
 }
 
 func OpenClient(home string) (*Client, error) {
@@ -28,6 +31,16 @@ func OpenClient(home string) (*Client, error) {
 	}
 	return openLocalClient(abs)
 }
+
+func OpenCallerClient(home, callerID string) (*Client, error) {
+	abs, err := filepath.Abs(home)
+	if err != nil {
+		return nil, err
+	}
+	return openCallerClient(abs, callerID)
+}
+
+func (c *Client) CallerID() string { return c.callerID }
 func (c *Client) LocalPrincipal() (Principal, error) { return localPrincipal(), nil }
 
 func newTokenClient(profile Profile, secret string) (*Client, error) {
@@ -56,9 +69,14 @@ func (c *Client) Close() { c.http.CloseIdleConnections() }
 
 func (c *Client) Call(ctx context.Context, operation, id string, arguments json.RawMessage) (Response, error) {
 	if operation == "node.start" {
+		if c.callerID != "" {
+			if err := c.requireCallerToolset(ctx, ToolsetGeneral); err != nil {
+				return Response{Version: APIVersion, Node: c.Profile.Node, ID: id, Error: PublicError(err)}, nil
+			}
+		}
 		return c.startNode(ctx, id, arguments)
 	}
-	if operation == "operations.get" && c.home != "" {
+	if operation == "operations.get" && c.home != "" && c.callerID == "" {
 		if id != "" {
 			return Response{}, Fail("invalid_parameters", "Read operations do not accept an operation identity")
 		}
@@ -69,7 +87,65 @@ func (c *Client) Call(ctx context.Context, operation, id string, arguments json.
 	return c.remoteCall(ctx, operation, id, arguments)
 }
 
+func (c *Client) requireCallerToolset(ctx context.Context, toolset string) error {
+	resp, err := c.remoteCall(ctx, "capabilities", "", json.RawMessage("{}"))
+	if err != nil {
+		return Fail("forbidden", "Managed caller cannot invoke local node.start without verified general toolset permission")
+	}
+	if resp.Error != nil {
+		return resp.Error
+	}
+	b, _ := json.Marshal(resp.Data)
+	var capData struct {
+		Toolsets map[string]bool `json:"toolsets"`
+	}
+	if json.Unmarshal(b, &capData) != nil || !capData.Toolsets[toolset] {
+		return Fail("toolset_disabled", "This toolset is disabled for the current caller")
+	}
+	return nil
+}
+
+func (c *Client) currentToken() string {
+	c.tokenMu.RLock()
+	defer c.tokenMu.RUnlock()
+	return c.token
+}
+
+// ReloadCallerToken refreshes the managed caller bearer token from disk so a
+// long-lived MCP subprocess recovers automatically after switch toggle or token
+// rotation, and fails closed immediately when the token file is removed.
+func (c *Client) ReloadCallerToken() bool {
+	if c.callerID == "" || c.home == "" {
+		return false
+	}
+	path := filepath.Join(c.home, "harness-callers", c.callerID+".token")
+	next := ""
+	if b, err := os.ReadFile(path); err == nil {
+		s := strings.TrimSpace(string(b))
+		if len(s) >= 32 && len(s) <= 256 {
+			next = s
+		}
+	}
+	c.tokenMu.Lock()
+	changed := c.token != next
+	c.token = next
+	c.tokenMu.Unlock()
+	return changed
+}
+
 func (c *Client) remoteCall(ctx context.Context, operation, id string, arguments json.RawMessage) (Response, error) {
+	if c.callerID != "" && c.home != "" {
+		c.ReloadCallerToken()
+	}
+	tok := c.currentToken()
+	if c.callerID != "" && tok == "" {
+		return Response{
+			Version: APIVersion,
+			Node:    c.Profile.Node,
+			ID:      id,
+			Error:   Fail("forbidden", "Managed caller credential is missing or revoked"),
+		}, nil
+	}
 	request := Request{Version: APIVersion, Node: c.Profile.Node, Operation: operation, ID: id, Arguments: arguments}
 	b, err := json.Marshal(request)
 	if err != nil {
@@ -80,7 +156,7 @@ func (c *Client) remoteCall(ctx context.Context, operation, id string, arguments
 		return Response{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", "Bearer "+tok)
 	response, err := c.http.Do(req)
 	if err != nil {
 		code := "node_unavailable"

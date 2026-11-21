@@ -45,7 +45,13 @@ func (a *App) RequestStop(confirmed bool) bool {
 		a.mu.Unlock()
 		return true
 	}
-	if (!confirmed && (a.probeRunning || a.runningBatches > 0)) || !a.Commands.BeginStop(confirmed, func() bool { return a.Chat.BeginStop(confirmed, func() bool { return a.Engine.BeginStop(confirmed) }) }) {
+	workersStop := func() bool {
+		if a.Workers == nil {
+			return a.Engine.BeginStop(confirmed)
+		}
+		return a.Workers.BeginStop(confirmed, func() bool { return a.Engine.BeginStop(confirmed) })
+	}
+	if (!confirmed && (a.probeRunning || a.runningBatches > 0)) || !a.Commands.BeginStop(confirmed, func() bool { return a.Chat.BeginStop(confirmed, workersStop) }) {
 		a.mu.Unlock()
 		return false
 	}

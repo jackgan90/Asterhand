@@ -1,5 +1,7 @@
 # 文档导航
 
+[多 Coding Harness 本地中介与统一接入管理计划](development/features/multi-harness-broker/plan.md)（**Milestone 1 已完成实现、工程验证及本机真实 Antigravity → Codex 端到端用户验收；Milestone 2—4 待后续实施**）：已交付 `Antigravity → Codex (app-server)` 只读垂直闭环（受限调用凭据热重载、动态工具集过滤与受管无点号 MCP 工具名映射、面向模型的纯文本/结构化双通道回传、免登记自动项目隔离与敏感路径拦截、单 Worker 防串轮、纯写 `send` 含 `model`/`reasoning_effort` + 独立 `wait/result/logs`、三类撤权窗口、停机链接入与精简 Web 设置页）；详见[M1 协议预检](development/features/multi-harness-broker/preflight.md)、[M1 验证说明](development/features/multi-harness-broker/validation.md)、[执行器 ADR-008](executors/adr/008-multi-harness-broker-and-native-adapters.md) 与 [自动化 ADR-005](automation/adr/005-harness-mcp-lifecycle-and-dynamic-toolsets.md)。
+
 [本机持续会话工具能力计划](development/features/local-runtime-tools/plan.md)：首批本机文件、搜索、记忆、进度与文件恢复已交付并通过用户验收；采用[正式文件 I/O 桥接](development/features/local-runtime-tools/preflight.md)，未设置过工具权限时默认开启，可在“设置 → 助手”关闭。工程覆盖与专项验证边界见[验证说明](development/features/local-runtime-tools/validation.md)。先逐步完善本机能力，再评估远程聊天。
 
 [受控提权脚本与外部目录执行计划（第二阶段）](development/features/workspace-script-escalation/plan.md)：在第一阶段受限写沙箱之上开放 Windows `OrdinaryToken` + 具名 `JobObject` 受控提权、聊天原位无术语确认卡片与零白名单污染 `turbo` 极速免审模式（Gateway 零重启热更新、五层策略评估、`approval_pending` 写屏障与 `TOCTOU` 防篡改校验）；工程实现、[验证方案](development/features/workspace-script-escalation/validation.md)、独立审计修复复审与本机真实模型用户验收已完成，架构取舍见 [ADR-AST-013](assistant/adr/013-controlled-escalated-script-execution.md)。

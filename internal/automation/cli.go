@@ -22,13 +22,13 @@ func ErrorExit(code string) int {
 	switch code {
 	case "invalid_parameters", "invalid_operation_id", "invalid_cursor", "version_mismatch":
 		return 2
-	case "forbidden", "authorization_required":
+	case "forbidden", "authorization_required", "toolset_disabled":
 		return 3
-	case "conflict", "operation_conflict", "name_conflict", "lease_revoked", "lease_expired":
+	case "conflict", "operation_conflict", "name_conflict", "lease_revoked", "lease_expired", "worker_busy", "workspace_mismatch":
 		return 4
-	case "result_unknown", "submission_pending":
+	case "result_unknown", "submission_pending", "reconciliation_required":
 		return 5
-	case "capacity", "operation_capacity", "busy":
+	case "capacity", "operation_capacity", "busy", "worker_capacity":
 		return 6
 	case "node_unavailable", "instance_changed":
 		return 7

@@ -114,3 +114,20 @@
 | EXEC-SCHED-12 | 用真实 Windows 与锁定原生 Gateway 证明实际重叠、互斥和取消；性能结论附工作量与配置 |
 
 范围、预算、原生可行性门槛和后续 harness 接入见[能力设计](../assistant/runtime-capabilities.md)；轮内资源调度的设计与测试入口见[工作区工具细粒度并发计划](../development/features/workspace-tool-concurrency/plan.md)。
+
+## 多 Coding Harness 本地中介与协作（Milestone 1 已交付并通过本机用户验收，Milestone 2—4 规划中）
+
+以下需求对应[多 Coding Harness 中介计划](../development/features/multi-harness-broker/plan.md)与 [ADR-008](adr/008-multi-harness-broker-and-native-adapters.md)：Milestone 1（`Antigravity → 只读 Codex app-server` 闭环）已完成实现、工程验证及本机用户验收；Milestone 2—4 规划待实施，不改变既有 OpenClaw 任务与持续会话契约。
+
+| ID | 要求 |
+|---|---|
+| EXEC-HARNESS-01 | 多 Coding Harness 协作作为独立于现有文件任务与内置持续聊天的领域服务运行，不占原任务槽或聊天生成槽 |
+| EXEC-HARNESS-02 | 自动发现本机已安装的受支持 Coding Harness（支持人工路径覆盖、`PATH`、合规安装目录/注册表与只读版本检查），绝不读取、复制或代理任何第三方 OAuth/API 凭据文件 |
+| EXEC-HARNESS-03 | 区分发起方（A）与被控方（B）能力边界：Antigravity 静态限定仅支持作为 A，不支持作为受管 Worker B；Codex、Claude Code、DeepSeek Harness 仅调用未修改的官方本体 |
+| EXEC-HARNESS-04 | 被控方适配器直接采用各家官方长期双向协议（Codex `codex app-server`、Claude Code `stream-json` 双向协议、DeepSeek Harness 实测锁定的 `sdk`/`acp`），不做一次性过渡实现，并如实声明能力矩阵 |
+| EXEC-HARNESS-05 | 为被调 Worker 维护绑定规范化授权工作区的三层稳定身份（`(workspace_id, alias)` 唯一 `worker_id`、`session_epoch`/`native_session_id`、映射发前持久 `client_correlation_id` / 原生轮次与幂等 `operation_id` 的 `turn_id`）；单 Worker 同时最多 1 个活跃轮次（并发返回 `worker_busy`），`cancel`/事件/终态均核对三元组，回执丢失仅凭唯一持久关联键匹配（禁止按正文猜测），原生会话不可恢复时明确报错；按 `(threadId, turnId, itemId)` 幂等归集，仅对 `completed` 成功轮次按“优先 `final_answer` → 排除 `commentary`/工具后取最后一条无 `phase` 或 `partial_answer` 助手消息 → 无候选显式标不可用”发布最终正文，中断/失败轮次的 `partial_answer` 仅作部分输出不冒充完成结论 |
+| EXEC-HARNESS-06 | 任意常规本地项目目录免逐项目登记即可协作，由服务端对规范化路径派生稳定 `workspace_id` 并内置拦截盘符根、用户主目录、节点数据目录、系统及常见凭据目录（`artifact_paths` 严格约束在对应项目根内，不宣称 Codex `readOnly` 在 Windows 上构成目录级只读 chroot）；按 `(harness × version × platform × access_mode)` 实测并声明 `os_sandbox_enforced`、`harness_tool_restricted` 或 `unsupported`；`workspace_write` 在 Milestone 2 首次开放并按解析后的工作树根互斥，附带诚实标注外部并发可能性的工作树/Git 快照（涵盖 staged/unstaged/untracked 及非 Git 目录）；关闭全部发起方开关或吊销凭据使旧连接全失效、仅关闭 `collab_caller_enabled` 保留剩余有效工具集并过滤旧协作收据；关闭被控方 B 的 `collab_worker_enabled` 覆盖发前、`turn/start` 待回执（迟到回执不逆转已撤权状态）与运行中三窗口并受控停止 |
+| EXEC-HARNESS-07 | `workers.send` 为纯写接纳立即返回 `turn_id`（接入领域收据恢复，不混合等待参数），等待统一走 `workers.wait`（上限 `30s`）；强制节点级活跃轮次上限（默认 4）、单轮墙钟时限（默认 15 分钟）与无事件超时（默认 5 分钟），超时先原生中断再回收 `JobObject`，确认停止后释放锁；接入 `App.RequestStop` 原子停机判断并在关库前完成收尾（空闲常驻进程不阻普通退出）；长审查正文与运行日志独立于 8 KiB 收据有界落盘并同步提供分页 `workers.result` 与 `workers.logs`；所有受管子进程以非提权 `OrdinaryToken` + 具名 kill-on-close `JobObject` 运行，支持空闲进程回收与重启对账 |
+| EXEC-HARNESS-08 | 受管启动的 Worker B 优先通过原生参数禁用其加载 `asterhand` MCP，并辅以服务端 `max_delegation_depth = 1` 与屏蔽 `general` 工具集兜底 |
+| EXEC-HARNESS-09 | 高危权限审批（Milestone 4）必须由 Asterhand 直接呈交人类本人确认，严禁暴露给发起方 A 的模型自动批准；审批桥上线前收到原生审批或业务提问时立即有界拒绝、释放轮次与写锁并返回明确状态码 |
+| EXEC-HARNESS-10 | 明确同 Windows 用户账户下的诚实信任边界，区分面向合作型 Harness 的托管策略与 OS 账户级隔离 |

@@ -78,6 +78,7 @@
           <button type="button" class="settings-tab" data-tab-target="model" data-i18n="web.settings.tab.model">助手</button>
           <button type="button" class="settings-tab" data-tab-target="hotkey" data-i18n="web.settings.tab.hotkey">快捷输入</button>
           <button type="button" class="settings-tab" data-tab-target="network" data-i18n="web.settings.tab.network">设备协作</button>
+          <button type="button" class="settings-tab" data-tab-target="harnesses" data-i18n="web.settings.tab.harnesses">Coding Harness</button>
           <button type="button" class="settings-tab" data-tab-target="about" data-i18n="web.settings.tab.about">关于</button>
         </nav>
         <div class="settings-panes">
@@ -118,6 +119,28 @@
                 </div>
               </fieldset>
             </form>
+          </section>
+
+          <section id="harnesses-settings" class="harnesses-settings" aria-labelledby="harnesses-title">
+            <div class="pane-head">
+              <div class="harness-head-row">
+                <h3 id="harnesses-title" data-i18n="web.settings.tab.harnesses">Coding Harness</h3>
+                <button type="button" id="harnesses-refresh" class="secondary harness-refresh-btn" aria-busy="false">
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M20 12a8 8 0 1 0-2.3 5.7" /></svg>
+                  <span data-i18n="web.harnesses.refresh">刷新</span>
+                </button>
+              </div>
+              <p data-i18n="web.harnesses.lead">控制各 Harness 的协作权限，并管理活跃委派轮次。任意本地项目目录可直接协作，系统与凭据目录自动受保护。</p>
+            </div>
+            <div id="harnesses-status" class="status-line" role="status"></div>
+            <div class="harness-section">
+              <h4 data-i18n="web.harnesses.list_title">Coding Harness 协作权限</h4>
+              <div id="harnesses-list" class="harness-cards"></div>
+            </div>
+            <div id="harnesses-turns-section" class="harness-section" hidden>
+              <h4 data-i18n="web.harnesses.turns_title">正在进行的协作任务</h4>
+              <ul id="harnesses-turns-list" class="harness-list"></ul>
+            </div>
           </section>
 
           <form id="settings-form">

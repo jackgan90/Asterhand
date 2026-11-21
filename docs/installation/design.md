@@ -172,3 +172,7 @@ packaging/dependencies.json 是 Node、OpenClaw、模型插件、Go 构建器、
 LocalTools 缺失或没有策略修订时按默认开启处理，并补齐稳定修订；已有非空修订的明确开启或关闭保持，人工切换生成新修订。沿用 conversations/runtime-<binding>/workspace，原生 state 与 file-versions 独立保存；普通升级不改变 binding。文件插件嵌入程序，启动时写到受管 runtime 目录，仅从固定包复制缺失原生模板。未修改 Node/OpenClaw 清单版本、安装流程或旧任务项目目录。
 
 安装验证应覆盖旧配置缺字段或无修订的默认值迁移、明确关闭保持、开关保存、同工作区历史/记忆/版本保留及 unknown 不重放；安装/repair 不覆盖用户明确选择。具体测试和未验证项见[本机工具验证](../development/features/local-runtime-tools/validation.md)。
+
+## 稳定 MCP 转发入口（Milestone 2 规划待实施）
+
+对应 [INST-33](requirements.md) 与 [自动化 ADR-005](../automation/adr/005-harness-mcp-lifecycle-and-dynamic-toolsets.md)，Milestone 2 将新增纯控制台轻量二进制 `cmd/asterhand-mcp`（产出 `asterhand-mcp.exe`，与 `AsterhandLauncher.exe` 同位于安装根目录）：启动时不弹出窗口、不写额外 stdout 日志，复用 `internal/launch.ReadInstallation` 校验同目录 `installation.json` 的 `Executable` 与 `Data`，在未显式传入 `--home` 时自动补齐 `--home <Installation.Data>` 并原样继承 stdin/stdout/stderr 执行 `asterhand.exe mcp`。快速安装与完整安装均将其纳入应用构建与激活清单，升级验收同时覆盖新连接、已打开旧连接重连及在途/终态轮次补读。

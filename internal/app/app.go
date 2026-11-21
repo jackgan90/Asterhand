@@ -19,6 +19,7 @@ import (
 
 	"github.com/jackgan90/Asterhand/internal/editors"
 	"github.com/jackgan90/Asterhand/internal/executor"
+	"github.com/jackgan90/Asterhand/internal/harnesses"
 	"github.com/jackgan90/Asterhand/internal/i18n"
 	"github.com/jackgan90/Asterhand/internal/launch"
 	"github.com/jackgan90/Asterhand/internal/localcommands"
@@ -28,6 +29,7 @@ import (
 	"github.com/jackgan90/Asterhand/internal/quickinput"
 	"github.com/jackgan90/Asterhand/internal/store"
 	"github.com/jackgan90/Asterhand/internal/tasks"
+	"github.com/jackgan90/Asterhand/internal/workers"
 )
 
 type session struct {
@@ -48,6 +50,8 @@ type App struct {
 	Commands        *localcommands.Registry
 	CommandLogs     quickinput.LogWindowHost
 	Notifications   *notifications.Service
+	Harnesses       *harnesses.Service
+	Workers         *workers.Service
 	pickScript      func(context.Context) (string, error)
 	commandPicking  bool
 	desktopRequests chan struct{}
@@ -127,6 +131,19 @@ func New(c *config.Manager, x executor.Executor) (*App, error) {
 	a.Input.SetConversationClient(conversation.Client{Target: a.Chat.Target(), Transport: a.Chat})
 	a.Chat.SetCompletionHandler(a.Input.ReplyCompleted)
 	a.Chat.SetApprovalHandler(a.Input.ReplyCompleted)
+	exePath, _ := os.Executable()
+	if hs, err := harnesses.Open(c.Home, exePath); err != nil {
+		s.Close()
+		return nil, err
+	} else {
+		a.Harnesses = hs
+	}
+	if ws, err := workers.NewService(c.Home, a.Harnesses, workers.NewCodexAdapter()); err != nil {
+		s.Close()
+		return nil, err
+	} else {
+		a.Workers = ws
+	}
 	a.desktopRequests = make(chan struct{}, 8)
 	if err = a.prepareAutomation(); err != nil {
 		a.Close()
@@ -169,6 +186,9 @@ func (a *App) Start(ctx context.Context) (string, error) {
 		web.Close()
 		remote.Close()
 		return "", err
+	}
+	if a.Harnesses != nil {
+		a.Harnesses.ReconcileManagedOnStartup()
 	}
 	localServer := &http.Server{Handler: a.requests.wrap(a.local), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 * 1024}
 	peerServer := &http.Server{Handler: a.requests.wrap(a.remote), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 * 1024}
@@ -219,7 +239,13 @@ func (a *App) Close() error {
 		if a.Input != nil {
 			a.Input.Close()
 		}
-		a.closeErr = errors.Join(chatErr, commandErr, logErr, a.Store.Close())
+		var workerErr error
+		if a.Workers != nil {
+			workerCtx, workerCancel := context.WithTimeout(context.Background(), 15*time.Second)
+			workerErr = a.Workers.Close(workerCtx)
+			workerCancel()
+		}
+		a.closeErr = errors.Join(chatErr, commandErr, workerErr, logErr, a.Store.Close())
 	})
 	return a.closeErr
 }

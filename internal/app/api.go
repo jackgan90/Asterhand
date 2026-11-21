@@ -87,6 +87,10 @@ func (a *App) api(w http.ResponseWriter, r *http.Request) {
 		a.desktopAPI(w, r)
 		return
 	}
+	if strings.HasPrefix(r.URL.Path, "/api/harnesses/") {
+		a.harnessesAPI(w, r)
+		return
+	}
 	reqLocale := a.requestLocale(r)
 	switch r.URL.Path {
 	case "/api/info":

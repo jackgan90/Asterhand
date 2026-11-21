@@ -287,3 +287,10 @@ Windows 面板由独立非提权 UI 进程中的 STA 承载 WebView2，资源为
 常用界面以普通用户完成任务为目标，不为展示能力完整而加入低频调试或维护控件。移除独立文件对话框及目录、搜索、活动详情、产物、文件版本和恢复表单；公共 CLI/MCP 的文件读取、版本恢复、活动查询与未知操作核对继续使用同一共享服务。权限管理仍为人工操作，不因界面精简交给模型。
 
 [chat-activities.mjs](../../internal/quickinput/assets/chat-activities.mjs)、[chat-approval.mjs](../../internal/quickinput/assets/chat-approval.mjs) 与 [chat-renderer.mjs](../../internal/quickinput/assets/chat-renderer.mjs) 在桌面聊天按稳定 call ID 原位合并活动并复用节点实例，最多展示 30 条，滚动区高度有界；模型 progress 与实际工具状态分开。当活动处于 `awaiting_approval` 且票据仍为 `pending` 时于工具行内展开无术语确认卡片（`本对话允许` / `仅本次` / 条件`始终允许` / `不允许`），通过按决策键复用的稳定 `<button>` 节点、胶囊变化对比及 `tool.id` 活动缓存使按钮在 500ms 轮询、`relocalize()` 及瞬态气泡转落盘消息期间保持同一 DOM 引用，避免按压中途重建导致首次点击被吞；用户处置或结束后立即收起，`.chat-session-bar` 在 `turbo` 模式下显示轻量 `#chat-turbo-badge` 提示徽标。关闭界面停止刷新，轮次仍由节点继续。详细活动和 unknown 核对通过公共接口提供，核对记录依据且不重放/撤销文件。模块与样式进入嵌入资源白名单，文案从统一词表生成，语言切换保留当前权限状态、卡片按钮交互态与在途操作。
+
+## Coding Harness 设置与 Worker 观测（Milestone 1 已实现最小设置入口，完整观测页规划至 Milestone 2）
+
+对应[多 Coding Harness 中介计划](../development/features/multi-harness-broker/plan.md)与 `WEB-HARNESS-01`—`04`，前端按原生 ES module 拆分独立模块（已实现 [harnesses-settings.mjs](../../web/harnesses-settings.mjs)，完整多项目实时日志观测页 `workers-panel.mjs` 归属 Milestone 2）并纳入 `web/embed.go` 嵌入清单：
+- 「设置 → Coding Harness」经同源认证人工接口管理当前版本实际支持的 Harness 权限开关（「允许使用 Asterhand 通用能力」「允许调用其他 Harness」「允许被其他 Harness 调用」）与活跃/待核对轮次停止与核对关闭，不要求用户在 Web 中逐个项目手工登记委派目录（任意常规本地项目直通协作，底层自动按规范化路径隔离并拦截系统/凭据敏感目录）；
+- 页面保持极简无内部实现噪音并采用原位局部 DOM 复用：卡片仅展示安装状态、可执行文件路径与生效开关，不常驻展示底层 MCP 或令牌实现状态、不出现内部代称或冗余吊销按钮（关闭全部发起方开关即自动吊销凭据并清理外部接入）；切换单个开关仅更新该控件本身而不引起无关卡片/文本闪烁；仅在外部配置冲突或同步失败/偏离时按需显示异常提示与「接管配置 / 重新接入」修复入口，绝不静默覆写或备份第三方凭据；刷新采用带图标按钮原位旋转指示，避免加载文本造成页面高度跳动；
+- 规划至 Milestone 2 的「Coding Workers」观测视图仅展示只读状态、日志流与显式强杀操作，不替代原生主控端对话交互。

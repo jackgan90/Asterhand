@@ -6,5 +6,6 @@
 - [原显式交接设计（已替代）](002-draft-handoff.md)
 - [原交接提交决策（已替代）](003-handoff-includes-submission.md)
 - [外部客户端直接操作，保持原有用户体验](004-external-clients-without-ui-workflow.md)
+- [Coding Harness 统一 MCP 托管与三开关动态工具集（proposed）](005-harness-mcp-lifecycle-and-dynamic-toolsets.md)
 
 新增记录使用 [ADR 模板](../../development/templates/adr.md)。

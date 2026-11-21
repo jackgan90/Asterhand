@@ -57,7 +57,7 @@ func describeAutomationResults(r *automation.Registry) {
 	set("operations.new_id", resultObject("operation_id", "", "", nil))
 	set("node.version", resultObject("version api_version platform source_digest", "", "", nil))
 	set("node.status node.start node.stop", resultObject("node_id instance_id version", "running stopping", "", nil))
-	set("capabilities", resultObject("api_version node_id instance_id", "", "server_time_ms", map[string]any{"operations": arrayOf(resultObject("name role", "write batch", "", nil)), "limits": object}))
+	set("capabilities", resultObject("api_version node_id instance_id caller_id policy_revision", "", "server_time_ms", map[string]any{"roles": arrayOf(text), "toolsets": object, "operations": arrayOf(resultObject("name role toolset", "write batch", "", nil)), "limits": object}))
 	set("nodes.get nodes.capabilities", resultObject("node_id name version checked_at automation_api", "cached", "age_seconds", map[string]any{"online": map[string]any{"type": []string{"boolean", "string"}}, "capabilities": object, "projects": arrayOf(object), "task_projects": arrayOf(text)}))
 	set("nodes.list", resultObject("next", "", "", map[string]any{"items": arrayOf(object)}))
 	chat := resultObject("connection active_conversation_id next", "can_send busy", "", map[string]any{
@@ -86,4 +86,5 @@ func describeAutomationResults(r *automation.Registry) {
 	set("tasks.list", resultObject("next", "", "", map[string]any{"items": arrayOf(task)}))
 	set("tasks.get", map[string]any{"anyOf": []any{task, resultObject("text offset next", "complete", "", map[string]any{"items": arrayOf(object)})}})
 	set("tasks.events", resultObject("next watermark", "end", "", map[string]any{"event": object, "event_fragment": resultObject("sequence format text offset", "complete", "", nil)}))
+	describeWorkerAutomationResults(r)
 }

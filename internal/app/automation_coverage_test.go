@@ -61,6 +61,23 @@ func TestAutomationCoverage(t *testing.T) {
 	for name := range names {
 		t.Errorf("coverage advertises missing operation %s", name)
 	}
+	// Verify "." -> "_" MCP tool-name projection for managed harnesses matches
+	// ^[a-zA-Z0-9_-]+$ (no dots or illegal chars) and has zero collisions.
+	seenMCP := map[string]string{}
+	for _, d := range AutomationDefinitions() {
+		mapped := strings.ReplaceAll(d.Name, ".", "_")
+		for i := 0; i < len(mapped); i++ {
+			c := mapped[i]
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+				t.Errorf("MCP tool name %q (from %s) contains invalid character %q; only [a-zA-Z0-9_-] is allowed", mapped, d.Name, c)
+				break
+			}
+		}
+		if prev, dup := seenMCP[mapped]; dup {
+			t.Errorf("MCP underscore tool name collision: %s and %s both map to %s", prev, d.Name, mapped)
+		}
+		seenMCP[mapped] = d.Name
+	}
 }
 
 func TestCommandAndGraphSchemasAreSelfDescribing(t *testing.T) {

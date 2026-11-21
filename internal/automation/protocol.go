@@ -17,6 +17,12 @@ const MaxRequest = 1 << 20
 const MaxResponse = 64 << 10
 const MaxWait = 30 * time.Second
 
+const (
+	ToolsetCore    = "core"
+	ToolsetGeneral = "general"
+	ToolsetCollab  = "collab"
+)
+
 type Request struct {
 	Version   string          `json:"api_version"`
 	Node      string          `json:"node_id"`
@@ -71,12 +77,30 @@ func PublicError(err error) *Error {
 }
 
 type Principal struct {
-	ID    string   `json:"id"`
-	Name  string   `json:"name"`
-	Roles []string `json:"roles"`
+	ID             string              `json:"id"`
+	Name           string              `json:"name"`
+	CallerID       string              `json:"caller_id,omitempty"`
+	PolicyRevision string              `json:"policy_revision,omitempty"`
+	Roles          []string            `json:"roles"`
 	// Missing scopes mean no access; ["*"] explicitly grants all objects of a
 	// family, including creation. IDs do not grant access to another family.
 	Scopes map[string][]string `json:"scopes"`
+	// Nil Toolsets preserves legacy unrestricted local/human access. A non-nil
+	// map explicitly constrains allowed toolsets (core, general, collab).
+	Toolsets map[string]bool `json:"toolsets,omitempty"`
+}
+
+func (p Principal) AllowsToolset(toolset string) bool {
+	if p.Toolsets == nil {
+		return true
+	}
+	if toolset == "" {
+		toolset = ToolsetGeneral
+	}
+	if toolset == ToolsetCore {
+		return p.Toolsets[ToolsetCore] || p.Toolsets[ToolsetGeneral] || p.Toolsets[ToolsetCollab]
+	}
+	return p.Toolsets[toolset]
 }
 
 func (p Principal) Role(role string) bool {
@@ -110,6 +134,9 @@ func (p Principal) Require(family, id string) error {
 type Call struct {
 	Principal Principal
 	Identity  operations.Identity
+	// Authorize fetches the latest Principal from the server for mid-flight or
+	// pre-return re-checks (such as receipt filtering when a toolset is revoked).
+	Authorize func() (Principal, error)
 	// Check must also be used immediately before an irreversible acceptance
 	// point and before returning data from a long observation.
 	Check func() error
@@ -130,6 +157,7 @@ type Definition struct {
 	Name         string         `json:"name"`
 	Description  string         `json:"description"`
 	Role         string         `json:"role"`
+	Toolset      string         `json:"toolset,omitempty"`
 	Write        bool           `json:"write"`
 	Batch        bool           `json:"batch"`
 	Control      bool           `json:"control,omitempty"`
@@ -141,4 +169,11 @@ type Definition struct {
 	target       func(any) string
 	access       func(Principal, any) error
 	invoke       func(context.Context, Call, any) (Outcome, error)
+}
+
+func (d Definition) EffectiveToolset() string {
+	if d.Toolset == "" {
+		return ToolsetGeneral
+	}
+	return d.Toolset
 }

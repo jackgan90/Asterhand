@@ -2,6 +2,8 @@
 
 ## 本机助手工具能力优先
 
+[多 Coding Harness 本地中介与统一接入管理计划](features/multi-harness-broker/plan.md)（**Milestone 1 已完成实现、工程验证与本机真实 Antigravity → Codex 端到端用户验收；Milestone 2—4 规划待实施**）：新增职责解耦的 `internal/harnesses` 与 `internal/workers` 领域，支持免逐项目登记的自动项目隔离与敏感路径拦截、单 Worker 防串轮、面向模型的双通道 MCP 结果回传、纯写 `send`（含 `model` / `reasoning_effort`）+ 独立 `wait`/`result`/`logs`、三开关动态工具集过滤与受管无点号 MCP 工具名映射、调用凭据热重载、节点启动自对账及只读 `CodexAdapter`；后续里程碑继续补齐四家发现、透传 `--home <Data>` 的稳定 `asterhand-mcp.exe`、Codex `workspace_write`、Claude Code / DeepSeek Harness 适配器与人工审批/Worktree 隔离；详见[M1 预检](features/multi-harness-broker/preflight.md)、[M1 验证说明](features/multi-harness-broker/validation.md)、[执行器 ADR-008](../executors/adr/008-multi-harness-broker-and-native-adapters.md) 与 [自动化 ADR-005](../automation/adr/005-harness-mcp-lifecycle-and-dynamic-toolsets.md)。
+
 [受控提权脚本与外部目录执行（第二阶段 / Tier 2 + 极速免审）](features/workspace-script-escalation/plan.md)已完成实现、工程验证、独立审计修复复审与本机真实模型用户验收：在保留第一阶段零审批工作区沙箱之上，面向非技术用户提供快捷输入原位交互确认卡片（零术语、用完即收起）与“按需询问 / 自动允许（极速）”双选（含零污染单次自动授权与空态隐藏的一键移除信任清单）；Go 服务端通过 `OrdinaryToken()` + 具名 `JobObject`、五层优先级评估、分片 `exec/approval_wait`、`approval_pending` 写屏障及启动前 `TOCTOU` 防篡改校验保障零 UAC 管理员提权与核心凭据隔离，并经独立 `TrustRevision` 实现 Gateway 零重启热切换；验证入口见[验证方案](features/workspace-script-escalation/validation.md)。
 
 [工作区脚本与命令执行（第一阶段）](features/workspace-script-execution/plan.md)已完成实现、工程验证、独立审计修复复审与本机真实模型用户验收：在保持零频繁审批、出站网络可用及完整主流脚本工具链能力的前提下，通过 Go 服务经纪的 Windows `WRITE_RESTRICTED` 内核写沙箱、工作区控制桥令牌零落盘与敏感凭据保护、Turn 级进程树租约、`reconcileAfterExec` 配额与版本协调、四级统一聊天“停止”中断及跨平台 `SandboxBackend` 边界接入 `exec_command` 与 `process_control`；验证入口与双机/跨平台专项边界见[验证方案](features/workspace-script-execution/validation.md)。

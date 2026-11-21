@@ -115,9 +115,9 @@
 
 范围、预算、原生可行性门槛和后续 harness 接入见[能力设计](../assistant/runtime-capabilities.md)；轮内资源调度的设计与测试入口见[工作区工具细粒度并发计划](../development/features/workspace-tool-concurrency/plan.md)。
 
-## 多 Coding Harness 本地中介与协作（Milestone 1 已交付并通过本机用户验收，Milestone 2—4 规划中）
+## 多 Coding Harness 本地中介与协作（Milestone 1—2 已交付并通过本机用户验收，Milestone 3—4 规划中）
 
-以下需求对应[多 Coding Harness 中介计划](../development/features/multi-harness-broker/plan.md)与 [ADR-008](adr/008-multi-harness-broker-and-native-adapters.md)：Milestone 1（`Antigravity → 只读 Codex app-server` 闭环）已完成实现、工程验证及本机用户验收；Milestone 2—4 规划待实施，不改变既有 OpenClaw 任务与持续会话契约。
+以下需求对应[多 Coding Harness 中介计划](../development/features/multi-harness-broker/plan.md)与 [ADR-008](adr/008-multi-harness-broker-and-native-adapters.md)：Milestone 1—2（四家自动发现、Antigravity/Codex/Claude 托管接入、`Codex app-server` 只读与受控 `workspace_write`、工作树写互斥与快照）已完成实现、工程验证及本机用户验收；Milestone 3—4 规划待实施，不改变既有 OpenClaw 任务与持续会话契约。
 
 | ID | 要求 |
 |---|---|

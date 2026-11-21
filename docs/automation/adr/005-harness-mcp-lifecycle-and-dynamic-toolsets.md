@@ -1,6 +1,6 @@
 # ADR-005：Coding Harness 统一 MCP 托管与三开关动态工具集
 
-- 状态：accepted（Milestone 1 核心机制已实现并完成本机真机用户验收；Milestone 2 稳定转发入口待实施）
+- 状态：accepted（Milestone 1—2 均已实现并完成本机用户验收）
 - 日期：2026-11-21
 - 所属领域与需求：自动化、CLI 与 MCP（[自动化需求](../requirements.md) `AUTO-HARNESS-01`—`05`、[安装需求](../../installation/requirements.md) `INST-33`）
 - 替代 / 被替代记录：扩展 [自动化 ADR-001](001-shared-operations.md) 与 [自动化 ADR-004](004-external-clients-without-ui-workflow.md)，不改变既有 Named Pipe + TLS 1.3 传输与公共业务 API 版本 1
@@ -28,10 +28,10 @@
    - 分别记录 `desired_state` 与 `observed_state`，关闭权限先在服务端闸门生效并发送 `notifications/tools/list_changed`，外部写入失败可重试对账；
    - Codex/Claude 优先使用官方 `mcp add/remove` CLI，Antigravity/DeepSeek 仅原子操作自身单键；**严禁整文件备份外部配置**，仅记录受管条目的恢复元数据，发现非托管同名条目时标为 `conflict` 拒绝静默覆盖；
    - 外部配置改写、三开关、冲突接管与授权工作区配置按 `AUTO-19` 保留为人类专用入口。
-5. **受管 MCP 工具名仅使用 `[a-zA-Z0-9_-]`（禁止 `.`）**：
-   - 经本机 Antigravity 实测确认，工具名包含 `.` 会导致客户端懒加载 Schema 生成 `"parameters": null`，且 OpenAI / Anthropic 工具名同样限定 `[a-zA-Z0-9_-]`。受管 Harness 调用方（`--caller` 非空）在 MCP 边界统一将内部操作名中的 `.` 映射为 `_`（并自动反解 `operation` 参数），由单元测试守卫零冲突与合法字符集；内部、CLI、HTTP 及无 `--caller` 的旧直连 MCP 保留原点号规范名。
-6. **稳定无版本号转发入口透传 `--home <Data>`**：
-   - 安装根目录 `asterhand-mcp.exe`（Milestone 2）复用 `launch.ReadInstallation` 校验并自动向活动版本 `asterhand.exe mcp` 透传 `--home <Installation.Data>`，保证自定义数据目录与覆盖升级均连接正确实例；Milestone 1 先通过节点启动自对账刷新已托管条目路径。
+5. **全仓公共操作名统一仅使用 `[a-zA-Z0-9_-]`（禁止 `.`）**：
+   - 经本机 Antigravity 实测确认，工具名包含 `.` 会导致客户端懒加载 Schema 生成 `"parameters": null`，且 OpenAI / Anthropic 工具名同样限定 `[a-zA-Z0-9_-]`。CLI、HTTP、直连 MCP 与受管 Harness MCP 统一采用下划线规范名（如 `workers_create`、`harnesses_list`、`operations_new_id`），彻底消除点号↔下划线双轨转换与描述混用，由 `TestAutomationCoverage` 守卫合法字符集；`batches_get` 与 `batches_submit` 成对归属 `general` 工具集。
+6. **稳定无版本号转发入口透传 `--home <Data>` 与零断连热同步**：
+   - 安装根目录 `asterhand-mcp.exe`（Milestone 2）复用 `launch.ReadInstallation` 校验并自动向活动版本 `asterhand.exe mcp` 透传 `--home <Installation.Data>`，保证自定义数据目录与覆盖升级均连接正确实例；同时守护进程经 `GET /v1/definitions` 提供当前定义，长驻 `MCPHost` 检测到 `instance_id` 变更时自动拉取最新工具与 Schema 并发送 `notifications/tools/list_changed`，升级期间无需重启已打开的外部客户端。
 
 ## 备选与后果
 

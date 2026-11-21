@@ -45,9 +45,9 @@ AUTO-NTF-01：`commands.create/get/list/validate/patch/clone` 与命令草稿支
 | AUTO-24 | 新增/变更功能同时维护覆盖清单、公共操作、两种 agent 入口及等价行为测试；全部本期清单完成前不得声称日常能力已全覆盖 |
 | AUTO-25 | 外部 agent 可直接读、改并提交打开窗口内未保存的普通草稿；按目标和修订定位，在途状态和敏感字段不被误提交。 |
 
-## 多 Coding Harness 托管与动态工具集（Milestone 1 已交付并通过本机用户验收，Milestone 2—4 规划中）
+## 多 Coding Harness 托管与动态工具集（Milestone 1—2 已交付并通过本机用户验收，Milestone 3—4 规划中）
 
-以下需求对应[多 Coding Harness 中介计划](../development/features/multi-harness-broker/plan.md)与 [ADR-005](adr/005-harness-mcp-lifecycle-and-dynamic-toolsets.md)：Milestone 1 的工具集裁剪、受管无点号 MCP 工具名映射、双通道响应与 Antigravity 托管对账已实现并通过本机用户验收；`harnesses.list/get` 与其余三家托管归属 Milestone 2：
+以下需求对应[多 Coding Harness 中介计划](../development/features/multi-harness-broker/plan.md)与 [ADR-005](adr/005-harness-mcp-lifecycle-and-dynamic-toolsets.md)：Milestone 1—2 的工具集裁剪、全仓下划线规范名、`harnesses_list/get`、稳定 `asterhand-mcp.exe`、守护进程升级零断连热同步及 Antigravity/Codex/Claude 托管对账均已实现并通过本机用户验收：
 
 | ID | 要求 |
 |---|---|

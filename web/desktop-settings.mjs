@@ -68,8 +68,8 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
     read:()=>({enabled:fields.enabled.checked,binding:binding(),theme_id:fields.theme.value,locale:current.desired.locale}),
     apply:v=>{
       // Language and theme have their own immediate-save controls. They are
-      // available through settings.patch; the hotkey editor stages its own fields.
-      if(v.locale!==current.desired.locale||v.theme_id!==fields.theme.value)throw Object.assign(new Error('Use settings.patch'),{code:'invalid_parameters'});
+      // available through settings_patch; the hotkey editor stages its own fields.
+      if(v.locale!==current.desired.locale||v.theme_id!==fields.theme.value)throw Object.assign(new Error('Use settings_patch'),{code:'invalid_parameters'});
       fields.enabled.checked=v.enabled;setBinding(v.binding);paintSaveButton();
     },
     commit:async id=>{
@@ -304,7 +304,7 @@ export function desktopSettings(api, post, {listen = (target, event, callback) =
     pending ||= {operation_id:editorID || crypto.randomUUID(), expected_revision:expectedRevision, enabled:fields.enabled.checked, binding:binding(), theme_id:fields.theme.value, reset};
     try {
       const {operation_id, ...fields} = pending;
-      const result = editorID ? await editorOperation(post,'settings.patch',editorID,{settings:'desktop',...fields}) :
+      const result = editorID ? await editorOperation(post,'settings_patch',editorID,{settings:'desktop',...fields}) :
         await post("/api/desktop/settings", pending);
       if (!isCurrent(generation, scope)) return;
       pending = null; commitWriteSnapshot(result, true); paintSaveButton();

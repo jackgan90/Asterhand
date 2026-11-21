@@ -60,10 +60,10 @@ func RunCLI(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 	}
 	if name == "new-id" {
 		operation := ""
-		if len(args) == 2 && args[1] == "node.start" {
+		if len(args) == 2 && args[1] == "node_start" {
 			operation = args[1]
 		} else if len(args) != 1 {
-			return cliError(stdout, Fail("invalid_parameters", "Use new-id, or new-id node.start for the offline launcher"))
+			return cliError(stdout, Fail("invalid_parameters", "Use new-id, or new-id node_start for the offline launcher"))
 		}
 		return json.NewEncoder(stdout).Encode(map[string]string{"operation_id": operations.NewIDFor(operation, time.Now())})
 	}

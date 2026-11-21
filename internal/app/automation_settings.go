@@ -50,7 +50,7 @@ func desktopError(err error) error {
 
 func (a *App) registerAutomationSettings(r *automation.Registry) {
 	nodeAccess := func(p automation.Principal, v automation.Empty) error { return p.Require("node", r.Node) }
-	automation.Register(r, automation.Definition{Name: "settings.get", Description: "Read ordinary node, desktop input, and desktop icon settings; no credentials or trust settings", Role: "read"}, nil, nodeAccess,
+	automation.Register(r, automation.Definition{Name: "settings_get", Description: "Read ordinary node, desktop input, and desktop icon settings; no credentials or trust settings", Role: "read"}, nil, nodeAccess,
 		func(ctx context.Context, call automation.Call, v automation.Empty) (automation.Outcome, error) {
 			return automation.Outcome{Data: map[string]any{
 				"node":             nodeSettingsView(a.Config.Get()),
@@ -59,17 +59,17 @@ func (a *App) registerAutomationSettings(r *automation.Registry) {
 				"notifications":    a.notificationStatus(),
 			}}, nil
 		})
-	automation.Register(r, automation.Definition{Name: "settings.patch", Description: "Atomically update one ordinary settings object against its expected revision", Role: "edit", Write: true, Batch: true}, func(v automation.SettingsPatch) string { return r.Node }, func(p automation.Principal, v automation.SettingsPatch) error { return p.Require("node", r.Node) }, a.automationSettingsPatch)
-	automation.Register(r, automation.Definition{Name: "settings.desktop_shortcut", Description: "Create or remove this installed node's desktop shortcut icon on the current user's desktop", Role: "edit", Write: true, Batch: true}, func(v automation.DesktopShortcut) string { return r.Node }, func(p automation.Principal, v automation.DesktopShortcut) error { return p.Require("node", r.Node) },
+	automation.Register(r, automation.Definition{Name: "settings_patch", Description: "Atomically update one ordinary settings object against its expected revision", Role: "edit", Write: true, Batch: true}, func(v automation.SettingsPatch) string { return r.Node }, func(p automation.Principal, v automation.SettingsPatch) error { return p.Require("node", r.Node) }, a.automationSettingsPatch)
+	automation.Register(r, automation.Definition{Name: "settings_desktop_shortcut", Description: "Create or remove this installed node's desktop shortcut icon on the current user's desktop", Role: "edit", Write: true, Batch: true}, func(v automation.DesktopShortcut) string { return r.Node }, func(p automation.Principal, v automation.DesktopShortcut) error { return p.Require("node", r.Node) },
 		func(ctx context.Context, call automation.Call, v automation.DesktopShortcut) (automation.Outcome, error) {
 			return a.automationDesktopShortcut(ctx, r, call, v)
 		})
-	automation.Register(r, automation.Definition{Name: "settings.check_hotkey", Description: "Check a normalized hotkey using the existing registration controller", Role: "edit", Write: true}, func(v automation.HotkeyCheck) string { return r.Node }, func(p automation.Principal, v automation.HotkeyCheck) error { return p.Require("node", r.Node) },
+	automation.Register(r, automation.Definition{Name: "settings_check_hotkey", Description: "Check a normalized hotkey using the existing registration controller", Role: "edit", Write: true}, func(v automation.HotkeyCheck) string { return r.Node }, func(p automation.Principal, v automation.HotkeyCheck) error { return p.Require("node", r.Node) },
 		func(ctx context.Context, call automation.Call, v automation.HotkeyCheck) (automation.Outcome, error) {
 			err := a.Input.Check(v.Binding)
 			return automation.Outcome{Data: desktopView(a.Input.Status()), Summary: map[string]bool{"available": err == nil}, Accepted: err == nil}, desktopError(err)
 		})
-	automation.Register(r, automation.Definition{Name: "desktop.retry", Description: "Explicitly retry the existing host and hotkey recovery, preserving saved settings and disabled state", Role: "edit", Write: true, Control: true}, func(v automation.Empty) string { return r.Node }, nodeAccess,
+	automation.Register(r, automation.Definition{Name: "desktop_retry", Description: "Explicitly retry the existing host and hotkey recovery, preserving saved settings and disabled state", Role: "edit", Write: true, Control: true}, func(v automation.Empty) string { return r.Node }, nodeAccess,
 		func(ctx context.Context, call automation.Call, v automation.Empty) (automation.Outcome, error) {
 			if err := call.Check(); err != nil {
 				return automation.Outcome{}, err
@@ -77,7 +77,7 @@ func (a *App) registerAutomationSettings(r *automation.Registry) {
 			st, err := a.Input.Retry()
 			return automation.Outcome{Data: desktopView(st), Summary: map[string]string{"registration": st.Registration, "surface": st.Surface}, Accepted: err == nil}, desktopError(err)
 		})
-	automation.Register(r, automation.Definition{Name: "models.list", Description: "List models supported by the current provider and indicate whether its existing credential is configured", Role: "read"}, nil, nodeAccess,
+	automation.Register(r, automation.Definition{Name: "models_list", Description: "List models supported by the current provider and indicate whether its existing credential is configured", Role: "read"}, nil, nodeAccess,
 		func(ctx context.Context, call automation.Call, v automation.Empty) (automation.Outcome, error) {
 			c := a.Config.Get()
 			provider, err := llm.Resolve(c.LLM.Provider)
@@ -87,7 +87,7 @@ func (a *App) registerAutomationSettings(r *automation.Registry) {
 			_, credentialErr := a.Config.Key()
 			return automation.Outcome{Data: map[string]any{"provider": provider.Describe(), "configured": credentialErr == nil, "selected": c.LLM.Model, "revision": nodeSettingsRevision(c)}}, nil
 		})
-	automation.Register(r, automation.Definition{Name: "models.select", Description: "Select a supported model using the already configured provider credential", Role: "edit", Write: true, Batch: true}, func(v automation.ModelSelect) string { return r.Node }, func(p automation.Principal, v automation.ModelSelect) error { return p.Require("node", r.Node) },
+	automation.Register(r, automation.Definition{Name: "models_select", Description: "Select a supported model using the already configured provider credential", Role: "edit", Write: true, Batch: true}, func(v automation.ModelSelect) string { return r.Node }, func(p automation.Principal, v automation.ModelSelect) error { return p.Require("node", r.Node) },
 		func(ctx context.Context, call automation.Call, v automation.ModelSelect) (automation.Outcome, error) {
 			return a.automationSettingsPatch(ctx, call, automation.SettingsPatch{Settings: "node", Revision: v.Revision, Model: &v.Model})
 		})

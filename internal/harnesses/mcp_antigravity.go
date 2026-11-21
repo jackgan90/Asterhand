@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/jackgan90/Asterhand/internal/config"
 )
@@ -17,6 +18,57 @@ const (
 	MCPObservedConflict      = "conflict"
 	MCPObservedError         = "error"
 )
+
+// MCPEntrySpec describes the expected Asterhand-managed MCP registration for a caller.
+type MCPEntrySpec struct {
+	CallerID      string
+	NodeHome      string
+	Command       string
+	Args          []string
+	StableCommand string // optional <InstallRoot>\asterhand-mcp.exe
+}
+
+// IsManagedMCPEntry reports whether a stdio MCP server entry belongs to this
+// Asterhand node and caller (either the versionless asterhand-mcp.exe entry or
+// the legacy/dev "asterhand.exe mcp --home <home> --caller <id>" entry).
+func IsManagedMCPEntry(cmd string, args []string, spec MCPEntrySpec) bool {
+	if cmd == "" || len(args) == 0 {
+		return false
+	}
+	hasCaller := false
+	hasHome := false
+	homeArg := ""
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--caller" && i+1 < len(args) && args[i+1] == spec.CallerID {
+			hasCaller = true
+		} else if a == "--caller="+spec.CallerID {
+			hasCaller = true
+		}
+		if (a == "--home" || a == "-home") && i+1 < len(args) {
+			hasHome = true
+			homeArg = args[i+1]
+		} else if strings.HasPrefix(a, "--home=") {
+			hasHome = true
+			homeArg = strings.TrimPrefix(a, "--home=")
+		} else if strings.HasPrefix(a, "-home=") {
+			hasHome = true
+			homeArg = strings.TrimPrefix(a, "-home=")
+		}
+	}
+	if !hasCaller {
+		return false
+	}
+	// Stable versionless asterhand-mcp.exe entry.
+	if strings.EqualFold(filepath.Base(cmd), "asterhand-mcp.exe") || strings.EqualFold(filepath.Base(cmd), "asterhand-mcp") {
+		if hasHome {
+			return SamePath(homeArg, spec.NodeHome)
+		}
+		return spec.StableCommand != "" && SamePath(cmd, spec.StableCommand)
+	}
+	// Direct / legacy asterhand.exe mcp entry.
+	return slices.Contains(args, "mcp") && hasHome && SamePath(homeArg, spec.NodeHome)
+}
 
 // DefaultAntigravityMCPConfigPath returns the global Antigravity MCP config path.
 func DefaultAntigravityMCPConfigPath() (string, error) {
@@ -29,29 +81,14 @@ func DefaultAntigravityMCPConfigPath() (string, error) {
 
 // ObserveAntigravityMCP inspects only the "asterhand" entry in Antigravity's
 // mcp_config.json without copying or exposing any other MCP server credentials.
-func ObserveAntigravityMCP(configPath, expectedHome string) (status string, err error) {
-	root, exists, err := readJSONObject(configPath)
-	if err != nil {
-		return MCPObservedError, err
-	}
-	if !exists {
-		return MCPObservedNotConfigured, nil
-	}
-	servers, _ := root["mcpServers"].(map[string]any)
-	entry, ok := servers["asterhand"]
-	if !ok {
-		return MCPObservedNotConfigured, nil
-	}
-	if isManagedAntigravityEntry(entry, expectedHome) {
-		return MCPObservedRegistered, nil
-	}
-	return MCPObservedConflict, nil
+func ObserveAntigravityMCP(configPath string, spec MCPEntrySpec) (status string, err error) {
+	return observeJSONMCPEntry(configPath, spec)
 }
 
 // ReconcileAntigravityMCP performs an atomic single-key insert/update/remove on
 // mcpServers.asterhand. It never backs up the full external config file so
 // third-party MCP credentials in other entries are never duplicated.
-func ReconcileAntigravityMCP(configPath, executable, nodeHome string, desired, takeOver bool) (string, *ManagedMCPRecord, error) {
+func ReconcileAntigravityMCP(configPath string, spec MCPEntrySpec, desired, takeOver bool) (string, *ManagedMCPRecord, error) {
 	root, exists, err := readJSONObject(configPath)
 	if err != nil {
 		return MCPObservedError, nil, err
@@ -74,7 +111,7 @@ func ReconcileAntigravityMCP(configPath, executable, nodeHome string, desired, t
 	}
 
 	existing, hasExisting := servers["asterhand"]
-	if hasExisting && !isManagedAntigravityEntry(existing, nodeHome) && !takeOver {
+	if hasExisting && !isManagedJSONEntry(existing, spec) && !takeOver {
 		return MCPObservedConflict, nil, errors.New("unmanaged asterhand MCP entry already exists")
 	}
 
@@ -90,9 +127,9 @@ func ReconcileAntigravityMCP(configPath, executable, nodeHome string, desired, t
 		return MCPObservedNotConfigured, nil, nil
 	}
 
-	args := []string{"mcp", "--home", nodeHome, "--caller", HarnessAntigravity}
+	args := append([]string(nil), spec.Args...)
 	servers["asterhand"] = map[string]any{
-		"command": executable,
+		"command": spec.Command,
 		"args":    args,
 	}
 	root["mcpServers"] = servers
@@ -101,16 +138,36 @@ func ReconcileAntigravityMCP(configPath, executable, nodeHome string, desired, t
 	}
 	return MCPObservedRegistered, &ManagedMCPRecord{
 		ConfigPath: configPath,
-		Command:    executable,
+		Command:    spec.Command,
 		Args:       args,
 	}, nil
 }
 
-func isManagedAntigravityEntry(entry any, expectedHome string) bool {
+func observeJSONMCPEntry(configPath string, spec MCPEntrySpec) (string, error) {
+	root, exists, err := readJSONObject(configPath)
+	if err != nil {
+		return MCPObservedError, err
+	}
+	if !exists {
+		return MCPObservedNotConfigured, nil
+	}
+	servers, _ := root["mcpServers"].(map[string]any)
+	entry, ok := servers["asterhand"]
+	if !ok {
+		return MCPObservedNotConfigured, nil
+	}
+	if isManagedJSONEntry(entry, spec) {
+		return MCPObservedRegistered, nil
+	}
+	return MCPObservedConflict, nil
+}
+
+func isManagedJSONEntry(entry any, spec MCPEntrySpec) bool {
 	m, ok := entry.(map[string]any)
 	if !ok {
 		return false
 	}
+	cmd, _ := m["command"].(string)
 	rawArgs, ok := m["args"].([]any)
 	if !ok {
 		return false
@@ -123,17 +180,7 @@ func isManagedAntigravityEntry(entry any, expectedHome string) bool {
 		}
 		args = append(args, s)
 	}
-	hasCaller := false
-	hasHome := false
-	for i := 0; i < len(args)-1; i++ {
-		if args[i] == "--caller" && args[i+1] == HarnessAntigravity {
-			hasCaller = true
-		}
-		if args[i] == "--home" && SamePath(args[i+1], expectedHome) {
-			hasHome = true
-		}
-	}
-	return slices.Contains(args, "mcp") && hasCaller && hasHome
+	return IsManagedMCPEntry(cmd, args, spec)
 }
 
 func readJSONObject(path string) (map[string]any, bool, error) {

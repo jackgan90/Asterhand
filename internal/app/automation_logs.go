@@ -39,10 +39,10 @@ type publicLogPage struct {
 }
 
 func (a *App) registerAutomationLogs(r *automation.Registry) {
-	automation.Register(r, automation.Definition{Name: "runs.list", Description: "Page retained run summaries, including expired logs and deleted commands", Role: "read"}, func(v automation.RunList) string { return v.CommandID }, func(p automation.Principal, v automation.RunList) error { return p.Require("commands", v.CommandID) }, a.automationRunList)
-	for _, name := range []string{"logs.read", "logs.tail", "logs.wait"} {
+	automation.Register(r, automation.Definition{Name: "runs_list", Description: "Page retained run summaries, including expired logs and deleted commands", Role: "read"}, func(v automation.RunList) string { return v.CommandID }, func(p automation.Principal, v automation.RunList) error { return p.Require("commands", v.CommandID) }, a.automationRunList)
+	for _, name := range []string{"logs_read", "logs_tail", "logs_wait"} {
 		op := name
-		automation.Register(r, automation.Definition{Name: name, Description: "Read bounded raw or decoded graph logs with independent cursors; waits never stop execution", Role: "read", Wait: name == "logs.wait"}, func(v automation.LogRead) string { return v.CommandID }, func(p automation.Principal, v automation.LogRead) error { return p.Require("commands", v.CommandID) }, func(ctx context.Context, call automation.Call, v automation.LogRead) (automation.Outcome, error) {
+		automation.Register(r, automation.Definition{Name: name, Description: "Read bounded raw or decoded graph logs with independent cursors; waits never stop execution", Role: "read", Wait: name == "logs_wait"}, func(v automation.LogRead) string { return v.CommandID }, func(p automation.Principal, v automation.LogRead) error { return p.Require("commands", v.CommandID) }, func(ctx context.Context, call automation.Call, v automation.LogRead) (automation.Outcome, error) {
 			return a.automationLogs(ctx, call, v, op)
 		})
 	}
@@ -78,7 +78,7 @@ func (a *App) automationLogs(ctx context.Context, call automation.Call, v automa
 	if v.Format != "raw" && v.Format != "text" || v.Stream != "" && v.Stream != "stdout" && v.Stream != "stderr" {
 		return automation.Outcome{}, automation.Fail("invalid_parameters", "Unknown log format or stream")
 	}
-	if op == "logs.tail" && v.Cursor != "" {
+	if op == "logs_tail" && v.Cursor != "" {
 		return automation.Outcome{}, automation.Fail("invalid_parameters", "Tail starts from the latest retained page")
 	}
 	binding := []any{"logs", call.Principal.ID, call.Principal.Scopes["commands"], v.CommandID, v.RunID, v.StepID, v.Stream, v.Format, encoding}
@@ -92,7 +92,7 @@ func (a *App) automationLogs(ctx context.Context, call automation.Call, v automa
 			return automation.Outcome{}, automation.Fail("invalid_cursor", "Malformed log position")
 		}
 	}
-	if op == "logs.tail" {
+	if op == "logs_tail" {
 		p.Offset = "-1"
 	}
 	if p.Pending == nil {
@@ -120,7 +120,7 @@ func (a *App) automationLogs(ctx context.Context, call automation.Call, v automa
 		if err != nil {
 			return automation.Outcome{}, commandError(err)
 		}
-		if op != "logs.wait" || len(page.Chunks) > 0 || page.Finished || time.Now().After(deadline) {
+		if op != "logs_wait" || len(page.Chunks) > 0 || page.Finished || time.Now().After(deadline) {
 			return automation.Outcome{Data: page}, nil
 		}
 		// Sparse empty pages still advance, but return immediately for the caller

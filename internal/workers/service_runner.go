@@ -73,18 +73,23 @@ func (s *Service) awaitTurnStart(rt *runningTurn, w *Worker, t *Turn, adapter Ad
 		s.mu.Lock()
 		rt.lastEventAt = now
 		s.mu.Unlock()
-		_, _ = s.store.AppendLog(t.ID, LogEntry{
-			Timestamp: now,
-			Kind:      ev.Kind,
-			ItemID:    ev.ItemID,
-			Phase:     ev.Phase,
-			Summary:   ev.Summary,
-		})
-		if ev.Kind == "commentary" || ev.Kind == "tool" || ev.Kind == "system" {
-			t.Progress = ev.Summary
-			t.UpdatedAt = now
-			_ = s.store.SaveTurn(*t)
-			s.notifyWaiters(t.ID)
+		if ev.Kind != "delta" && ev.Kind != "progress" {
+			_, _ = s.store.AppendLog(t.ID, LogEntry{
+				Timestamp: now,
+				Kind:      ev.Kind,
+				ItemID:    ev.ItemID,
+				Phase:     ev.Phase,
+				Summary:   ev.Summary,
+			})
+		}
+		switch ev.Kind {
+		case "progress", "commentary", "command", "edit", "mcp", "search", "plan", "tool", "system":
+			if ev.Summary != "" {
+				t.Progress = ev.Summary
+				t.UpdatedAt = now
+				_ = s.store.SaveTurn(*t)
+				s.notifyWaiters(t.ID)
+			}
 		}
 	}
 

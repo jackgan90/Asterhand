@@ -32,7 +32,7 @@ export function nodeSettings({api, post, session, desktop, shortcut, tools, harn
       if(content.name!==data.config.name)args.name=content.name;
       if(content.model!==data.config.llm.model)args.model=content.model;
       if(args.model===undefined && args.name===undefined)return 'saved';
-      ordinarySave=editorOperation(post,'settings.patch',id,args).then(result=>{
+      ordinarySave=editorOperation(post,'settings_patch',id,args).then(result=>{
         if(loadedData===data){data.revision=result.revision;if(args.name!==undefined){data.config.name=args.name;data.config.name_default=false;}
           data.config.llm.model=content.model;const current=ordinary();markDirty(otherDirty||current.name!==content.name||current.model!==content.model);}
         return 'saved';

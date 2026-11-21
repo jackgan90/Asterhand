@@ -23,18 +23,18 @@ func (a *App) prepareEditorCommit(identity operations.Identity, s liveSnapshot) 
 	domain := ""
 	switch s.Kind {
 	case "settings":
-		domain = "settings.patch"
+		domain = "settings_patch"
 	case "command":
-		domain = "commands.create"
+		domain = "commands_create"
 		if s.Target.Command != "" {
-			domain = "commands.patch"
+			domain = "commands_patch"
 		}
 	case "chat":
-		domain = "conversations.send"
+		domain = "conversations_send"
 	case "task_answer":
-		domain = "tasks.answer"
+		domain = "tasks_answer"
 	case "task_goal":
-		domain = "tasks.submit"
+		domain = "tasks_submit"
 	}
 	stamp, _, _ := strings.Cut(identity.ID, "_")
 	ref := editorCommitRef{Draft: s.ID, Revision: s.Revision, Domain: domain, ID: stamp + "_" + identity.NativeID()}
@@ -53,7 +53,7 @@ func (a *App) reconcileEditorCommit(receipt operations.Receipt) (operations.Rece
 	}
 	state := "saved"
 	switch ref.Domain {
-	case "tasks.submit":
+	case "tasks_submit":
 		job, err := a.Store.RequestJob(receipt.Node, ref.ID)
 		if errors.Is(err, store.ErrNotFound) {
 			return receipt, nil
@@ -65,7 +65,7 @@ func (a *App) reconcileEditorCommit(receipt operations.Receipt) (operations.Rece
 			return receipt, nil
 		}
 		state = "accepted"
-	case "conversations.send":
+	case "conversations_send":
 		_, turn, err := a.Chat.OperationStatus(ref.ID)
 		if errors.Is(err, store.ErrNotFound) {
 			return receipt, nil
@@ -87,7 +87,7 @@ func (a *App) reconcileEditorCommit(receipt operations.Receipt) (operations.Rece
 		default:
 			return receipt, nil
 		}
-	case "settings.patch", "commands.create", "commands.patch", "tasks.answer":
+	case "settings_patch", "commands_create", "commands_patch", "tasks_answer":
 		inner, err := a.Store.Lookup("human:web", receipt.Node, ref.ID)
 		if errors.Is(err, operations.ErrMissing) {
 			return receipt, nil
@@ -102,7 +102,7 @@ func (a *App) reconcileEditorCommit(receipt operations.Receipt) (operations.Rece
 			receipt.State, receipt.Code, receipt.Accepted = "rejected", inner.Code, false
 			return a.finishEditorReceipt(receipt)
 		}
-		if ref.Domain == "tasks.answer" {
+		if ref.Domain == "tasks_answer" {
 			state = "accepted"
 		}
 	default:

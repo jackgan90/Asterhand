@@ -12,6 +12,7 @@ export function harnessesSettings({api, post, listen, session, notice}) {
   let refreshing = false;
   const pendingSwitches = new Map();
   const pendingIssues = new Set();
+  const pendingPaths = new Set();
   const pendingTurns = new Set();
   const cardNodes = new Map();
   let lastTurnsSig = null;
@@ -35,8 +36,9 @@ export function harnessesSettings({api, post, listen, session, notice}) {
     refreshBtn.title = t(refreshing ? "web.harnesses.loading" : "web.harnesses.refresh");
   }
 
-  function createSwitchEntry(harnessID, field, labelKey, reconcileMCP) {
-    const row = node("label", null, "harness-switch-row");
+  function createSwitchEntry(harnessID, field, labelKey, reconcileMCP, extraClass = "") {
+    const cls = extraClass ? `harness-switch-row ${extraClass}` : "harness-switch-row";
+    const row = node("label", null, cls);
     const span = node("span", t(labelKey));
     const input = document.createElement("input");
     input.type = "checkbox";
@@ -48,17 +50,44 @@ export function harnessesSettings({api, post, listen, session, notice}) {
     return {row, span, input, labelKey};
   }
 
+  function noteKeyForHarness(h) {
+    if (!h.capabilities?.supports_worker) return "web.harnesses.antigravity_caller_only";
+    if (!h.capabilities?.caller_managed && !h.capabilities?.worker_managed) return "web.harnesses.deepseek_discovery_only";
+    if (h.capabilities?.caller_managed && !h.capabilities?.worker_managed) return "web.harnesses.worker_coming_soon";
+    return "";
+  }
+
   function createHarnessCard(h) {
     const card = node("div", null, "harness-card");
     const head = node("div", null, "harness-card-head");
+    const titleWrap = node("div", null, "harness-title-wrap");
     const titleEl = node("strong", h.id);
+    const verEl = node("span", "", "harness-version");
+    verEl.hidden = true;
+    titleWrap.append(titleEl, verEl);
+    const headRight = node("div", null, "harness-head-right");
     const badgeEl = node("span", "", "badge");
-    head.append(titleEl, badgeEl);
+    const pathToggleBtn = node("button", t("web.harnesses.edit_path"), "quiet harness-path-btn");
+    pathToggleBtn.type = "button";
+    headRight.append(badgeEl, pathToggleBtn);
+    head.append(titleWrap, headRight);
     card.append(head);
 
     const pathEl = node("small", "", "harness-path");
     pathEl.hidden = true;
     card.append(pathEl);
+
+    const pathEditor = node("div", null, "harness-path-editor");
+    pathEditor.hidden = true;
+    const pathInput = document.createElement("input");
+    pathInput.type = "text";
+    pathInput.placeholder = t("web.harnesses.path_placeholder");
+    const pathSaveBtn = node("button", t("web.harnesses.path_save"), "secondary");
+    pathSaveBtn.type = "button";
+    const pathClearBtn = node("button", t("web.harnesses.path_clear"), "quiet");
+    pathClearBtn.type = "button";
+    pathEditor.append(pathInput, pathSaveBtn, pathClearBtn);
+    card.append(pathEditor);
 
     const switchesEl = node("div", null, "harness-switches");
     const switches = new Map();
@@ -68,13 +97,15 @@ export function harnessesSettings({api, post, listen, session, notice}) {
     }
     if (h.capabilities?.worker_managed) {
       switches.set("collab_worker_enabled", createSwitchEntry(h.id, "collab_worker_enabled", "web.harnesses.switch_worker", false));
+      switches.set("allow_workspace_write", createSwitchEntry(h.id, "allow_workspace_write", "web.harnesses.switch_workspace_write", false, "harness-sub-switch"));
     }
     for (const sw of switches.values()) switchesEl.append(sw.row);
     if (switches.size > 0) card.append(switchesEl);
 
+    const noteKey = noteKeyForHarness(h);
     let noteEl = null;
-    if (!h.capabilities?.supports_worker) {
-      noteEl = node("small", t("web.harnesses.antigravity_caller_only"), "harness-note");
+    if (noteKey) {
+      noteEl = node("small", t(noteKey), "harness-note");
       card.append(noteEl);
     }
 
@@ -88,15 +119,38 @@ export function harnessesSettings({api, post, listen, session, notice}) {
 
     const entry = {
       card,
+      verEl,
       badgeEl,
+      pathToggleBtn,
       pathEl,
+      pathEditor,
+      pathInput,
+      pathSaveBtn,
+      pathClearBtn,
       switches,
       noteEl,
+      noteKey,
       issueEl,
       issueText,
       issueBtn,
       issueConflict: false,
+      editingPath: false,
     };
+
+    pathToggleBtn.addEventListener("click", () => {
+      entry.editingPath = !entry.editingPath;
+      pathEditor.hidden = !entry.editingPath;
+      if (entry.editingPath) {
+        const cur = state?.harnesses?.find(x => x.id === h.id);
+        pathInput.value = cur?.manual_path || "";
+        pathInput.focus();
+      }
+    });
+    pathSaveBtn.addEventListener("click", () => void saveManualPath(h.id, pathInput.value, entry));
+    pathClearBtn.addEventListener("click", () => {
+      pathInput.value = "";
+      void saveManualPath(h.id, "", entry);
+    });
     issueBtn.addEventListener("click", () => void reconcileHarnessIssue(h.id, entry.issueConflict));
     return entry;
   }
@@ -106,7 +160,19 @@ export function harnessesSettings({api, post, listen, session, notice}) {
     if (h.detected) entry.badgeEl.dataset.tone = "ok";
     else delete entry.badgeEl.dataset.tone;
 
-    const path = h.executable_path || "";
+    const ver = h.version || "";
+    setTextIfChanged(entry.verEl, ver);
+    entry.verEl.hidden = !ver;
+
+    setTextIfChanged(entry.pathToggleBtn, t("web.harnesses.edit_path"));
+    entry.pathInput.placeholder = t("web.harnesses.path_placeholder");
+    setTextIfChanged(entry.pathSaveBtn, t("web.harnesses.path_save"));
+    setTextIfChanged(entry.pathClearBtn, t("web.harnesses.path_clear"));
+    const pathBusy = pendingPaths.has(h.id);
+    entry.pathSaveBtn.disabled = pathBusy;
+    entry.pathClearBtn.disabled = pathBusy;
+
+    const path = h.executable_path || h.manual_path || "";
     setTextIfChanged(entry.pathEl, path);
     entry.pathEl.hidden = !path;
 
@@ -117,10 +183,15 @@ export function harnessesSettings({api, post, listen, session, notice}) {
         const nextChecked = Boolean(h[field]);
         if (sw.input.checked !== nextChecked) sw.input.checked = nextChecked;
       }
+      if (field === "allow_workspace_write") {
+        const workerSw = entry.switches.get("collab_worker_enabled");
+        const workerOn = workerSw ? workerSw.input.checked : Boolean(h.collab_worker_enabled);
+        sw.row.hidden = !workerOn;
+      }
     }
 
-    if (entry.noteEl) {
-      setTextIfChanged(entry.noteEl, t("web.harnesses.antigravity_caller_only"));
+    if (entry.noteEl && entry.noteKey) {
+      setTextIfChanged(entry.noteEl, t(entry.noteKey));
     }
 
     const showIssue = Boolean(h.capabilities?.caller_managed);
@@ -147,8 +218,7 @@ export function harnessesSettings({api, post, listen, session, notice}) {
 
   function renderHarnesses() {
     if (!listEl) return;
-    const all = Array.isArray(state?.harnesses) ? state.harnesses : [];
-    const items = all.filter(h => h.capabilities?.caller_managed || h.capabilities?.worker_managed);
+    const items = Array.isArray(state?.harnesses) ? state.harnesses : [];
     const activeIDs = new Set(items.map(h => h.id));
 
     for (const [id, entry] of cardNodes.entries()) {
@@ -250,6 +320,11 @@ export function harnessesSettings({api, post, listen, session, notice}) {
     const scope = session();
     const key = `${harnessID}:${field}`;
     pendingSwitches.set(key, (pendingSwitches.get(key) || 0) + 1);
+    const entryImmediate = cardNodes.get(harnessID);
+    if (entryImmediate && field === "collab_worker_enabled") {
+      const writeSw = entryImmediate.switches.get("allow_workspace_write");
+      if (writeSw) writeSw.row.hidden = !value;
+    }
     return enqueueMutation(async () => {
       try {
         const payload = {harness_id: harnessID, [field]: value};
@@ -273,6 +348,34 @@ export function harnessesSettings({api, post, listen, session, notice}) {
           const updated = state?.harnesses?.find(h => h.id === harnessID);
           const entry = cardNodes.get(harnessID);
           if (updated && entry) updateHarnessCard(entry, updated);
+        }
+      }
+    });
+  }
+
+  function saveManualPath(harnessID, manualPath, entry) {
+    const scope = session();
+    pendingPaths.add(harnessID);
+    entry.pathSaveBtn.disabled = true;
+    entry.pathClearBtn.disabled = true;
+    return enqueueMutation(async () => {
+      try {
+        const latest = await post("/api/harnesses/policy", {
+          harness_id: harnessID,
+          manual_path: manualPath.trim(),
+        });
+        if (!scope?.active) return;
+        state = latest;
+        entry.editingPath = false;
+        entry.pathEditor.hidden = true;
+      } catch (err) {
+        if (!scope?.active) return;
+        notice?.(localizeError(err));
+      } finally {
+        pendingPaths.delete(harnessID);
+        if (scope?.active) {
+          const updated = state?.harnesses?.find(h => h.id === harnessID);
+          if (updated) updateHarnessCard(entry, updated);
         }
       }
     });

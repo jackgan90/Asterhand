@@ -19,7 +19,7 @@ func TestAutomationStartReconcilesWithoutAnotherLaunch(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeJSON(t, filepath.Join(installation.Data, "config.json"), map[string]string{"node_id": "test-node"})
-	id := operations.Identity{Actor: "agent", Node: "test-node", ID: operations.NewIDFor("node.start", time.Now()), Name: "node.start", Digest: operations.Hash(struct{}{}), Target: "test-node"}
+	id := operations.Identity{Actor: "agent", Node: "test-node", ID: operations.NewIDFor("node_start", time.Now()), Name: "node_start", Digest: operations.Hash(struct{}{}), Target: "test-node"}
 	prepared := operations.Receipt{Identity: id, State: "prepared", Created: time.Now().UnixMilli(), Updated: time.Now().UnixMilli()}
 	if err := saveStartReceipts(installation.Data, startReceipts{Version: 1, Items: []operations.Receipt{prepared}}); err != nil {
 		t.Fatal(err)
@@ -56,12 +56,12 @@ func TestAutomationStartRejectsWrongIdentityAndRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeJSON(t, filepath.Join(installation.Data, "config.json"), map[string]string{"node_id": "node"})
-	id := operations.Identity{Actor: "agent", Node: "node", ID: operations.NewID(time.Now()), Name: "node.start"}
+	id := operations.Identity{Actor: "agent", Node: "node", ID: operations.NewID(time.Now()), Name: "node_start"}
 	check := func() error { return nil }
 	if _, err := StartOperation(context.Background(), path, installation.Data, id, check); !errors.Is(err, operations.ErrInvalid) {
 		t.Fatal(err)
 	}
-	id.ID = operations.NewIDFor("node.start", time.Now())
+	id.ID = operations.NewIDFor("node_start", time.Now())
 	denied := errors.New("revoked")
 	if _, err := StartOperation(context.Background(), path, installation.Data, id, func() error { return denied }); !errors.Is(err, denied) {
 		t.Fatal(err)

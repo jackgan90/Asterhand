@@ -38,7 +38,7 @@ func TestCLIAndRealMCPStdioSharePipeBusinessOperation(t *testing.T) {
 	args := automation.CommandInput{Name: "from_cli", Graph: apiTestGraph(filepath.Join(t.TempDir(), "missing.ps1"))}
 	id := operations.NewID(time.Now())
 	var out, diagnostics bytes.Buffer
-	cli := []string{"commands.create", "--home", a.Config.Home, "--input", "-", "--operation-id", id}
+	cli := []string{"commands_create", "--home", a.Config.Home, "--input", "-", "--operation-id", id}
 	if binary := os.Getenv("ASTERHAND_AUTOMATION_BINARY"); binary != "" {
 		cmd := exec.Command(binary, append([]string{"automation"}, cli...)...)
 		cmd.Stdin = bytes.NewReader(compactResult(args))
@@ -86,7 +86,7 @@ func TestCLIAndRealMCPStdioSharePipeBusinessOperation(t *testing.T) {
 	}
 	foundRun := false
 	for _, tool := range listed.Tools {
-		if tool.Name == "commands.run" {
+		if tool.Name == "commands_run" {
 			foundRun = true
 		}
 		if tool.Name == "automation.grant" {
@@ -96,7 +96,7 @@ func TestCLIAndRealMCPStdioSharePipeBusinessOperation(t *testing.T) {
 	if !foundRun {
 		t.Fatal("local MCP did not expose the ordinary command runner")
 	}
-	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "commands.get", Arguments: map[string]string{"command_id": ref.ID}})
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "commands_get", Arguments: map[string]string{"command_id": ref.ID}})
 	if err != nil || result.IsError {
 		t.Fatal(result, err)
 	}
@@ -112,7 +112,7 @@ func TestCLIAndRealMCPStdioSharePipeBusinessOperation(t *testing.T) {
 	var input map[string]any
 	_ = json.Unmarshal(compactResult(args), &input)
 	input["operation_id"] = id
-	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "commands.create", Arguments: input})
+	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "commands_create", Arguments: input})
 	if err != nil || result.IsError {
 		t.Fatal(result, err)
 	}

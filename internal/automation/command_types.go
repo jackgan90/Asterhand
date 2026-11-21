@@ -17,7 +17,7 @@ type CommandGet struct {
 }
 type CommandVersion struct {
 	ID       string `json:"command_id" description:"Command ID matching ^[a-zA-Z0-9_-]{16,64}$"`
-	Revision string `json:"expected_revision" description:"Latest command revision (^[a-zA-Z0-9_-]{16,64}$) from commands.get or commands.list; stale revision fails with conflict"`
+	Revision string `json:"expected_revision" description:"Latest command revision (^[a-zA-Z0-9_-]{16,64}$) from commands_get or commands_list; stale revision fails with conflict"`
 }
 type CommandList struct {
 	Query  string `json:"query,omitempty" description:"Optional name/alias search query (leading '/' is stripped)"`
@@ -53,7 +53,7 @@ type CommandClone struct {
 type CommandPatch struct {
 	NotifyOnCompletion localcommands.NotificationSetting `json:"notify_on_completion,omitempty" description:"Replace completion notification setting; omit to keep the current value; null is invalid"`
 	ID                 string                            `json:"command_id" description:"Target command ID matching ^[a-zA-Z0-9_-]{16,64}$"`
-	Revision           string                            `json:"expected_revision" description:"Latest command revision (^[a-zA-Z0-9_-]{16,64}$) from commands.get or commands.list; edits are rejected while any run of this command is active"`
+	Revision           string                            `json:"expected_revision" description:"Latest command revision (^[a-zA-Z0-9_-]{16,64}$) from commands_get or commands_list; edits are rejected while any run of this command is active"`
 	Name               *string                           `json:"name,omitempty" description:"Replacement primary ASCII name (^[A-Za-z][A-Za-z0-9_-]{0,63}$), or omit to keep"`
 	Aliases            *[]string                         `json:"aliases,omitempty" description:"Replacement alias list (0..16 items, <=128 UTF-8 bytes each, no leading '/'), or omit to keep"`
 	Description        *string                           `json:"description,omitempty" description:"Replacement description (<=512 UTF-8 bytes, no control chars), or omit to keep"`

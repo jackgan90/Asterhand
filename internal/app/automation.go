@@ -16,6 +16,7 @@ import (
 	"github.com/jackgan90/Asterhand/internal/launch"
 	"github.com/jackgan90/Asterhand/internal/model"
 	"github.com/jackgan90/Asterhand/internal/operations"
+	"github.com/jackgan90/Asterhand/internal/workers"
 )
 
 func (a *App) prepareAutomation() error {
@@ -73,6 +74,7 @@ func (a *App) registerAutomation(r *automation.Registry) {
 	a.registerAutomationDiagnostics(r)
 	a.registerAutomationBatches(r)
 	a.registerAutomationWorkers(r)
+	a.registerAutomationHarnesses(r)
 	describeAutomationResults(r)
 }
 
@@ -85,9 +87,9 @@ func AutomationDefinitions() []automation.Definition {
 }
 
 func (a *App) registerAutomationCore(r *automation.Registry) {
-	automation.Register(r, automation.Definition{Name: "operations.new_id", Description: "Create an immutable write identity using the node clock before submitting a side effect", Role: "read", Toolset: automation.ToolsetCore}, nil, nil,
+	automation.Register(r, automation.Definition{Name: "operations_new_id", Description: "Create an immutable write identity using the node clock before submitting a side effect", Role: "read", Toolset: automation.ToolsetCore}, nil, nil,
 		func(ctx context.Context, call automation.Call, v struct {
-			Operation string `json:"operation,omitempty" description:"Optional target write operation name (e.g. \"workers.create\" or \"workers.send\")"`
+			Operation string `json:"operation,omitempty" description:"Optional target write operation name (e.g. \"workers_create\" or \"workers_send\")"`
 		}) (automation.Outcome, error) {
 			if v.Operation != "" {
 				found := false
@@ -113,12 +115,30 @@ func (a *App) registerAutomationCore(r *automation.Registry) {
 			if toolsets == nil {
 				toolsets = map[string]bool{automation.ToolsetCore: true, automation.ToolsetGeneral: true, automation.ToolsetCollab: true}
 			}
-			return automation.Outcome{Data: map[string]any{"api_version": automation.APIVersion, "node_id": r.Node, "instance_id": r.Instance, "caller_id": call.Principal.CallerID, "policy_revision": call.Principal.PolicyRevision, "roles": call.Principal.Roles, "toolsets": toolsets, "server_time_ms": r.Now().UnixMilli(), "operations": names, "limits": map[string]any{"request_bytes": automation.MaxRequest, "response_bytes": automation.MaxResponse, "page": 200, "batch": 32, "wait_seconds": 30, "waits_per_actor": 4, "waits_per_node": 16, "writes_per_actor": 4, "writes_per_node": 16}}}, nil
+			wb := workers.DefaultBudgets()
+			if a.Workers != nil {
+				wb = a.Workers.Budgets()
+			}
+			limits := map[string]any{
+				"request_bytes":             automation.MaxRequest,
+				"response_bytes":            automation.MaxResponse,
+				"page":                      200,
+				"batch":                     32,
+				"wait_seconds":              30,
+				"waits_per_actor":           4,
+				"waits_per_node":            16,
+				"writes_per_actor":          4,
+				"writes_per_node":           16,
+				"worker_wall_clock_seconds": int(wb.WallClockTimeout / time.Second),
+				"worker_stall_seconds":      int(wb.StallTimeout / time.Second),
+				"worker_max_active_turns":   wb.MaxActiveTurns,
+			}
+			return automation.Outcome{Data: map[string]any{"api_version": automation.APIVersion, "node_id": r.Node, "instance_id": r.Instance, "caller_id": call.Principal.CallerID, "policy_revision": call.Principal.PolicyRevision, "roles": call.Principal.Roles, "toolsets": toolsets, "server_time_ms": r.Now().UnixMilli(), "operations": names, "limits": limits}}, nil
 		})
 	type receiptInput struct {
-		ID string `json:"operation_id" description:"Operation identity previously returned by operations.new_id"`
+		ID string `json:"operation_id" description:"Operation identity previously returned by operations_new_id"`
 	}
-	automation.Register(r, automation.Definition{Name: "operations.get", Description: "Read the original durable write receipt without executing it again", Role: "read", Toolset: automation.ToolsetCore, Control: true}, nil, nil,
+	automation.Register(r, automation.Definition{Name: "operations_get", Description: "Read the original durable write receipt without executing it again", Role: "read", Toolset: automation.ToolsetCore, Control: true}, nil, nil,
 		func(ctx context.Context, call automation.Call, v receiptInput) (automation.Outcome, error) {
 			if _, err := operations.IDTime(v.ID); err != nil {
 				return automation.Outcome{}, err
@@ -147,7 +167,7 @@ func (a *App) registerAutomationCore(r *automation.Registry) {
 			}
 			return automation.Outcome{Data: receipt}, nil
 		})
-	automation.Register(r, automation.Definition{Name: "node.version", Description: "Read product and public API versions", Role: "read"}, nil, nil,
+	automation.Register(r, automation.Definition{Name: "node_version", Description: "Read product and public API versions", Role: "read"}, nil, nil,
 		func(ctx context.Context, call automation.Call, v automation.Empty) (automation.Outcome, error) {
 			return automation.Outcome{Data: map[string]any{"version": config.Version, "api_version": automation.APIVersion, "platform": runtime.GOOS, "source_digest": config.SourceDigest}}, nil
 		})
@@ -163,17 +183,17 @@ func authorizeReceipt(r *automation.Registry, p automation.Principal, rec operat
 	}
 	family := "node"
 	switch {
-	case strings.HasPrefix(rec.Name, "commands."), strings.HasPrefix(rec.Name, "runs."), strings.HasPrefix(rec.Name, "logs."):
+	case strings.HasPrefix(rec.Name, "commands_"), strings.HasPrefix(rec.Name, "runs_"), strings.HasPrefix(rec.Name, "logs_"):
 		family = "commands"
-	case strings.HasPrefix(rec.Name, "conversations."), strings.HasPrefix(rec.Name, "turns."), strings.HasPrefix(rec.Name, "messages."):
+	case strings.HasPrefix(rec.Name, "conversations_"), strings.HasPrefix(rec.Name, "turns_"), strings.HasPrefix(rec.Name, "messages_"):
 		family = "conversations"
-	case strings.HasPrefix(rec.Name, "tasks."):
+	case strings.HasPrefix(rec.Name, "tasks_"):
 		family = "projects"
 	case strings.HasPrefix(rec.Name, "workspace_"):
 		family = "workspaces"
-	case strings.HasPrefix(rec.Name, "workers."):
+	case strings.HasPrefix(rec.Name, "workers_"):
 		family = "workers"
-	case strings.HasPrefix(rec.Name, "drafts."), strings.HasPrefix(rec.Name, "batches."):
+	case strings.HasPrefix(rec.Name, "drafts_"), strings.HasPrefix(rec.Name, "batches_"):
 		return nil // Draft receipts contain only identities owned by this actor.
 	}
 	return p.Require(family, rec.Target)
@@ -215,7 +235,7 @@ func compactResult(value any) json.RawMessage { b, _ := json.Marshal(value); ret
 
 func boundedWait(seconds int) (time.Duration, error) {
 	if seconds < 0 || seconds > 30 {
-		return 0, automation.Fail("invalid_parameters", "Wait must be at most 30 seconds")
+		return 0, automation.Fail("invalid_parameters", "Wait must be between 1 and 30 seconds")
 	}
 	if seconds == 0 {
 		seconds = 30

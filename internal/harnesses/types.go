@@ -46,7 +46,7 @@ func StaticCapabilities(harnessID string) (Capabilities, bool) {
 		return Capabilities{
 			SupportsCaller:      true,
 			SupportsWorker:      true,
-			CallerManaged:       false,
+			CallerManaged:       true,
 			WorkerManaged:       true,
 			ReadOnlyLevel:       ProtectionOSSandbox,
 			WorkspaceWriteLevel: ProtectionOSSandbox,
@@ -55,7 +55,7 @@ func StaticCapabilities(harnessID string) (Capabilities, bool) {
 		return Capabilities{
 			SupportsCaller:      true,
 			SupportsWorker:      true,
-			CallerManaged:       false,
+			CallerManaged:       true,
 			WorkerManaged:       false,
 			ReadOnlyLevel:       ProtectionHarnessRestrict,
 			WorkspaceWriteLevel: ProtectionHarnessRestrict,
@@ -99,6 +99,7 @@ type HarnessPolicy struct {
 	GeneralToolsEnabled bool              `json:"general_tools_enabled"`
 	CollabCallerEnabled bool              `json:"collab_caller_enabled"`
 	CollabWorkerEnabled bool              `json:"collab_worker_enabled"`
+	AllowWorkspaceWrite bool              `json:"allow_workspace_write"`
 	CredentialHash      string            `json:"credential_hash,omitempty"`
 	CredentialIssuedAt  time.Time         `json:"credential_issued_at,omitempty"`
 	ManagedMCP          *ManagedMCPRecord `json:"managed_mcp,omitempty"`
@@ -117,11 +118,13 @@ type HarnessView struct {
 	ID                  string       `json:"id"`
 	Capabilities        Capabilities `json:"capabilities"`
 	Detected            bool         `json:"detected"`
+	Version             string       `json:"version,omitempty"`
 	ExecutablePath      string       `json:"executable_path,omitempty"`
 	ManualPath          string       `json:"manual_path,omitempty"`
 	GeneralToolsEnabled bool         `json:"general_tools_enabled"`
 	CollabCallerEnabled bool         `json:"collab_caller_enabled"`
 	CollabWorkerEnabled bool         `json:"collab_worker_enabled"`
+	AllowWorkspaceWrite bool         `json:"allow_workspace_write"`
 	CredentialActive    bool         `json:"credential_active"`
 	MCPDesired          bool         `json:"mcp_desired"`
 	MCPObserved         string       `json:"mcp_observed"`

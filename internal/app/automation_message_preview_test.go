@@ -61,7 +61,7 @@ func TestAutomationOrderedHistoryAndSegmentReadUseTheConversationGrant(t *testin
 	}
 	id := human.Conversation.ID
 	_, token := grantTestAutomation(t, a, []string{"read"}, map[string][]string{"conversations": {id}})
-	reply := testAutomationCall(a, token, "messages.list", "", automation.MessagesList{Conversation: id, Role: "default"})
+	reply := testAutomationCall(a, token, "messages_list", "", automation.MessagesList{Conversation: id, Role: "default"})
 	if reply.Error != nil {
 		t.Fatal(reply.Error)
 	}
@@ -75,11 +75,11 @@ func TestAutomationOrderedHistoryAndSegmentReadUseTheConversationGrant(t *testin
 	if len(blocks) != 3 || blocks[0].Text != "before" || blocks[1].Tool == nil || blocks[1].Tool.State != "completed" || blocks[2].ID != segment || !blocks[2].Truncated {
 		t.Fatal("ordered tool/text preview changed")
 	}
-	reply = testAutomationCall(a, token, "messages.get", "", automation.MessageInput{Conversation: id, Role: "default", Message: segment})
+	reply = testAutomationCall(a, token, "messages_get", "", automation.MessageInput{Conversation: id, Role: "default", Message: segment})
 	if reply.Error != nil || !strings.Contains(string(compactResult(reply.Data)), text) {
 		t.Fatal("text segment could not be read independently", reply.Error)
 	}
-	denied := testAutomationCall(a, token, "messages.list", "", automation.MessagesList{Conversation: model.ID(), Role: "default"})
+	denied := testAutomationCall(a, token, "messages_list", "", automation.MessagesList{Conversation: model.ID(), Role: "default"})
 	if denied.Error == nil || runtime.sends.Load() != 0 {
 		t.Fatal("history bypassed conversation scope or invoked the model")
 	}

@@ -5,7 +5,7 @@ import "testing"
 func TestPublicOperationNameIsNotATranslationKey(t *testing.T) {
 	source := []byte(`package example
 import "example/automation"
-var definition=automation.Definition{Name:"desktop.retry",Description:"Retry desktop"}
+var definition=automation.Definition{Name:"desktop_retry",Description:"Retry desktop"}
 `)
 	errs, refs := checkGoFileAST("example.go", source, nil, map[string]bool{}, nil)
 	if len(errs) != 0 || len(refs) != 0 {
@@ -13,7 +13,7 @@ var definition=automation.Definition{Name:"desktop.retry",Description:"Retry des
 	}
 	source = []byte(`package example
 import "example/automation"
-var definition=automation.Definition{Name:"desktop.retry",Description:"desktop.unknown_label"}
+var definition=automation.Definition{Name:"desktop_retry",Description:"desktop.unknown_label"}
 `)
 	errs, _ = checkGoFileAST("example.go", source, nil, map[string]bool{}, nil)
 	if len(errs) != 1 {

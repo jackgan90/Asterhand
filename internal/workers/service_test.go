@@ -103,6 +103,12 @@ func setupTestService(t *testing.T, fa *fakeAdapter) (*Service, *harnesses.Servi
 	if err != nil {
 		t.Fatal(err)
 	}
+	hs.AntigravityConfigPath = filepath.Join(home, "ag_mcp.json")
+	hs.ClaudeConfigPath = filepath.Join(home, "claude.json")
+	hs.DisableVersionProbe = true
+	hs.CmdRunner = func(ctx context.Context, exe string, args ...string) (string, string, error) {
+		return "", "No MCP server named 'asterhand' found.", errors.New("exit 1")
+	}
 	// Point codex manual path to a real existing file so IsWorkerEnabled finds it.
 	fakeExe := filepath.Join(home, "codex.exe")
 	if err := os.WriteFile(fakeExe, []byte("stub"), 0600); err != nil {
@@ -497,4 +503,172 @@ func TestStallTimeoutAndResultPagination(t *testing.T) {
 	if assembled.Len() != doneLong.ResultBytes {
 		t.Fatalf("assembled length mismatch: got %d want %d", assembled.Len(), doneLong.ResultBytes)
 	}
+
+	// Verify UTF-8 boundary enforcement on manual misaligned cursor offsets.
+	utf8Text := "中文分页测试ABC中文结束"
+	if _, _, err := svc.store.SaveResultText(tl.ID, utf8Text, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	// Byte 1 falls inside the first 3-byte UTF-8 rune '中' -> must fail with invalid_cursor.
+	if _, err := svc.ReadResult(tl.ID, ws.ID, 1, 100); err == nil || !strings.Contains(err.Error(), "UTF-8") {
+		t.Fatalf("expected invalid_cursor on mid-rune UTF-8 offset, got %v", err)
+	}
+	// Aligned offset 3 ('文') succeeds cleanly without replacement characters.
+	aligned, err := svc.ReadResult(tl.ID, ws.ID, 3, 100)
+	if err != nil || aligned.Text != "文分页测试ABC中文结束" {
+		t.Fatalf("expected clean aligned UTF-8 slice, got %+v err=%v", aligned, err)
+	}
+}
+
+func TestWorkspaceWriteLockingCancelRevocationAndVCS(t *testing.T) {
+	gate := make(chan struct{})
+	var mu sync.Mutex
+	turnCount := 0
+	fa := &fakeAdapter{
+		startFn: func(ctx context.Context, handle ThreadHandle, spec TurnStartSpec, onEvent func(AdapterEvent)) (string, <-chan TurnOutcome, error) {
+			mu.Lock()
+			turnCount++
+			n := turnCount
+			mu.Unlock()
+			nt := fmt.Sprintf("nt_w_%d", n)
+			ch := make(chan TurnOutcome, 1)
+			go func() {
+				if strings.Contains(spec.Prompt, "hold") {
+					<-gate
+				}
+				ch <- TurnOutcome{
+					State:        TurnCompleted,
+					NativeTurnID: nt,
+					Items:        []NativeItem{{ItemID: "a", Type: "agentMessage", Phase: "final_answer", Text: "write done"}},
+				}
+			}()
+			return nt, ch, nil
+		},
+	}
+	svc, hs, _ := setupTestService(t, fa)
+	svc.SetBudgets(Budgets{InterruptGrace: 100 * time.Millisecond})
+
+	// Create a real temp Git repository with a dirty baseline file + subdirectory.
+	repoDir := t.TempDir()
+	subDir := filepath.Join(repoDir, "pkg", "sub")
+	if err := os.MkdirAll(subDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runGit(context.Background(), repoDir, "init"); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+	_ = runGitNoErr(repoDir, "config", "user.email", "test@example.com")
+	_ = runGitNoErr(repoDir, "config", "user.name", "Test")
+	_ = os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("init\n"), 0600)
+	_ = runGitNoErr(repoDir, "add", "README.md")
+	_ = runGitNoErr(repoDir, "commit", "-m", "init")
+	_ = os.WriteFile(filepath.Join(repoDir, "dirty.txt"), []byte("untracked\n"), 0600)
+
+	// 1. workspace_write is rejected while AllowWorkspaceWrite is false (default).
+	if _, err := svc.Create(context.Background(), CreateInput{
+		HarnessID:     harnesses.HarnessCodex,
+		WorkspaceRoot: repoDir,
+		Alias:         "writer-root",
+		AccessMode:    harnesses.AccessWorkspaceWrite,
+	}); err == nil {
+		t.Fatal("expected workspace_write rejected before AllowWorkspaceWrite is enabled")
+	}
+
+	// Enable AllowWorkspaceWrite on Codex.
+	tr, fl := true, false
+	if _, err := hs.UpdatePolicy(harnesses.UpdatePolicyInput{
+		HarnessID:           harnesses.HarnessCodex,
+		AllowWorkspaceWrite: &tr,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create two write workers: one at repo root, one at a subdirectory (same normalized Git worktree key!).
+	wRoot, err := svc.Create(context.Background(), CreateInput{
+		HarnessID:     harnesses.HarnessCodex,
+		WorkspaceRoot: repoDir,
+		Alias:         "writer-root",
+		AccessMode:    harnesses.AccessWorkspaceWrite,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wSub, err := svc.Create(context.Background(), CreateInput{
+		HarnessID:     harnesses.HarnessCodex,
+		WorkspaceRoot: subDir,
+		Alias:         "writer-sub",
+		AccessMode:    harnesses.AccessWorkspaceWrite,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wRoot.WorktreeKey != wSub.WorktreeKey {
+		t.Fatalf("expected root and subdir to share Git worktree key: %q vs %q", wRoot.WorktreeKey, wSub.WorktreeKey)
+	}
+
+	// 2. Concurrent write turn on subdirectory is blocked by worktree write lock!
+	t1, err := svc.Send(context.Background(), SendInput{OperationID: "op_w1", WorkerID: wRoot.ID, Prompt: "hold write 1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Send(context.Background(), SendInput{OperationID: "op_w2_busy", WorkerID: wSub.ID, Prompt: "second write"}); err == nil || !strings.Contains(err.Error(), "active write turn") {
+		t.Fatalf("expected worktree write mutex rejection, got %v", err)
+	}
+
+	// 3. Cancel t1 releases the worktree write lock so wSub can now run and capture VCS snapshots!
+	cancelled, err := svc.Cancel(context.Background(), t1.ID, "")
+	if err != nil || cancelled.State != TurnCancelled {
+		t.Fatalf("expected t1 cancelled, got %+v err=%v", cancelled, err)
+	}
+	t2, err := svc.Send(context.Background(), SendInput{OperationID: "op_w2_ok", WorkerID: wSub.ID, Prompt: "quick write"})
+	if err != nil {
+		t.Fatalf("expected worktree write lock released after cancel: %v", err)
+	}
+	done2, _, _, err := svc.Wait(context.Background(), t2.ID, "", 5*time.Second)
+	if err != nil || done2.State != TurnCompleted {
+		t.Fatalf("expected t2 completed, got %+v err=%v", done2, err)
+	}
+	if done2.BaselineVCS == nil || done2.BaselineVCS.VCS != "git" || !done2.BaselineVCS.DirtyBaseline || !done2.BaselineVCS.ExternalChangesPossible {
+		t.Fatalf("expected git dirty baseline BaselineVCS, got %+v", done2.BaselineVCS)
+	}
+	if done2.AfterVCS == nil || done2.AfterVCS.UntrackedCount < 1 {
+		t.Fatalf("expected AfterVCS snapshot, got %+v", done2.AfterVCS)
+	}
+
+	// 4. Disabling AllowWorkspaceWrite revokes only active workspace_write turns, leaving read_only turns intact!
+	wRO, err := svc.Create(context.Background(), CreateInput{
+		HarnessID:     harnesses.HarnessCodex,
+		WorkspaceRoot: repoDir,
+		Alias:         "reader-root",
+		AccessMode:    harnesses.AccessReadOnly,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tWrite, err := svc.Send(context.Background(), SendInput{OperationID: "op_w_rev", WorkerID: wRoot.ID, Prompt: "hold write rev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tRead, err := svc.Send(context.Background(), SendInput{OperationID: "op_r_keep", WorkerID: wRO.ID, Prompt: "hold read keep"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(40 * time.Millisecond)
+	if _, err := hs.UpdatePolicy(harnesses.UpdatePolicyInput{HarnessID: harnesses.HarnessCodex, AllowWorkspaceWrite: &fl}); err != nil {
+		t.Fatal(err)
+	}
+	revDone, _, _, err := svc.Wait(context.Background(), tWrite.ID, "", 5*time.Second)
+	if err != nil || revDone.State != TurnCancelledRevoked {
+		t.Fatalf("expected write turn cancelled_authorization_revoked, got %+v err=%v", revDone, err)
+	}
+	close(gate)
+	roDone, _, _, err := svc.Wait(context.Background(), tRead.ID, "", 5*time.Second)
+	if err != nil || roDone.State != TurnCompleted {
+		t.Fatalf("expected read_only turn to finish normally after write revocation, got %+v err=%v", roDone, err)
+	}
+}
+
+func runGitNoErr(dir string, args ...string) error {
+	_, err := runGit(context.Background(), dir, args...)
+	return err
 }

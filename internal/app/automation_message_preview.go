@@ -3,7 +3,7 @@ package app
 import "github.com/jackgan90/Asterhand/internal/conversation"
 
 // Lists preserve every message identity and the domain cursor. Full bodies
-// remain independently readable through messages.get, even for escaped text.
+// remain independently readable through messages_get, even for escaped text.
 func messagePreview(message conversation.Message) conversation.Message {
 	blocks := make([]conversation.Block, 0, len(message.Blocks))
 	remaining := 256

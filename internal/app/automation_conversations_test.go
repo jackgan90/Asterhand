@@ -67,7 +67,7 @@ func TestAutomationConversationSharesHumanHistoryAndNeverResends(t *testing.T) {
 	op := operations.NewID(time.Now())
 	args := automation.ConversationSend{ID: id, Role: "default", Text: "/literal", Mode: "quoted_command"}
 	for range 2 {
-		reply := testAutomationCall(a, token, "conversations.send", op, args)
+		reply := testAutomationCall(a, token, "conversations_send", op, args)
 		if reply.Error != nil {
 			t.Fatal(reply)
 		}
@@ -76,7 +76,7 @@ func TestAutomationConversationSharesHumanHistoryAndNeverResends(t *testing.T) {
 	if runtime.text.Load() != automation.QuoteCommand(args.Text) {
 		t.Fatal("send escaped differently from human semantics")
 	}
-	reply := testAutomationCall(a, token, "messages.list", "", automation.MessagesList{Conversation: id, Role: "default"})
+	reply := testAutomationCall(a, token, "messages_list", "", automation.MessagesList{Conversation: id, Role: "default"})
 	if reply.Error != nil {
 		t.Fatal(reply)
 	}
@@ -87,7 +87,7 @@ func TestAutomationConversationSharesHumanHistoryAndNeverResends(t *testing.T) {
 	if len(listed.Page.Messages) != 1 || !listed.Page.Messages[0].Truncated {
 		t.Fatal("list did not expose a bounded complete index", reply)
 	}
-	reply = testAutomationCall(a, token, "messages.get", "", automation.MessageInput{Conversation: id, Role: "default", Message: "native-message-000001"})
+	reply = testAutomationCall(a, token, "messages_get", "", automation.MessageInput{Conversation: id, Role: "default", Message: "native-message-000001"})
 	if reply.Error != nil {
 		t.Fatal(reply)
 	}
@@ -97,7 +97,7 @@ func TestAutomationConversationSharesHumanHistoryAndNeverResends(t *testing.T) {
 	if strings.Contains(string(compactResult(reply.Data)), "\"prompt\"") {
 		t.Fatal("internal prompt leaked")
 	}
-	if reply = testAutomationCall(a, token, "conversations.get", "", automation.ConversationID{ID: model.ID(), Role: "default"}); reply.Error == nil {
+	if reply = testAutomationCall(a, token, "conversations_get", "", automation.ConversationID{ID: model.ID(), Role: "default"}); reply.Error == nil {
 		t.Fatal("ungranted conversation exposed")
 	}
 	if runtime.sends.Load() != 1 {

@@ -34,7 +34,7 @@ func TestEditorSaveReceiptSurvivesLostWindowReply(t *testing.T) {
 				_ = a.Editors.Respond("web", editors.Poll{Page: page, Reply: &editors.Reply{ID: q.ID, Data: compactResult(reply)}})
 			case "commit":
 				// Invoke the same ordinary-only business call as web/node-settings.mjs.
-				body := compactResult(map[string]any{"operation": "settings.patch", "operation_id": q.Operation, "arguments": map[string]string{"settings": "node", "expected_revision": target.Baseline, "name": "actual saved name"}})
+				body := compactResult(map[string]any{"operation": "settings_patch", "operation_id": q.Operation, "arguments": map[string]string{"settings": "node", "expected_revision": target.Baseline, "name": "actual saved name"}})
 				w := httptest.NewRecorder()
 				a.automationHumanCall(w, httptest.NewRequest("POST", "/api/automation/human-call", bytes.NewReader(body)))
 				var result automation.Response
@@ -48,7 +48,7 @@ func TestEditorSaveReceiptSurvivesLostWindowReply(t *testing.T) {
 	}()
 	id := operations.NewID(time.Now())
 	draftID := page + ":editor"
-	out := testAutomationCall(a, token, "drafts.commit", id, liveWrite{ID: draftID, Revision: "r"})
+	out := testAutomationCall(a, token, "drafts_commit", id, liveWrite{ID: draftID, Revision: "r"})
 	if out.Receipt == nil || out.Receipt.State != "unknown" {
 		t.Fatal(out)
 	}
@@ -68,7 +68,7 @@ func TestEditorSaveReceiptSurvivesLostWindowReply(t *testing.T) {
 	if e != nil || recovered.State != "completed" {
 		t.Fatal(recovered, e)
 	}
-	viaQuery := testAutomationCall(a, token, "operations.get", "", map[string]string{"operation_id": id})
+	viaQuery := testAutomationCall(a, token, "operations_get", "", map[string]string{"operation_id": id})
 	b := compactResult(viaQuery.Data)
 	if viaQuery.Error != nil || !bytes.Contains(b, []byte(`"state":"completed"`)) {
 		t.Fatal(viaQuery)
@@ -97,7 +97,7 @@ func TestEditorReceiptRecoversDefiniteChatRejection(t *testing.T) {
 	}
 	p, token := grantTestAutomation(t, a, []string{"read", "edit", "execute"}, map[string][]string{"conversations": {"*"}})
 	id := operations.NewID(time.Now())
-	identity := operations.Identity{Actor: p.ID, Node: a.Config.Get().NodeID, ID: id, Name: "drafts.commit", Digest: "fixture", Target: "native:foo"}
+	identity := operations.Identity{Actor: p.ID, Node: a.Config.Get().NodeID, ID: id, Name: "drafts_commit", Digest: "fixture", Target: "native:foo"}
 	if _, _, err := a.Store.Begin(identity, time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestEditorReceiptRecoversDefiniteChatRejection(t *testing.T) {
 	if err := a.Store.Finish(lost, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	query := testAutomationCall(a, token, "operations.get", "", map[string]string{"operation_id": id})
+	query := testAutomationCall(a, token, "operations_get", "", map[string]string{"operation_id": id})
 	if query.Error != nil {
 		t.Fatal(query.Error)
 	}

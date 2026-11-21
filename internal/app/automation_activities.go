@@ -31,7 +31,7 @@ func activityAccess(p automation.Principal, op workspace.Operation) error {
 }
 
 func (a *App) registerAutomationActivities(r *automation.Registry) {
-	automation.Register(r, automation.Definition{Name: "turn_activities.list", Description: "Read bounded durable tool metadata and model-declared progress after a sequence", Role: "read"}, nil, nil,
+	automation.Register(r, automation.Definition{Name: "turn_activities_list", Description: "Read bounded durable tool metadata and model-declared progress after a sequence", Role: "read"}, nil, nil,
 		func(ctx context.Context, call automation.Call, v automation.WorkspaceActivities) (automation.Outcome, error) {
 			files, err := a.publicWorkspace(call.Principal, v.Workspace, true)
 			if err != nil {
@@ -44,7 +44,7 @@ func (a *App) registerAutomationActivities(r *automation.Registry) {
 			items, next := files.Activities(v.Conversation, turn, v.After)
 			return automation.Outcome{Data: map[string]any{"items": items, "next": next}}, nil
 		})
-	for _, name := range []string{"turn_activities.get", "workspace_versions.get", "workspace_operations.get"} {
+	for _, name := range []string{"turn_activities_get", "workspace_versions_get", "workspace_operations_get"} {
 		automation.Register(r, automation.Definition{Name: name, Description: "Read one durable operation and its actual per-file outcomes without file contents", Role: "read"}, nil, nil,
 			func(ctx context.Context, call automation.Call, v automation.WorkspaceObject) (automation.Outcome, error) {
 				files, err := a.publicWorkspace(call.Principal, v.Workspace, true)
@@ -61,7 +61,7 @@ func (a *App) registerAutomationActivities(r *automation.Registry) {
 				return automation.Outcome{Data: op}, nil
 			})
 	}
-	automation.Register(r, automation.Definition{Name: "workspace_operations.resolve", Description: "Record explicit reconciliation evidence for an unknown operation after its owned runtime stopped; does not replay or restore files", Role: "edit", Write: true, Control: true}, func(v automation.WorkspaceResolve) string { return v.Workspace }, nil,
+	automation.Register(r, automation.Definition{Name: "workspace_operations_resolve", Description: "Record explicit reconciliation evidence for an unknown operation after its owned runtime stopped; does not replay or restore files", Role: "edit", Write: true, Control: true}, func(v automation.WorkspaceResolve) string { return v.Workspace }, nil,
 		func(ctx context.Context, call automation.Call, v automation.WorkspaceResolve) (automation.Outcome, error) {
 			files, err := a.publicWorkspace(call.Principal, v.Workspace, true)
 			if err != nil {
@@ -80,7 +80,7 @@ func (a *App) registerAutomationActivities(r *automation.Registry) {
 			op, err = files.ResolveRequest(call.Identity.NativeID(), v.ID, v.Evidence)
 			return workspaceOutcome(op, err)
 		})
-	automation.Register(r, automation.Definition{Name: "artifacts.list", Description: "List stable references to changed files, bound to the operation and content revision", Role: "read"}, nil, nil,
+	automation.Register(r, automation.Definition{Name: "artifacts_list", Description: "List stable references to changed files, bound to the operation and content revision", Role: "read"}, nil, nil,
 		func(ctx context.Context, call automation.Call, v automation.WorkspaceActivities) (automation.Outcome, error) {
 			files, err := a.publicWorkspace(call.Principal, v.Workspace, true)
 			if err != nil {
@@ -99,7 +99,7 @@ func (a *App) registerAutomationActivities(r *automation.Registry) {
 			}
 			return automation.Outcome{Data: map[string]any{"items": filtered, "next": next}}, nil
 		})
-	for _, name := range []string{"artifacts.get", "artifacts.read"} {
+	for _, name := range []string{"artifacts_get", "artifacts_read"} {
 		automation.Register(r, automation.Definition{Name: name, Description: "Inspect or read a bounded fragment of an artifact after revalidating authorization and its saved revision", Role: "read"}, nil, nil,
 			func(ctx context.Context, call automation.Call, v automation.ArtifactRead) (automation.Outcome, error) {
 				files, err := a.publicWorkspace(call.Principal, v.Workspace, true)
@@ -119,7 +119,7 @@ func (a *App) registerAutomationActivities(r *automation.Registry) {
 				if err != nil {
 					return automation.Outcome{}, workspacePublicError(err)
 				}
-				if name == "artifacts.get" {
+				if name == "artifacts_get" {
 					return automation.Outcome{Data: item}, nil
 				}
 				return automation.Outcome{Data: fragment}, nil

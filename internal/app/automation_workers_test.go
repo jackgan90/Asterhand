@@ -57,6 +57,12 @@ func setupM1WorkerNode(t *testing.T, adapter workers.Adapter) (*testNode, harnes
 	t.Helper()
 	n := newNode(t, &fakeExecutor{})
 	a := n.app
+	a.Harnesses.AntigravityConfigPath = filepath.Join(a.Config.Home, "ag_mcp.json")
+	a.Harnesses.ClaudeConfigPath = filepath.Join(a.Config.Home, "claude.json")
+	a.Harnesses.DisableVersionProbe = true
+	a.Harnesses.CmdRunner = func(ctx context.Context, exe string, args ...string) (string, string, error) {
+		return "", "No MCP server named 'asterhand' found.", os.ErrNotExist
+	}
 	// Replace workers service with stub adapter for deterministic app-level integration tests.
 	if a.Workers != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -142,51 +148,51 @@ func TestM1EndToEndWorkerFlowHotSwitchMidFlightReceiptRevocationAndStopChain(t *
 
 	// 2. Create worker + send turn + wait + result + logs.
 	createID := operations.NewID(time.Now())
-	createResp := testAutomationCall(a, tok, "workers.create", createID, workerCreateInput{
+	createResp := testAutomationCall(a, tok, "workers_create", createID, workerCreateInput{
 		HarnessID:     harnesses.HarnessCodex,
 		WorkspaceRoot: ws.RootPath,
 		Alias:         "codex-reviewer",
 		AccessMode:    harnesses.AccessReadOnly,
 	})
 	if createResp.Error != nil {
-		t.Fatalf("workers.create failed: %+v", createResp.Error)
+		t.Fatalf("workers_create failed: %+v", createResp.Error)
 	}
 	w := createResp.Data.(workers.Worker)
 
 	sendID := operations.NewID(time.Now())
-	sendResp := testAutomationCall(a, tok, "workers.send", sendID, workerSendInput{
+	sendResp := testAutomationCall(a, tok, "workers_send", sendID, workerSendInput{
 		WorkerID:    w.ID,
 		WorkspaceID: ws.ID,
 		Prompt:      "review plan",
 	})
 	if sendResp.Error != nil {
-		t.Fatalf("workers.send failed: %+v", sendResp.Error)
+		t.Fatalf("workers_send failed: %+v", sendResp.Error)
 	}
 	turn := sendResp.Data.(workers.Turn)
 
-	waitResp := testAutomationCall(a, tok, "workers.wait", "", workerWaitInput{TurnID: turn.ID, WorkspaceID: ws.ID, WaitSeconds: 5})
+	waitResp := testAutomationCall(a, tok, "workers_wait", "", workerWaitInput{TurnID: turn.ID, WorkspaceID: ws.ID, WaitSeconds: automation.Int(5)})
 	if waitResp.Error != nil {
-		t.Fatalf("workers.wait failed: %+v", waitResp.Error)
+		t.Fatalf("workers_wait failed: %+v", waitResp.Error)
 	}
 	wv := waitResp.Data.(workerWaitView)
 	if wv.State != workers.TurnCompleted || !strings.Contains(wv.Answer, "Finding: nil check missing") {
 		t.Fatalf("unexpected wait view: %+v", wv)
 	}
 
-	// 3. Also create a general receipt (e.g. commands.create) to test general vs collab receipt filtering.
+	// 3. Also create a general receipt (e.g. commands_create) to test general vs collab receipt filtering.
 	genID := operations.NewID(time.Now())
-	genResp := testAutomationCall(a, tok, "commands.create", genID, automation.CommandInput{
+	genResp := testAutomationCall(a, tok, "commands_create", genID, automation.CommandInput{
 		Name:  "demo_cmd",
 		Graph: apiTestGraph(filepath.Join(t.TempDir(), "s.ps1")),
 	})
 	if genResp.Error != nil {
-		t.Fatalf("commands.create failed: %+v", genResp.Error)
+		t.Fatalf("commands_create failed: %+v", genResp.Error)
 	}
 
 	// 4. Hot-switch Antigravity from general+collab -> general-only:
-	//    - commands.list still works
-	//    - workers.send rejected with toolset_disabled
-	//    - operations.get rejects old collab receipt (sendID), still allows general receipt (genID)!
+	//    - commands_list still works
+	//    - workers_send rejected with toolset_disabled
+	//    - operations_get rejects old collab receipt (sendID), still allows general receipt (genID)!
 	fl := false
 	if _, err := a.Harnesses.UpdatePolicy(harnesses.UpdatePolicyInput{
 		HarnessID:           harnesses.HarnessAntigravity,
@@ -194,20 +200,20 @@ func TestM1EndToEndWorkerFlowHotSwitchMidFlightReceiptRevocationAndStopChain(t *
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if r := testAutomationCall(a, tok, "commands.list", "", automation.CommandList{}); r.Error != nil {
+	if r := testAutomationCall(a, tok, "commands_list", "", automation.CommandList{}); r.Error != nil {
 		t.Fatalf("general op should still succeed: %+v", r.Error)
 	}
-	if r := testAutomationCall(a, tok, "workers.send", operations.NewID(time.Now()), workerSendInput{WorkerID: w.ID, Prompt: "blocked"}); r.Error == nil || r.Error.Code != "toolset_disabled" {
-		t.Fatalf("expected toolset_disabled on workers.send, got %+v", r.Error)
+	if r := testAutomationCall(a, tok, "workers_send", operations.NewID(time.Now()), workerSendInput{WorkerID: w.ID, Prompt: "blocked"}); r.Error == nil || r.Error.Code != "toolset_disabled" {
+		t.Fatalf("expected toolset_disabled on workers_send, got %+v", r.Error)
 	}
-	if r := testAutomationCall(a, tok, "operations.get", "", map[string]string{"operation_id": sendID}); r.Error == nil || r.Error.Code != "toolset_disabled" {
+	if r := testAutomationCall(a, tok, "operations_get", "", map[string]string{"operation_id": sendID}); r.Error == nil || r.Error.Code != "toolset_disabled" {
 		t.Fatalf("expected toolset_disabled reading old collab receipt, got %+v", r.Error)
 	}
-	if r := testAutomationCall(a, tok, "operations.get", "", map[string]string{"operation_id": genID}); r.Error != nil {
+	if r := testAutomationCall(a, tok, "operations_get", "", map[string]string{"operation_id": genID}); r.Error != nil {
 		t.Fatalf("general receipt should still be readable: %+v", r.Error)
 	}
 
-	// 5. Mid-flight revocation during operations.get: re-enable collab, then wrap Authorize so
+	// 5. Mid-flight revocation during operations_get: re-enable collab, then wrap Authorize so
 	//    the second Authorize() call (right before returning!) sees collab turned off -> rejected!
 	tr := true
 	_, _ = a.Harnesses.UpdatePolicy(harnesses.UpdatePolicyInput{
@@ -222,7 +228,7 @@ func TestM1EndToEndWorkerFlowHotSwitchMidFlightReceiptRevocationAndStopChain(t *
 			return p, err
 		}
 		calls++
-		// On the 3rd authorize inside operations.get (the pre-return check), simulate collab turned off mid-flight!
+		// On the 3rd authorize inside operations_get (the pre-return check), simulate collab turned off mid-flight!
 		if calls >= 3 && p.Toolsets != nil {
 			clone := map[string]bool{}
 			for k, v := range p.Toolsets {
@@ -234,13 +240,13 @@ func TestM1EndToEndWorkerFlowHotSwitchMidFlightReceiptRevocationAndStopChain(t *
 		}
 		return p, nil
 	}
-	midResp := testAutomationCall(a, tok, "operations.get", "", map[string]string{"operation_id": sendID})
+	midResp := testAutomationCall(a, tok, "operations_get", "", map[string]string{"operation_id": sendID})
 	a.Automation.Registry.Authorize = origAuth
 	if midResp.Error == nil || midResp.Error.Code != "toolset_disabled" {
 		t.Fatalf("expected mid-flight revocation to reject collab receipt before returning, got %+v", midResp)
 	}
 
-	// 6. Crash window recovery: worker turn persisted, public receipt still prepared -> operations.get repairs receipt!
+	// 6. Crash window recovery: worker turn persisted, public receipt still prepared -> operations_get repairs receipt!
 	crashOpID := operations.NewID(time.Now())
 	crashTurn, err := a.Workers.Send(context.Background(), workers.SendInput{
 		OperationID: crashOpID,
@@ -252,11 +258,11 @@ func TestM1EndToEndWorkerFlowHotSwitchMidFlightReceiptRevocationAndStopChain(t *
 	}
 	<-started
 	pCur, _, _ := a.Harnesses.AuthenticateCaller(tok)
-	ident := operations.Identity{Actor: pCur.ID, Node: a.Config.Get().NodeID, ID: crashOpID, Name: "workers.send", Target: w.ID, Digest: "d"}
+	ident := operations.Identity{Actor: pCur.ID, Node: a.Config.Get().NodeID, ID: crashOpID, Name: "workers_send", Target: w.ID, Digest: "d"}
 	if _, _, err := a.Store.Begin(ident, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	recResp := testAutomationCall(a, tok, "operations.get", "", map[string]string{"operation_id": crashOpID})
+	recResp := testAutomationCall(a, tok, "operations_get", "", map[string]string{"operation_id": crashOpID})
 	if recResp.Error != nil {
 		t.Fatalf("expected receipt repaired from workers domain, got %+v", recResp.Error)
 	}
@@ -287,16 +293,16 @@ func TestM1BatchRevocationAndRestrictedStartBlock(t *testing.T) {
 	n, ws, tok := setupM1WorkerNode(t, &stubWorkerAdapter{})
 	a := n.app
 
-	// 1. read.many with a general read + collab read:
+	// 1. read_many with a general read + collab read:
 	//    both succeed when general+collab enabled; disabling collab rejects collab item with toolset_disabled!
-	rmBoth := testAutomationCall(a, tok, "read.many", "", automation.MultiRead{
+	rmBoth := testAutomationCall(a, tok, "read_many", "", automation.MultiRead{
 		Items: []automation.BatchItem{
-			{Operation: "commands.list", Arguments: json.RawMessage(`{}`)},
-			{Operation: "workers.list", Arguments: json.RawMessage(`{"workspace_id":"` + ws.ID + `"}`)},
+			{Operation: "commands_list", Arguments: json.RawMessage(`{}`)},
+			{Operation: "workers_list", Arguments: json.RawMessage(`{"workspace_id":"` + ws.ID + `"}`)},
 		},
 	})
 	if rmBoth.Error != nil {
-		t.Fatalf("read.many failed: %+v", rmBoth.Error)
+		t.Fatalf("read_many failed: %+v", rmBoth.Error)
 	}
 	fl := false
 	if _, err := a.Harnesses.UpdatePolicy(harnesses.UpdatePolicyInput{
@@ -305,14 +311,14 @@ func TestM1BatchRevocationAndRestrictedStartBlock(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	rmGenOnly := testAutomationCall(a, tok, "read.many", "", automation.MultiRead{
+	rmGenOnly := testAutomationCall(a, tok, "read_many", "", automation.MultiRead{
 		Items: []automation.BatchItem{
-			{Operation: "commands.list", Arguments: json.RawMessage(`{}`)},
-			{Operation: "workers.list", Arguments: json.RawMessage(`{"workspace_id":"` + ws.ID + `"}`)},
+			{Operation: "commands_list", Arguments: json.RawMessage(`{}`)},
+			{Operation: "workers_list", Arguments: json.RawMessage(`{"workspace_id":"` + ws.ID + `"}`)},
 		},
 	})
 	if rmGenOnly.Error != nil {
-		t.Fatalf("read.many top-level error: %+v", rmGenOnly.Error)
+		t.Fatalf("read_many top-level error: %+v", rmGenOnly.Error)
 	}
 	rmItems := rmGenOnly.Data.(map[string]any)["items"].([]any)
 	item0 := rmItems[0].(map[string]any)["response"].(automation.Response)
@@ -321,9 +327,9 @@ func TestM1BatchRevocationAndRestrictedStartBlock(t *testing.T) {
 		t.Fatalf("expected item0 ok and item1 toolset_disabled, got item0=%+v item1=%+v", item0.Error, item1.Error)
 	}
 
-	// 2. batches.submit (general write) + batches.get:
+	// 2. batches_submit (general write) + batches_get:
 	//    when general_tools_enabled is turned off while collab_caller_enabled is turned on,
-	//    batches.get masks the general item as state="forbidden" (and mid-flight revocation also masks it).
+	//    batches_get masks the general item as state="forbidden" (and mid-flight revocation also masks it).
 	tr := true
 	_, _ = a.Harnesses.UpdatePolicy(harnesses.UpdatePolicyInput{
 		HarnessID:           harnesses.HarnessAntigravity,
@@ -335,19 +341,19 @@ func TestM1BatchRevocationAndRestrictedStartBlock(t *testing.T) {
 		Graph: apiTestGraph(filepath.Join(t.TempDir(), "b.ps1")),
 	})
 	batchID := operations.NewID(time.Now())
-	subResp := testAutomationCall(a, tok, "batches.submit", batchID, automation.BatchSubmit{
+	subResp := testAutomationCall(a, tok, "batches_submit", batchID, automation.BatchSubmit{
 		Items: []automation.BatchItem{
-			{Operation: "commands.create", Arguments: cmdArgs},
+			{Operation: "commands_create", Arguments: cmdArgs},
 		},
 	})
 	if subResp.Error != nil {
-		t.Fatalf("batches.submit failed: %+v", subResp.Error)
+		t.Fatalf("batches_submit failed: %+v", subResp.Error)
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		getResp := testAutomationCall(a, tok, "batches.get", "", automation.BatchGet{ID: batchID})
+		getResp := testAutomationCall(a, tok, "batches_get", "", automation.BatchGet{ID: batchID})
 		if getResp.Error != nil {
-			t.Fatalf("batches.get failed: %+v", getResp.Error)
+			t.Fatalf("batches_get failed: %+v", getResp.Error)
 		}
 		if getResp.Data.(map[string]any)["complete"] == true {
 			break
@@ -355,24 +361,19 @@ func TestM1BatchRevocationAndRestrictedStartBlock(t *testing.T) {
 		time.Sleep(25 * time.Millisecond)
 	}
 
-	// Turn off general_tools_enabled while keeping collab_caller_enabled=true -> batch item must be masked as forbidden!
+	// Turn off general_tools_enabled while keeping collab_caller_enabled=true -> batches_get is paired with batches_submit in general toolset and immediately rejected!
 	if _, err := a.Harnesses.UpdatePolicy(harnesses.UpdatePolicyInput{
 		HarnessID:           harnesses.HarnessAntigravity,
 		GeneralToolsEnabled: &fl,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	maskedResp := testAutomationCall(a, tok, "batches.get", "", automation.BatchGet{ID: batchID})
-	if maskedResp.Error != nil {
-		t.Fatalf("batches.get should succeed with masked item, got %+v", maskedResp.Error)
-	}
-	maskedItems := maskedResp.Data.(map[string]any)["items"].([]any)
-	m0 := maskedItems[0].(map[string]string)
-	if m0["state"] != "forbidden" {
-		t.Fatalf("expected general batch item masked as forbidden, got %+v", m0)
+	maskedResp := testAutomationCall(a, tok, "batches_get", "", automation.BatchGet{ID: batchID})
+	if maskedResp.Error == nil || maskedResp.Error.Code != "toolset_disabled" {
+		t.Fatalf("expected batches_get rejected with toolset_disabled when general is off, got %+v", maskedResp.Error)
 	}
 
-	// Mid-flight revocation during batches.get (right before returning).
+	// Mid-flight revocation during batches_get (right before returning).
 	_, _ = a.Harnesses.UpdatePolicy(harnesses.UpdatePolicyInput{
 		HarnessID:           harnesses.HarnessAntigravity,
 		GeneralToolsEnabled: &tr,
@@ -396,14 +397,162 @@ func TestM1BatchRevocationAndRestrictedStartBlock(t *testing.T) {
 		}
 		return p, nil
 	}
-	midBatch := testAutomationCall(a, tok, "batches.get", "", automation.BatchGet{ID: batchID})
+	midBatch := testAutomationCall(a, tok, "batches_get", "", automation.BatchGet{ID: batchID})
 	a.Automation.Registry.Authorize = origAuth
-	if midBatch.Error != nil {
-		t.Fatalf("mid-flight batches.get unexpected top error: %+v", midBatch.Error)
+	if midBatch.Error == nil {
+		midItems := midBatch.Data.(map[string]any)["items"].([]any)
+		mid0 := midItems[0].(map[string]string)
+		if mid0["state"] != "forbidden" {
+			t.Fatalf("expected mid-flight revocation to mask or deny batch item before returning, got %+v", mid0)
+		}
+	} else if midBatch.Error.Code != "toolset_disabled" {
+		t.Fatalf("mid-flight batches_get unexpected top error: %+v", midBatch.Error)
 	}
-	midItems := midBatch.Data.(map[string]any)["items"].([]any)
-	mid0 := midItems[0].(map[string]string)
-	if mid0["state"] != "forbidden" {
-		t.Fatalf("expected mid-flight revocation to mask batch item before returning, got %+v", mid0)
+}
+
+func TestM2HarnessesDiscoveryOpsAndWorkspaceWritePolicy(t *testing.T) {
+	n, ws, tok := setupM1WorkerNode(t, &stubWorkerAdapter{})
+	a := n.app
+
+	// 1. harnesses_list & harnesses_get succeed under collab toolset and never leak secrets.
+	listResp := testAutomationCall(a, tok, "harnesses_list", "", harnessesListInput{})
+	if listResp.Error != nil {
+		t.Fatalf("harnesses_list failed: %+v", listResp.Error)
+	}
+	listData := listResp.Data.(harnessesListView)
+	if len(listData.Items) != 4 {
+		t.Fatalf("expected all 4 known harnesses, got %d", len(listData.Items))
+	}
+	rawJSON, _ := json.Marshal(listData)
+	if strings.Contains(string(rawJSON), tok) || strings.Contains(string(rawJSON), "credential_hash") {
+		t.Fatal("harnesses_list leaked credential secret or hash")
+	}
+
+	getResp := testAutomationCall(a, tok, "harnesses_get", "", harnessesGetInput{HarnessID: harnesses.HarnessCodex})
+	if getResp.Error != nil {
+		t.Fatalf("harnesses_get codex failed: %+v", getResp.Error)
+	}
+	codexView := getResp.Data.(harnesses.HarnessView)
+	if codexView.ID != harnesses.HarnessCodex || !codexView.Capabilities.CallerManaged || !codexView.Capabilities.WorkerManaged {
+		t.Fatalf("unexpected codex view: %+v", codexView)
+	}
+	if badResp := testAutomationCall(a, tok, "harnesses_get", "", harnessesGetInput{HarnessID: "unknown"}); badResp.Error == nil || badResp.Error.Code != "not_found" {
+		t.Fatalf("expected not_found for unknown harness, got %+v", badResp.Error)
+	}
+
+	// 2. workspace_write via workers_create is blocked until allow_workspace_write=true on Codex.
+	op1 := operations.NewIDFor("workers_create", time.Now())
+	denied := testAutomationCall(a, tok, "workers_create", op1, workerCreateInput{
+		HarnessID:     harnesses.HarnessCodex,
+		WorkspaceRoot: ws.RootPath,
+		Alias:         "codex-writer",
+		AccessMode:    harnesses.AccessWorkspaceWrite,
+	})
+	if denied.Error == nil || denied.Error.Code != "forbidden" {
+		t.Fatalf("expected workspace_write forbidden before opt-in, got %+v", denied.Error)
+	}
+
+	tr, fl := true, false
+	if _, err := a.Harnesses.UpdatePolicy(harnesses.UpdatePolicyInput{
+		HarnessID:           harnesses.HarnessCodex,
+		AllowWorkspaceWrite: &tr,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	op2 := operations.NewIDFor("workers_create", time.Now())
+	created := testAutomationCall(a, tok, "workers_create", op2, workerCreateInput{
+		HarnessID:     harnesses.HarnessCodex,
+		WorkspaceRoot: ws.RootPath,
+		Alias:         "codex-writer",
+		AccessMode:    harnesses.AccessWorkspaceWrite,
+	})
+	if created.Error != nil {
+		t.Fatalf("expected workspace_write workers_create to succeed after opt-in: %+v", created.Error)
+	}
+
+	// 3. Turning off collab_caller_enabled immediately blocks harnesses_list & harnesses_get!
+	if _, err := a.Harnesses.UpdatePolicy(harnesses.UpdatePolicyInput{
+		HarnessID:           harnesses.HarnessAntigravity,
+		CollabCallerEnabled: &fl,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if r := testAutomationCall(a, tok, "harnesses_list", "", harnessesListInput{}); r.Error == nil || r.Error.Code != "toolset_disabled" {
+		t.Fatalf("expected toolset_disabled on harnesses_list, got %+v", r.Error)
+	}
+	if r := testAutomationCall(a, tok, "harnesses_get", "", harnessesGetInput{HarnessID: harnesses.HarnessCodex}); r.Error == nil || r.Error.Code != "toolset_disabled" {
+		t.Fatalf("expected toolset_disabled on harnesses_get, got %+v", r.Error)
+	}
+
+	// 4. workers_create schema explicitly exposes read_only & workspace_write enum and description.
+	var createDef *automation.Definition
+	for _, d := range AutomationDefinitions() {
+		if d.Name == "workers_create" {
+			dd := d
+			createDef = &dd
+			break
+		}
+	}
+	if createDef == nil {
+		t.Fatal("workers_create definition missing")
+	}
+	props := createDef.Schema["properties"].(map[string]any)
+	accessProp := props["access_mode"].(map[string]any)
+	desc, _ := accessProp["description"].(string)
+	enumVals, _ := accessProp["enum"].([]string)
+	if !strings.Contains(desc, "workspace_write") || len(enumVals) != 2 || enumVals[0] != "read_only" || enumVals[1] != "workspace_write" {
+		t.Fatalf("expected access_mode schema enum & description with workspace_write, got desc=%q enum=%v", desc, enumVals)
+	}
+
+	// 5. capabilities.limits exposes worker execution budgets and collab-only hides batches_get.
+	if _, err := a.Harnesses.UpdatePolicy(harnesses.UpdatePolicyInput{
+		HarnessID:           harnesses.HarnessAntigravity,
+		GeneralToolsEnabled: &fl,
+		CollabCallerEnabled: &tr,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	capResp := testAutomationCall(a, tok, "capabilities", "", automation.Empty{})
+	if capResp.Error != nil {
+		t.Fatalf("capabilities failed: %+v", capResp.Error)
+	}
+	capData := capResp.Data.(map[string]any)
+	limits := capData["limits"].(map[string]any)
+	if limits["worker_wall_clock_seconds"] != 900 || limits["worker_stall_seconds"] != 300 || limits["worker_max_active_turns"] != 4 {
+		t.Fatalf("unexpected worker budgets in capabilities.limits: %+v", limits)
+	}
+	for _, op := range capData["operations"].([]map[string]any) {
+		name := op["name"].(string)
+		if name == "batches_get" || name == "batches_submit" {
+			t.Fatalf("collab-only capabilities must not advertise %s", name)
+		}
+		if strings.Contains(name, ".") {
+			t.Fatalf("operation name must use underscore, got %s", name)
+		}
+	}
+
+	// 6. Strict bounds validation on workers_wait.wait_seconds, workers_list.limit,
+	//    workers_logs.limit, and workers_result.max_bytes (0 and negatives rejected).
+	for _, badWait := range []int{0, -1, 31} {
+		r := testAutomationCall(a, tok, "workers_wait", "", workerWaitInput{TurnID: "turn_missing", WaitSeconds: automation.Int(badWait)})
+		if r.Error == nil || r.Error.Code != "invalid_parameters" || !strings.Contains(r.Error.Message, "between 1 and 30") {
+			t.Fatalf("expected range invalid_parameters for wait_seconds=%d, got %+v", badWait, r.Error)
+		}
+	}
+	for _, badLimit := range []int{0, -1, 201} {
+		r := testAutomationCall(a, tok, "workers_list", "", workerListInput{Limit: automation.Int(badLimit)})
+		if r.Error == nil || r.Error.Code != "invalid_parameters" || !strings.Contains(r.Error.Message, "between 1 and 200") {
+			t.Fatalf("expected range invalid_parameters for workers_list limit=%d, got %+v", badLimit, r.Error)
+		}
+		rl := testAutomationCall(a, tok, "workers_logs", "", workerLogsInput{TurnID: "turn_missing", Limit: automation.Int(badLimit)})
+		if rl.Error == nil || rl.Error.Code != "invalid_parameters" || !strings.Contains(rl.Error.Message, "between 1 and 200") {
+			t.Fatalf("expected range invalid_parameters for workers_logs limit=%d, got %+v", badLimit, rl.Error)
+		}
+	}
+	for _, badMax := range []int{0, -1, 32769} {
+		rr := testAutomationCall(a, tok, "workers_result", "", workerResultInput{TurnID: "turn_missing", MaxBytes: automation.Int(badMax)})
+		if rr.Error == nil || rr.Error.Code != "invalid_parameters" || !strings.Contains(rr.Error.Message, "between 1 and 32768") {
+			t.Fatalf("expected range invalid_parameters for workers_result max_bytes=%d, got %+v", badMax, rr.Error)
+		}
 	}
 }

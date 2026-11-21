@@ -13,7 +13,7 @@ func (c *Client) startNode(ctx context.Context, id string, arguments json.RawMes
 	if _, err := Decode[Empty](arguments); err != nil {
 		return Response{}, err
 	}
-	if err := operations.CheckName(id, "node.start"); err != nil {
+	if err := operations.CheckName(id, "node_start"); err != nil {
 		return Response{}, err
 	}
 	check := func() error {
@@ -32,9 +32,9 @@ func (c *Client) startNode(ctx context.Context, id string, arguments json.RawMes
 	if c.Profile.Installation == "" {
 		// An already running development node can acknowledge the operation.
 		// Only an explicitly granted installed launcher may start an offline one.
-		return c.remoteCall(ctx, "node.start", id, arguments)
+		return c.remoteCall(ctx, "node_start", id, arguments)
 	}
-	identity := operations.Identity{Actor: c.Profile.Actor, Node: c.Profile.Node, ID: id, Name: "node.start", Digest: operations.Hash(Empty{}), Target: c.Profile.Node}
+	identity := operations.Identity{Actor: c.Profile.Actor, Node: c.Profile.Node, ID: id, Name: "node_start", Digest: operations.Hash(Empty{}), Target: c.Profile.Node}
 	receipt, err := launch.StartOperation(ctx, c.Profile.Installation, c.home, identity, check)
 	response := Response{Version: APIVersion, Node: c.Profile.Node, Instance: "launcher", ID: id}
 	if receipt.ID != "" {

@@ -42,14 +42,14 @@ func NewID(now time.Time) string {
 // identities, so an explicitly reused ID cannot admit two different effects.
 func NewIDFor(name string, now time.Time) string {
 	id := NewID(now)
-	if name == "node.start" {
+	if name == "node_start" {
 		return "start:" + id
 	}
 	return id
 }
 
 func CheckName(id, name string) error {
-	if strings.HasPrefix(id, "start:") != (name == "node.start") {
+	if strings.HasPrefix(id, "start:") != (name == "node_start") {
 		return ErrInvalid
 	}
 	_, err := IDTime(id)

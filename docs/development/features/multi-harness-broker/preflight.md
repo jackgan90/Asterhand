@@ -42,7 +42,12 @@
 - 锁定版本 `github.com/modelcontextprotocol/go-sdk v1.7.0` 的 `mcp.Server.AddTool` 与 `mcp.Server.RemoveTools` 均会自动向已连接会话发出 `notifications/tools/list_changed`；
 - 配合守护进程侧按受限 `Principal` 实时执行的调用闸门，可同时满足“支持热刷新客户端工具列表自动同步”与“不支持热刷新客户端在调用入口即时被拒”。
 
-## 4. 仍待真机端到端验证的项
+## 4. 仍待真机端到端验证的项与 Milestone 2 预检结论
 
-- **已实测确认（Antigravity 懒加载 MCP Schema 命名兼容）**：Antigravity 客户端在为懒加载 MCP 工具生成本地 JSON schema 时，对所有名称含 `.` 的工具（哪怕 `inputSchema` 与 `capabilities` 完全一致，如 `node.version` / `models.list` 或全字段带 `description` 的 `commands.list`）会将 `"parameters"` 置为 `null`，仅不含 `.` 的 `capabilities` 保留完整 `parameters`。因此 `MCPHost` 在受管 Coding Harness 调用方（`--caller` 非空）边界统一将对外 MCP 工具名中的 `.` 映射为 `_`（如 `workers_create`、`operations_new_id`），同时自动兼容反解 `operation` 参数并保留内部/CLI/HTTP 的规范点号名与零冲突测试守卫。
-- 真实 Antigravity 对话中消费 `mcpResult` 双通道输出（`content[].text` + `structuredContent`）、工具集裁剪隔离、指定 `model` / `reasoning_effort` 与回传 Codex 只读分析结论的真机验收已通过，详见 [validation.md](validation.md)。
+- **已实测确认（全仓统一 `[a-zA-Z0-9_-]` 下划线操作名）**：Antigravity 客户端在为懒加载 MCP 工具生成本地 JSON schema 时，对所有名称含 `.` 的工具（哪怕 `inputSchema` 与 `capabilities` 完全一致，如 `node_version` / `models_list` 或全字段带 `description` 的 `commands_list`）会将 `"parameters"` 置为 `null`，仅不含 `.` 的工具保留完整 `parameters`。因此全仓所有公共自动化操作（CLI、HTTP、直连 MCP 与受管 MCP）已统一使用下划线规范名（如 `workers_create`、`harnesses_list`、`operations_new_id`），取消点号↔下划线双轨转换，并由 `TestAutomationCoverage` 从源头强制校验 `[a-zA-Z0-9_-]+`。
+- **Milestone 2 本机三家外部 CLI / MCP 管理接口实测结论（Windows x64）**：
+  - **Codex CLI（`codex-cli 0.171.0`）**：支持 `codex mcp add <name> -- <cmd> <args...>`、`codex mcp remove <name>`、`codex mcp get <name> --json`。隔离临时 `CODEX_HOME` 实测确认：`codex mcp get asterhand --json` 将 `command` 与 `args` 嵌套在 `transport: {type: "stdio", command, args}` 对象下，且未找到条目时以退出码 1 在 stderr 输出 `Error: No MCP server named ... found.`；同时 stderr 可能附带 `WARNING:` 行，解析时必须仅消费 stdout JSON。
+  - **Claude Code（`claude 2.1.284`）**：支持 `claude mcp add --scope user <name> -- <cmd> <args...>` 与 `claude mcp remove --scope user <name>`，用户级条目位于 `%USERPROFILE%\.claude.json` 顶层 `mcpServers.<name>`；Asterhand 仅只读检查 `mcpServers.asterhand` 单键并调用官方 CLI 增删，绝不整文件备份或接触其他条目的凭据。
+  - **DeepSeek Harness（`0.2.2-rc.5` 桌面版）**：默认安装于 `%LOCALAPPDATA%\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd`（不在全局 `PATH`），`dsh -V` 返回 `0.2.2-rc.5`。实测确认其 `desktop` profile 明确返回 `error: profile "desktop" is managed exclusively by the Electron application` 且未提供官方独立 `mcp add/remove` CLI。因此 Milestone 2 诚实落地 DeepSeek Harness 的自动发现、版本探测与手工路径覆盖，保持 `caller_managed = false`（不逆向或强改 Electron 独占配置），留待 Milestone 3 协议预检与适配。
+  - **Codex `workspace_write` 真实写保护实测**：在临时 Git 仓库中启用 `sandbox="workspace-write"`、`sandboxPolicy={"type":"workspaceWrite","writableRoots":[repoDir]}`、`approvalPolicy="never"` 后，真实 Codex 正常修改目标文件且不触碰基线脏文件，前后 `CaptureVCSSnapshot` 准确返回 `dirty_baseline=true`、`external_changes_possible=true` 与变更文件清单。
+- 真实 Antigravity 对话中消费 `mcpResult` 双通道输出（`content[].text` + `structuredContent`）、工具集裁剪隔离、指定 `model` / `reasoning_effort` 与回传 Codex 只读分析结论的 Milestone 1 真机验收已通过，详见 [validation.md](validation.md)。

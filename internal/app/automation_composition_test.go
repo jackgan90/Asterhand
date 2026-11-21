@@ -18,10 +18,10 @@ func TestBatchKeepsFixedIdentitiesAndNeverReplays(t *testing.T) {
 	p, token := grantTestAutomation(t, a, []string{"read", "edit"}, map[string][]string{"commands": {"*"}})
 	v := automation.BatchSubmit{OnError: "continue"}
 	for i := range 8 {
-		v.Items = append(v.Items, automation.BatchItem{Operation: "commands.create", Arguments: compactResult(automation.CommandInput{Name: "batch_" + strconv.Itoa(i), Graph: apiTestGraph(filepath.Join(t.TempDir(), "missing.ps1"))})})
+		v.Items = append(v.Items, automation.BatchItem{Operation: "commands_create", Arguments: compactResult(automation.CommandInput{Name: "batch_" + strconv.Itoa(i), Graph: apiTestGraph(filepath.Join(t.TempDir(), "missing.ps1"))})})
 	}
 	id := operations.NewID(time.Now())
-	reply := testAutomationCall(a, token, "batches.submit", id, v)
+	reply := testAutomationCall(a, token, "batches_submit", id, v)
 	if reply.Error != nil || reply.Receipt == nil || !reply.Receipt.Accepted {
 		t.Fatal(reply)
 	}
@@ -31,7 +31,7 @@ func TestBatchKeepsFixedIdentitiesAndNeverReplays(t *testing.T) {
 		t.Fatal("lost batch item", len(catalog.Commands))
 	}
 	for range 2 {
-		reply = testAutomationCall(a, token, "batches.submit", id, v)
+		reply = testAutomationCall(a, token, "batches_submit", id, v)
 		if reply.Error != nil {
 			t.Fatal(reply)
 		}
@@ -43,7 +43,7 @@ func TestBatchKeepsFixedIdentitiesAndNeverReplays(t *testing.T) {
 	var refs []string
 	cursor := ""
 	for {
-		reply = testAutomationCall(a, token, "batches.get", "", automation.BatchGet{ID: id, Cursor: cursor})
+		reply = testAutomationCall(a, token, "batches_get", "", automation.BatchGet{ID: id, Cursor: cursor})
 		if reply.Error != nil {
 			t.Fatal(reply)
 		}
@@ -84,7 +84,7 @@ func TestBatchKeepsFixedIdentitiesAndNeverReplays(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.Automation.Registry.Instance = "replacement"
-	reply = testAutomationCall(a, token, "batches.get", "", automation.BatchGet{ID: id})
+	reply = testAutomationCall(a, token, "batches_get", "", automation.BatchGet{ID: id})
 	var page struct {
 		Items []struct {
 			State string `json:"state"`
@@ -101,10 +101,10 @@ func TestBatchPreflightRejectsForbiddenItemBeforeAnyWrite(t *testing.T) {
 	a := n.app
 	_, token := grantTestAutomation(t, a, []string{"read", "edit"}, map[string][]string{"commands": {"*"}})
 	v := automation.BatchSubmit{Items: []automation.BatchItem{
-		{Operation: "commands.create", Arguments: compactResult(automation.CommandInput{Name: "safe", Graph: apiTestGraph(filepath.Join(t.TempDir(), "missing.ps1"))})},
-		{Operation: "node.stop", Arguments: compactResult(automation.NodeStop{Instance: a.Automation.Registry.Instance})},
+		{Operation: "commands_create", Arguments: compactResult(automation.CommandInput{Name: "safe", Graph: apiTestGraph(filepath.Join(t.TempDir(), "missing.ps1"))})},
+		{Operation: "node_stop", Arguments: compactResult(automation.NodeStop{Instance: a.Automation.Registry.Instance})},
 	}}
-	reply := testAutomationCall(a, token, "batches.submit", operations.NewID(time.Now()), v)
+	reply := testAutomationCall(a, token, "batches_submit", operations.NewID(time.Now()), v)
 	catalog, _ := a.Commands.Snapshot()
 	if reply.Error == nil || len(catalog.Commands) != 0 {
 		t.Fatal(reply, catalog)
@@ -117,10 +117,10 @@ func TestMultiReadIsBoundedAndNeverAcceptsWrites(t *testing.T) {
 	_, token := grantTestAutomation(t, a, []string{"read", "execute"}, map[string][]string{"node": {"*"}})
 	v := automation.MultiRead{}
 	for range 99 {
-		v.Items = append(v.Items, automation.BatchItem{Operation: "node.version", Arguments: json.RawMessage(`{}`)})
+		v.Items = append(v.Items, automation.BatchItem{Operation: "node_version", Arguments: json.RawMessage(`{}`)})
 	}
-	v.Items = append(v.Items, automation.BatchItem{Operation: "node.stop", Arguments: compactResult(automation.NodeStop{Instance: a.Automation.Registry.Instance, StopActive: true})})
-	reply := testAutomationCall(a, token, "read.many", "", v)
+	v.Items = append(v.Items, automation.BatchItem{Operation: "node_stop", Arguments: compactResult(automation.NodeStop{Instance: a.Automation.Registry.Instance, StopActive: true})})
+	reply := testAutomationCall(a, token, "read_many", "", v)
 	if reply.Error != nil || a.Stopping() {
 		t.Fatal(reply)
 	}
@@ -137,7 +137,7 @@ func TestDiagnosticAdmissionSurvivesLostJournalFinish(t *testing.T) {
 	p, token := grantTestAutomation(t, a, []string{"read", "execute"}, map[string][]string{"node": {"*"}})
 	id := operations.NewID(time.Now())
 	args := automation.Empty{}
-	identity := operations.Identity{Actor: p.ID, Node: a.Config.Get().NodeID, ID: id, Name: "diagnostics.run", Digest: operations.Hash(args), Target: a.Config.Get().NodeID}
+	identity := operations.Identity{Actor: p.ID, Node: a.Config.Get().NodeID, ID: id, Name: "diagnostics_run", Digest: operations.Hash(args), Target: a.Config.Get().NodeID}
 	if _, _, err := a.Store.Begin(identity, time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -145,11 +145,11 @@ func TestDiagnosticAdmissionSurvivesLostJournalFinish(t *testing.T) {
 		t.Fatal(err)
 	}
 	await(t, "diagnostic finished", func() bool { a.mu.Lock(); defer a.mu.Unlock(); return !a.probeRunning })
-	reply := testAutomationCall(a, token, "diagnostics.run", id, args)
+	reply := testAutomationCall(a, token, "diagnostics_run", id, args)
 	if reply.Error != nil || !reply.Receipt.Accepted || f.probes.Load() != 1 {
 		t.Fatal(reply, f.probes.Load())
 	}
-	reply = testAutomationCall(a, token, "diagnostics.inspect", "", map[string]string{"operation_id": id})
+	reply = testAutomationCall(a, token, "diagnostics_inspect", "", map[string]string{"operation_id": id})
 	if reply.Error != nil {
 		t.Fatal(reply)
 	}

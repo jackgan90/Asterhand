@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackgan90/Asterhand/internal/automation"
 	"github.com/jackgan90/Asterhand/internal/harnesses"
@@ -129,8 +130,14 @@ func (s *Service) ReadResult(turnID, expectedWorkspaceID string, offset, maxByte
 		page.Complete = true
 		return page, nil
 	}
+	if !utf8.RuneStart(full[offset]) {
+		return ResultPage{}, automation.Fail("invalid_cursor", "Cursor offset does not align with a UTF-8 character boundary")
+	}
 	rem := full[offset:]
 	take := clampUTF8Bytes([]byte(rem), maxBytes)
+	if take == 0 && len(rem) > 0 {
+		_, take = utf8.DecodeRuneInString(rem)
+	}
 	page.Text = rem[:take]
 	if offset+take >= len(full) {
 		page.Complete = true
@@ -306,11 +313,30 @@ func (s *Service) RevokeWorkerHarness(harnessID string) {
 	}
 }
 
+// RevokeWorkerWriteHarness aborts only workspace_write turns on harnessID when
+// write permission is disabled while read_only worker collaboration remains on.
+func (s *Service) RevokeWorkerWriteHarness(harnessID string) {
+	reason := "Worker harness workspace_write authorization was disabled"
+	s.mu.Lock()
+	targets := []*runningTurn{}
+	for _, rt := range s.activeTurns {
+		if rt.harnessID == harnessID && rt.accessMode == harnesses.AccessWorkspaceWrite {
+			rt.revoked = true
+			rt.revokeReason = reason
+			targets = append(targets, rt)
+		}
+	}
+	s.mu.Unlock()
+	for _, rt := range targets {
+		rt.signalCancel()
+	}
+}
+
 // OperationLookup supports reconcileAutomationOperation when a crash occurred
 // after a worker/turn record was persisted and before the public receipt finished.
 func (s *Service) OperationLookup(opName, opID string) (any, bool, error) {
 	switch opName {
-	case "workers.create":
+	case "workers_create":
 		w, err := s.store.WorkerByOperationID(opID)
 		if errors.Is(err, ErrNotFound) {
 			return nil, false, nil
@@ -319,7 +345,7 @@ func (s *Service) OperationLookup(opName, opID string) (any, bool, error) {
 			return nil, false, err
 		}
 		return map[string]any{"worker_id": w.ID, "workspace_id": w.WorkspaceID, "alias": w.Alias, "state": w.State}, true, nil
-	case "workers.send":
+	case "workers_send":
 		t, err := s.store.TurnByOperationID(opID)
 		if errors.Is(err, ErrNotFound) {
 			return nil, false, nil

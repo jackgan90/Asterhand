@@ -52,6 +52,22 @@ func (s *Server) Close(ctx context.Context) error {
 func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+	if req.Method == "GET" && req.URL.Path == "/v1/definitions" && req.URL.RawQuery == "" && req.Header.Get("Origin") == "" {
+		token := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
+		p, err := s.Access.Authenticate(token)
+		if err != nil {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(Response{Version: APIVersion, Error: PublicError(err)})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"api_version":     APIVersion,
+			"instance_id":     s.Registry.Instance,
+			"policy_revision": p.PolicyRevision,
+			"definitions":     s.Registry.Definitions(p),
+		})
+		return
+	}
 	if req.Method != "POST" || req.URL.Path != "/v1/call" || req.URL.RawQuery != "" || req.Header.Get("Origin") != "" || req.Header.Get("Content-Type") != "application/json" {
 		http.Error(w, `{"error":{"code":"invalid_request"}}`, http.StatusBadRequest)
 		return

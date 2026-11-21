@@ -28,7 +28,7 @@ func (a *App) deleteCommandBatch(w http.ResponseWriter, r *http.Request) {
 	valid := len(input.Items) > 0 && len(input.Items) <= 32
 	for _, item := range input.Items {
 		valid = valid && wire.ValidID(item.ID) && item.Revision != "" && len(item.Revision) <= 128 &&
-			operations.CheckName(item.Operation, "commands.delete") == nil && !ids[item.ID] && !operationsSeen[item.Operation]
+			operations.CheckName(item.Operation, "commands_delete") == nil && !ids[item.ID] && !operationsSeen[item.Operation]
 		ids[item.ID], operationsSeen[item.Operation] = true, true
 	}
 	if !valid {
@@ -39,7 +39,7 @@ func (a *App) deleteCommandBatch(w http.ResponseWriter, r *http.Request) {
 	for _, item := range input.Items {
 		response := a.Automation.Registry.DispatchHuman(r.Context(), automation.Request{
 			Version: automation.APIVersion, Node: a.Config.Get().NodeID,
-			Operation: "commands.delete", ID: item.Operation,
+			Operation: "commands_delete", ID: item.Operation,
 			Arguments: compactResult(automation.CommandVersion{ID: item.ID, Revision: item.Revision}),
 		})
 		results = append(results, response)

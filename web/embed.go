@@ -6,4 +6,6 @@ import "embed"
 //go:embed command-selection.mjs
 //go:embed tool-settings.mjs
 //go:embed harnesses-settings.mjs
+//go:embed workers-panel.mjs
+//go:embed workers.css
 var Files embed.FS

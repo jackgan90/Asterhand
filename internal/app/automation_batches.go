@@ -27,9 +27,9 @@ type batchState struct {
 }
 
 func (a *App) registerAutomationBatches(r *automation.Registry) {
-	automation.Register(r, automation.Definition{Name: "batches.submit", Description: "Admit up to 32 fixed write items; up to four dispatch concurrently, with per-item receipts and no restart replay", Write: true}, nil, nil, a.automationBatchSubmit)
-	automation.Register(r, automation.Definition{Name: "batches.get", Description: "Read original per-item outcomes; undispatched work is never resumed after a restart", Role: "read", Toolset: automation.ToolsetCore, Control: true}, nil, nil, a.automationBatchGet)
-	automation.Register(r, automation.Definition{Name: "read.many", Description: "Read up to 100 explicitly identified objects with bounded response pages and per-item errors", Role: "read"}, nil, nil, a.automationMultiRead)
+	automation.Register(r, automation.Definition{Name: "batches_submit", Description: "Admit up to 32 fixed write items; up to four dispatch concurrently, with per-item receipts and no restart replay", Write: true}, nil, nil, a.automationBatchSubmit)
+	automation.Register(r, automation.Definition{Name: "batches_get", Description: "Read original per-item outcomes for a batch submitted via batches_submit; undispatched work is never resumed after a restart", Role: "read", Toolset: automation.ToolsetGeneral, Control: true}, nil, nil, a.automationBatchGet)
+	automation.Register(r, automation.Definition{Name: "read_many", Description: "Read up to 100 explicitly identified objects with bounded response pages and per-item errors", Role: "read"}, nil, nil, a.automationMultiRead)
 }
 
 func (a *App) automationBatchSubmit(ctx context.Context, call automation.Call, v automation.BatchSubmit) (automation.Outcome, error) {
@@ -154,7 +154,7 @@ func (a *App) automationBatchGet(ctx context.Context, call automation.Call, v au
 	if err != nil {
 		return automation.Outcome{}, err
 	}
-	if receipt.Name != "batches.submit" {
+	if receipt.Name != "batches_submit" {
 		return automation.Outcome{}, automation.Fail("invalid_parameters", "Identity is not a batch")
 	}
 	state, err := a.Store.AutomationState(receipt.Identity)
@@ -238,7 +238,7 @@ func pageOffset(after string, total int) (int, error) {
 
 func (a *App) automationMultiRead(ctx context.Context, call automation.Call, v automation.MultiRead) (automation.Outcome, error) {
 	if len(v.Items) < 1 || len(v.Items) > 100 {
-		return automation.Outcome{}, automation.Fail("invalid_parameters", "read.many accepts 1-100 items")
+		return automation.Outcome{}, automation.Fail("invalid_parameters", "read_many accepts 1-100 items")
 	}
 	binding := []any{"read-many", call.Principal.ID, v.Items}
 	cursor, err := automation.ParseCursor(v.Cursor, binding)

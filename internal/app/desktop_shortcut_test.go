@@ -124,31 +124,31 @@ func TestDesktopShortcutHTTPAndAutomationEquivalence(t *testing.T) {
 		t.Fatalf("expected .lnk created on disk: %v", err)
 	}
 
-	// Automation settings.get reads the same desktop_shortcut state.
+	// Automation settings_get reads the same desktop_shortcut state.
 	_, token := grantTestAutomation(t, a, []string{"read", "edit"}, map[string][]string{"node": {"*"}})
-	getReply := testAutomationCall(a, token, "settings.get", "", automation.Empty{})
+	getReply := testAutomationCall(a, token, "settings_get", "", automation.Empty{})
 	if getReply.Error != nil {
-		t.Fatalf("settings.get failed: %+v", getReply.Error)
+		t.Fatalf("settings_get failed: %+v", getReply.Error)
 	}
 	var settingsData struct {
 		Shortcut launch.ShortcutStatus `json:"desktop_shortcut"`
 	}
 	_ = json.Unmarshal(compactResult(getReply.Data), &settingsData)
 	if !settingsData.Shortcut.Enabled || settingsData.Shortcut.LastOperation != "web-op-enable-1" {
-		t.Fatalf("settings.get mismatch: %+v", settingsData.Shortcut)
+		t.Fatalf("settings_get mismatch: %+v", settingsData.Shortcut)
 	}
 
-	// Automation settings.desktop_shortcut disables the shortcut with durable receipt.
+	// Automation settings_desktop_shortcut disables the shortcut with durable receipt.
 	offID := operations.NewID(time.Now())
-	offReply := testAutomationCall(a, token, "settings.desktop_shortcut", offID, automation.DesktopShortcut{Enabled: false})
+	offReply := testAutomationCall(a, token, "settings_desktop_shortcut", offID, automation.DesktopShortcut{Enabled: false})
 	if offReply.Error != nil || offReply.Receipt == nil || offReply.Receipt.State != "completed" || !offReply.Receipt.Accepted {
-		t.Fatalf("settings.desktop_shortcut disable failed: %+v", offReply)
+		t.Fatalf("settings_desktop_shortcut disable failed: %+v", offReply)
 	}
 	if _, err := os.Stat(lnkPath); !os.IsNotExist(err) {
 		t.Fatalf("expected .lnk removed via automation, err=%v", err)
 	}
 	// Duplicate operation_id replays cached completed receipt cleanly.
-	replayReply := testAutomationCall(a, token, "settings.desktop_shortcut", offID, automation.DesktopShortcut{Enabled: false})
+	replayReply := testAutomationCall(a, token, "settings_desktop_shortcut", offID, automation.DesktopShortcut{Enabled: false})
 	if replayReply.Error != nil || replayReply.Receipt == nil || replayReply.Receipt.State != "completed" {
 		t.Fatalf("idempotent replay failed: %+v", replayReply)
 	}
@@ -179,7 +179,7 @@ func TestDesktopShortcutHTTPAndAutomationEquivalence(t *testing.T) {
 	}
 
 	autoConflictID := operations.NewID(time.Now())
-	cReply := testAutomationCall(a, token, "settings.desktop_shortcut", autoConflictID, automation.DesktopShortcut{Enabled: true})
+	cReply := testAutomationCall(a, token, "settings_desktop_shortcut", autoConflictID, automation.DesktopShortcut{Enabled: true})
 	if cReply.Error == nil || cReply.Error.Code != "conflict" || cReply.Receipt == nil || cReply.Receipt.State != "rejected" {
 		t.Fatalf("expected automation conflict rejection, got: %+v", cReply)
 	}
@@ -217,7 +217,7 @@ func TestDesktopShortcutAutomationReconcilesInterruptedReceipt(t *testing.T) {
 		Actor:  p.ID,
 		Node:   nodeID,
 		ID:     opID,
-		Name:   "settings.desktop_shortcut",
+		Name:   "settings_desktop_shortcut",
 		Digest: operations.Hash(automation.DesktopShortcut{Enabled: true}),
 		Target: nodeID,
 	}
@@ -236,11 +236,11 @@ func TestDesktopShortcutAutomationReconcilesInterruptedReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reply := testAutomationCall(a, token, "operations.get", "", struct {
+	reply := testAutomationCall(a, token, "operations_get", "", struct {
 		ID string `json:"operation_id"`
 	}{ID: opID})
 	if reply.Error != nil {
-		t.Fatalf("operations.get reconcile failed: %+v", reply.Error)
+		t.Fatalf("operations_get reconcile failed: %+v", reply.Error)
 	}
 	var receipt operations.Receipt
 	_ = json.Unmarshal(compactResult(reply.Data), &receipt)

@@ -1,6 +1,7 @@
 package harnesses
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -8,28 +9,43 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/jackgan90/Asterhand/internal/automation"
 	"github.com/jackgan90/Asterhand/internal/config"
+	"github.com/jackgan90/Asterhand/internal/launch"
 	"github.com/jackgan90/Asterhand/internal/model"
 )
+
+type codexObserveCache struct {
+	exe        string
+	observed   string
+	observedAt time.Time
+}
 
 type Service struct {
 	home       string
 	executable string
-	// Override path for tests; defaults to DefaultAntigravityMCPConfigPath().
+	// Override paths/runners for isolated tests.
 	AntigravityConfigPath string
-	// MaxAccessMode caps allowed worker access mode (M1 defaults to read_only).
-	MaxAccessMode  string
-	OnRevokeWorker func(harnessID string)
-	mu             sync.RWMutex
-	state          State
-	now            func() time.Time
+	ClaudeConfigPath      string
+	CmdRunner             CommandRunner
+	DisableVersionProbe   bool
+	// MaxAccessMode caps allowed worker access mode (defaults to workspace_write in M2).
+	MaxAccessMode       string
+	OnRevokeWorker      func(harnessID string)
+	OnRevokeWorkerWrite func(harnessID string)
+
+	mu           sync.RWMutex
+	state        State
+	now          func() time.Time
+	cacheMu      sync.Mutex
+	versionCache map[string]versionCacheEntry
+	codexObs     codexObserveCache
 }
 
 func Open(home, executable string) (*Service, error) {
@@ -85,6 +101,7 @@ func (s *Service) load() error {
 		}
 		if caps, _ := StaticCapabilities(id); !caps.SupportsWorker {
 			p.CollabWorkerEnabled = false
+			p.AllowWorkspaceWrite = false
 		}
 		st.Harnesses[id] = p
 	}
@@ -108,6 +125,30 @@ func (s *Service) saveLocked() error {
 	}
 	b = append(b, '\n')
 	return config.AtomicFile(s.statePath(), b, 0600)
+}
+
+// mcpSpecForCaller resolves the stable versionless <InstallRoot>\asterhand-mcp.exe
+// entry when running from an installed node, falling back to direct asterhand.exe mcp
+// in development mode.
+func (s *Service) mcpSpecForCaller(callerID string) MCPEntrySpec {
+	spec := MCPEntrySpec{
+		CallerID: callerID,
+		NodeHome: s.home,
+		Command:  s.executable,
+		Args:     []string{"mcp", "--home", s.home, "--caller", callerID},
+	}
+	if s.executable == "" {
+		return spec
+	}
+	if installPath := launch.FindInstallation(s.executable, s.home); installPath != "" {
+		stable := filepath.Join(filepath.Dir(installPath), "asterhand-mcp.exe")
+		if info, err := os.Stat(stable); err == nil && !info.IsDir() {
+			spec.StableCommand = stable
+			spec.Command = stable
+			spec.Args = []string{"--caller", callerID}
+		}
+	}
+	return spec
 }
 
 // AuthenticateCaller maps a revocable managed-harness token to a live Principal
@@ -167,62 +208,126 @@ func (s *Service) Status() StatusView {
 	for k, v := range s.state.Harnesses {
 		policies[k] = v
 	}
-	agPath := s.antigravityConfigPath()
 	s.mu.RUnlock()
 
 	views := make([]HarnessView, 0, len(KnownHarnessIDs()))
 	for _, id := range KnownHarnessIDs() {
-		p := policies[id]
-		caps, _ := StaticCapabilities(id)
-		exe, detected := s.resolveExecutable(id, p.ManualPath)
-		observed := p.LastObservedMCP
-		mcpPath := ""
-		if id == HarnessAntigravity && agPath != "" {
-			mcpPath = agPath
-			if obs, err := ObserveAntigravityMCP(agPath, s.home); err == nil {
-				observed = obs
-			} else {
-				observed = MCPObservedError
-			}
-		} else if observed == "" {
-			observed = MCPObservedNotConfigured
-		}
-		views = append(views, HarnessView{
-			ID:                  id,
-			Capabilities:        caps,
-			Detected:            detected,
-			ExecutablePath:      exe,
-			ManualPath:          p.ManualPath,
-			GeneralToolsEnabled: p.GeneralToolsEnabled,
-			CollabCallerEnabled: p.CollabCallerEnabled,
-			CollabWorkerEnabled: p.CollabWorkerEnabled,
-			CredentialActive:    p.CredentialHash != "",
-			MCPDesired:          p.GeneralToolsEnabled || p.CollabCallerEnabled,
-			MCPObserved:         observed,
-			MCPConfigPath:       mcpPath,
-			LastReconcileError:  p.LastReconcileError,
-		})
+		views = append(views, s.buildHarnessView(id, policies[id]))
 	}
 	return StatusView{Revision: rev, Harnesses: views}
+}
+
+func (s *Service) Get(harnessID string) (HarnessView, bool) {
+	if _, ok := StaticCapabilities(harnessID); !ok {
+		return HarnessView{}, false
+	}
+	s.mu.RLock()
+	p := s.state.Harnesses[harnessID]
+	s.mu.RUnlock()
+	return s.buildHarnessView(harnessID, p), true
+}
+
+func (s *Service) buildHarnessView(id string, p HarnessPolicy) HarnessView {
+	caps, _ := StaticCapabilities(id)
+	exe, detected := s.resolveExecutable(id, p.ManualPath)
+	ver := ""
+	if detected {
+		ver = s.probeVersion(id, exe)
+	}
+	observed, mcpPath := s.observeHarnessMCP(id, p, exe, detected)
+	return HarnessView{
+		ID:                  id,
+		Capabilities:        caps,
+		Detected:            detected,
+		Version:             ver,
+		ExecutablePath:      exe,
+		ManualPath:          p.ManualPath,
+		GeneralToolsEnabled: p.GeneralToolsEnabled,
+		CollabCallerEnabled: p.CollabCallerEnabled,
+		CollabWorkerEnabled: p.CollabWorkerEnabled,
+		AllowWorkspaceWrite: p.AllowWorkspaceWrite,
+		CredentialActive:    p.CredentialHash != "",
+		MCPDesired:          p.GeneralToolsEnabled || p.CollabCallerEnabled,
+		MCPObserved:         observed,
+		MCPConfigPath:       mcpPath,
+		LastReconcileError:  p.LastReconcileError,
+	}
+}
+
+func (s *Service) observeHarnessMCP(id string, p HarnessPolicy, exe string, detected bool) (string, string) {
+	spec := s.mcpSpecForCaller(id)
+	switch id {
+	case HarnessAntigravity:
+		agPath := s.antigravityConfigPath()
+		if agPath == "" {
+			return MCPObservedNotConfigured, ""
+		}
+		if obs, err := ObserveAntigravityMCP(agPath, spec); err == nil {
+			return obs, agPath
+		}
+		return MCPObservedError, agPath
+	case HarnessClaudeCode:
+		clPath := s.claudeConfigPath()
+		if clPath == "" {
+			return MCPObservedNotConfigured, ""
+		}
+		if obs, err := ObserveClaudeMCP(clPath, spec); err == nil {
+			return obs, clPath
+		}
+		return MCPObservedError, clPath
+	case HarnessCodex:
+		cfgPath, _ := DefaultCodexConfigPath()
+		if !detected || exe == "" {
+			if p.LastObservedMCP != "" {
+				return p.LastObservedMCP, cfgPath
+			}
+			return MCPObservedNotConfigured, cfgPath
+		}
+		s.cacheMu.Lock()
+		cached := s.codexObs
+		s.cacheMu.Unlock()
+		if SamePath(cached.exe, exe) && cached.observed != "" && s.now().Sub(cached.observedAt) < 5*time.Second {
+			return cached.observed, cfgPath
+		}
+		obs, err := ObserveCodexMCP(context.Background(), s.runner(), exe, spec)
+		if err != nil {
+			obs = MCPObservedError
+		}
+		s.cacheMu.Lock()
+		s.codexObs = codexObserveCache{exe: exe, observed: obs, observedAt: s.now()}
+		s.cacheMu.Unlock()
+		return obs, cfgPath
+	default:
+		if p.LastObservedMCP != "" {
+			return p.LastObservedMCP, ""
+		}
+		return MCPObservedNotConfigured, ""
+	}
+}
+
+func (s *Service) invalidateCodexObserveCache() {
+	s.cacheMu.Lock()
+	s.codexObs = codexObserveCache{}
+	s.cacheMu.Unlock()
 }
 
 func (s *Service) effectiveMaxAccessMode() string {
 	if AccessModeRank(s.MaxAccessMode) > 0 {
 		return s.MaxAccessMode
 	}
-	return AccessReadOnly
+	return AccessWorkspaceWrite
 }
 
 // ResolveWorkspace validates any local project directory against the built-in
-// sensitive-path denylist, checks access_mode against the node's allowed level,
-// and derives a deterministic per-project workspace identity without manual registration.
+// sensitive-path denylist, checks access_mode against the node's cap, and
+// derives a deterministic per-project workspace identity without manual registration.
 func (s *Service) ResolveWorkspace(rawPath, requestedAccess string) (DelegatedWorkspace, string, error) {
 	if AccessModeRank(requestedAccess) == 0 {
 		return DelegatedWorkspace{}, "", automation.Fail("invalid_parameters", "access_mode must be read_only or workspace_write")
 	}
 	maxMode := s.effectiveMaxAccessMode()
 	if AccessModeRank(requestedAccess) > AccessModeRank(maxMode) {
-		return DelegatedWorkspace{}, "", automation.Fail("unsupported_access_mode", "Requested access_mode is not enabled in this milestone")
+		return DelegatedWorkspace{}, "", automation.Fail("unsupported_access_mode", "Requested access_mode is not enabled on this node")
 	}
 	canon, err := ValidateWorkspacePath(rawPath, s.home)
 	if err != nil {
@@ -262,6 +367,7 @@ type UpdatePolicyInput struct {
 	GeneralToolsEnabled *bool   `json:"general_tools_enabled,omitempty"`
 	CollabCallerEnabled *bool   `json:"collab_caller_enabled,omitempty"`
 	CollabWorkerEnabled *bool   `json:"collab_worker_enabled,omitempty"`
+	AllowWorkspaceWrite *bool   `json:"allow_workspace_write,omitempty"`
 	ManualPath          *string `json:"manual_path,omitempty"`
 	ReconcileMCP        bool    `json:"reconcile_mcp,omitempty"`
 	TakeOverConflict    bool    `json:"take_over_conflict,omitempty"`
@@ -275,6 +381,7 @@ func (s *Service) UpdatePolicy(in UpdatePolicyInput) (StatusView, error) {
 	s.mu.Lock()
 	p := s.state.Harnesses[in.HarnessID]
 	wasWorker := p.CollabWorkerEnabled
+	wasWrite := p.AllowWorkspaceWrite
 	if in.GeneralToolsEnabled != nil {
 		p.GeneralToolsEnabled = *in.GeneralToolsEnabled
 	}
@@ -287,6 +394,13 @@ func (s *Service) UpdatePolicy(in UpdatePolicyInput) (StatusView, error) {
 			return StatusView{}, automation.Fail("unsupported_worker", "This harness cannot act as a managed worker")
 		}
 		p.CollabWorkerEnabled = *in.CollabWorkerEnabled
+	}
+	if in.AllowWorkspaceWrite != nil {
+		if *in.AllowWorkspaceWrite && !caps.SupportsWorker {
+			s.mu.Unlock()
+			return StatusView{}, automation.Fail("unsupported_worker", "This harness cannot act as a managed worker")
+		}
+		p.AllowWorkspaceWrite = *in.AllowWorkspaceWrite
 	}
 	if in.ManualPath != nil {
 		p.ManualPath = strings.TrimSpace(*in.ManualPath)
@@ -307,63 +421,59 @@ func (s *Service) UpdatePolicy(in UpdatePolicyInput) (StatusView, error) {
 		return StatusView{}, err
 	}
 	revokeWorkerCB := s.OnRevokeWorker
-	agPath := s.antigravityConfigPath()
-	exe := s.executable
+	revokeWriteCB := s.OnRevokeWorkerWrite
 	s.mu.Unlock()
 
 	if wasWorker && !p.CollabWorkerEnabled && revokeWorkerCB != nil {
 		revokeWorkerCB(in.HarnessID)
+	} else if wasWrite && !p.AllowWorkspaceWrite && revokeWriteCB != nil {
+		revokeWriteCB(in.HarnessID)
 	}
 
-	if in.ReconcileMCP && in.HarnessID == HarnessAntigravity && agPath != "" && exe != "" {
-		obs, rec, rErr := ReconcileAntigravityMCP(agPath, exe, s.home, mcpDesired, in.TakeOverConflict)
-		s.mu.Lock()
-		cur := s.state.Harnesses[in.HarnessID]
-		cur.LastObservedMCP = obs
-		cur.LastReconcileAt = s.now().UTC()
-		if rErr != nil {
-			cur.LastReconcileError = rErr.Error()
-		} else {
-			cur.LastReconcileError = ""
-			cur.ManagedMCP = rec
-		}
-		s.state.Harnesses[in.HarnessID] = cur
-		_ = s.saveLocked()
-		s.mu.Unlock()
+	if in.ReconcileMCP && caps.CallerManaged && s.executable != "" {
+		s.reconcileHarnessMCP(in.HarnessID, p.ManualPath, mcpDesired, in.TakeOverConflict)
 	}
 
 	return s.Status(), nil
 }
 
-// ReconcileManagedOnStartup refreshes an already-enabled Antigravity managed MCP
-// entry when the node starts from a newly installed version directory, without
-// touching unmanaged conflicting entries or inactive test homes.
-func (s *Service) ReconcileManagedOnStartup() {
-	s.mu.RLock()
-	p := s.state.Harnesses[HarnessAntigravity]
-	mcpDesired := p.GeneralToolsEnabled || p.CollabCallerEnabled
-	agPath := s.antigravityConfigPath()
-	exe := s.executable
-	prevCmd := ""
-	if p.ManagedMCP != nil {
-		prevCmd = p.ManagedMCP.Command
+func (s *Service) reconcileHarnessMCP(harnessID, manualPath string, desired, takeOver bool) {
+	spec := s.mcpSpecForCaller(harnessID)
+	var (
+		obs  string
+		rec  *ManagedMCPRecord
+		rErr error
+	)
+	switch harnessID {
+	case HarnessAntigravity:
+		agPath := s.antigravityConfigPath()
+		if agPath == "" {
+			return
+		}
+		obs, rec, rErr = ReconcileAntigravityMCP(agPath, spec, desired, takeOver)
+	case HarnessCodex:
+		exe, ok := s.resolveExecutable(HarnessCodex, manualPath)
+		if !ok {
+			obs, rErr = MCPObservedError, errors.New("codex executable not found")
+		} else {
+			obs, rec, rErr = ReconcileCodexMCP(context.Background(), s.runner(), exe, spec, desired, takeOver)
+		}
+		s.invalidateCodexObserveCache()
+	case HarnessClaudeCode:
+		clPath := s.claudeConfigPath()
+		exe, ok := s.resolveExecutable(HarnessClaudeCode, manualPath)
+		if !ok {
+			obs, rErr = MCPObservedError, errors.New("claude executable not found")
+		} else {
+			obs, rec, rErr = ReconcileClaudeMCP(context.Background(), s.runner(), exe, clPath, spec, desired, takeOver)
+		}
+	default:
+		return
 	}
-	s.mu.RUnlock()
 
-	if !mcpDesired || agPath == "" || exe == "" {
-		return
-	}
-	obs, err := ObserveAntigravityMCP(agPath, s.home)
-	if err == nil && obs == MCPObservedRegistered && SamePath(prevCmd, exe) {
-		return
-	}
-	if err == nil && obs == MCPObservedConflict {
-		return
-	}
-	newObs, rec, rErr := ReconcileAntigravityMCP(agPath, exe, s.home, true, false)
 	s.mu.Lock()
-	cur := s.state.Harnesses[HarnessAntigravity]
-	cur.LastObservedMCP = newObs
+	cur := s.state.Harnesses[harnessID]
+	cur.LastObservedMCP = obs
 	cur.LastReconcileAt = s.now().UTC()
 	if rErr != nil {
 		cur.LastReconcileError = rErr.Error()
@@ -371,9 +481,46 @@ func (s *Service) ReconcileManagedOnStartup() {
 		cur.LastReconcileError = ""
 		cur.ManagedMCP = rec
 	}
-	s.state.Harnesses[HarnessAntigravity] = cur
+	s.state.Harnesses[harnessID] = cur
 	_ = s.saveLocked()
 	s.mu.Unlock()
+}
+
+// ReconcileManagedOnStartup refreshes already-enabled managed MCP entries when
+// the node starts (e.g. after upgrading from versioned asterhand.exe to stable
+// asterhand-mcp.exe), without touching unmanaged conflicting entries or disabled harnesses.
+func (s *Service) ReconcileManagedOnStartup() {
+	if s.executable == "" {
+		return
+	}
+	for _, id := range KnownHarnessIDs() {
+		caps, ok := StaticCapabilities(id)
+		if !ok || !caps.CallerManaged {
+			continue
+		}
+		s.mu.RLock()
+		p := s.state.Harnesses[id]
+		s.mu.RUnlock()
+		mcpDesired := p.GeneralToolsEnabled || p.CollabCallerEnabled
+		if !mcpDesired {
+			continue
+		}
+		spec := s.mcpSpecForCaller(id)
+		exe, detected := s.resolveExecutable(id, p.ManualPath)
+		if (id == HarnessCodex || id == HarnessClaudeCode) && !detected {
+			continue
+		}
+		obs, _ := s.observeHarnessMCP(id, p, exe, detected)
+		if obs == MCPObservedConflict {
+			continue
+		}
+		if obs == MCPObservedRegistered && p.ManagedMCP != nil &&
+			SamePath(p.ManagedMCP.Command, spec.Command) &&
+			slices.Equal(p.ManagedMCP.Args, spec.Args) {
+			continue
+		}
+		s.reconcileHarnessMCP(id, p.ManualPath, true, false)
+	}
 }
 
 // RevokeCallerCredential immediately invalidates the harness's caller token
@@ -437,6 +584,25 @@ func (s *Service) IsWorkerEnabled(harnessID string) (bool, string) {
 	return true, exe
 }
 
+// IsWorkerAccessEnabled checks both worker authorization and per-harness
+// workspace_write opt-in, returning the resolved executable path when allowed.
+func (s *Service) IsWorkerAccessEnabled(harnessID, accessMode string) (string, error) {
+	s.mu.RLock()
+	p, ok := s.state.Harnesses[harnessID]
+	s.mu.RUnlock()
+	if !ok || !p.CollabWorkerEnabled {
+		return "", automation.Fail("forbidden", "Target harness worker authorization is disabled")
+	}
+	if accessMode == AccessWorkspaceWrite && !p.AllowWorkspaceWrite {
+		return "", automation.Fail("forbidden", "Workspace write mode is not enabled for this harness")
+	}
+	exe, found := s.resolveExecutable(harnessID, p.ManualPath)
+	if !found {
+		return "", nil
+	}
+	return exe, nil
+}
+
 func (s *Service) issueCredentialLocked(p *HarnessPolicy) error {
 	var raw [32]byte
 	if _, err := rand.Read(raw[:]); err != nil {
@@ -473,23 +639,13 @@ func (s *Service) antigravityConfigPath() string {
 	return p
 }
 
-func (s *Service) resolveExecutable(harnessID, manual string) (string, bool) {
-	if manual != "" {
-		if info, err := os.Stat(manual); err == nil && !info.IsDir() {
-			return manual, true
-		}
-		return manual, false
+func (s *Service) claudeConfigPath() string {
+	if s.ClaudeConfigPath != "" {
+		return s.ClaudeConfigPath
 	}
-	candidates := map[string][]string{
-		HarnessAntigravity: {"agy.exe", "agy"},
-		HarnessCodex:       {"codex.exe", "codex.cmd", "codex"},
-		HarnessClaudeCode:  {"claude.exe", "claude.cmd", "claude"},
-		HarnessDeepSeek:    {"dsh.exe", "dsh.cmd", "dsh"},
-	}[harnessID]
-	for _, name := range candidates {
-		if p, err := exec.LookPath(name); err == nil {
-			return p, true
-		}
+	p, err := DefaultClaudeConfigPath()
+	if err != nil {
+		return ""
 	}
-	return "", false
+	return p
 }

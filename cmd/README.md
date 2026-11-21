@@ -2,6 +2,8 @@ asterhand 提供 setup/start/open/status/doctor/repair/version。入口默认启
 
 `asterhand-launcher` 构建为 Windows GUI 程序 AsterhandLauncher.exe，安装于固定程序根目录，读取同目录 installation.json 启动当前版本；`--no-browser` 仅启动后台节点，`--quiet` 用于脚本调用，错误仍追加 launcher.log 并返回非零退出码。入口完成健康检查后退出，托盘由节点进程拥有。
 
+`asterhand-mcp` 构建为 Windows 纯控制台程序 `asterhand-mcp.exe`，与 `AsterhandLauncher.exe` 同级安装于固定程序根目录；启动时复用 `internal/launch.ReadInstallation` 校验同目录 `installation.json` 的 `Executable` 与 `Data`，未显式传 `--home` 时自动补齐 `--home <Installation.Data>` 并原样继承 stdio 与退出码转发至当前活动版本 `asterhand.exe mcp`（失败时仅写 stderr，不污染 MCP stdout）。
+
 `start` / `setup` 取得数据目录锁后初始化；Windows 交互会话显示托盘，Ctrl+C、托盘和 Web 停止共享收尾。启动 stdout 只打印无凭据的本机地址，重新登录使用 `open --home <数据目录>` 或托盘。`open` / `status` 只读检查运行记录、节点身份与健康，不初始化新配置。桌面入口细节见 [安装设计](../docs/installation/design.md)。
 
 `bundle-check --directory <包目录>` 是不读取节点数据或凭据的只读包诊断，按清单逐一检查目标。

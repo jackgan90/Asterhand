@@ -55,3 +55,41 @@ export function noticeView(element, clock = globalThis) {
   }
   return {show, stop};
 }
+
+const trappedDialogs = new WeakSet();
+
+function canScrollWithinDialog(target, dlg, deltaY, deltaX) {
+  let el = target;
+  while (el) {
+    const isDialog = el === dlg;
+    const style = typeof getComputedStyle === "function" ? getComputedStyle(el) : null;
+    const ovY = style ? style.overflowY : (isDialog ? "hidden" : "auto");
+    const ovX = style ? style.overflowX : (isDialog ? "hidden" : "auto");
+    if (deltaY !== 0 && (ovY === "auto" || ovY === "scroll") && el.scrollHeight > el.clientHeight + 1) {
+      if ((deltaY < 0 && el.scrollTop > 0) || (deltaY > 0 && el.scrollTop + el.clientHeight < el.scrollHeight - 1)) {
+        return true;
+      }
+    }
+    if (deltaX !== 0 && (ovX === "auto" || ovX === "scroll") && el.scrollWidth > el.clientWidth + 1) {
+      if ((deltaX < 0 && el.scrollLeft > 0) || (deltaX > 0 && el.scrollLeft + el.clientWidth < el.scrollWidth - 1)) {
+        return true;
+      }
+    }
+    if (isDialog) break;
+    el = el.parentElement;
+  }
+  return false;
+}
+
+// Prevent wheel scroll chaining from any open modal dialog into the outer Web page
+// while keeping Ctrl+wheel zoom (e.g. script graph canvas) and inner scrollbars working.
+export function trapDialogWheel(dlg, listen) {
+  if (!dlg || trappedDialogs.has(dlg)) return;
+  trappedDialogs.add(dlg);
+  listen(dlg, "wheel", (e) => {
+    if (e.ctrlKey) return;
+    if (!canScrollWithinDialog(e.target, dlg, e.deltaY || 0, e.deltaX || 0)) {
+      e.preventDefault();
+    }
+  }, {passive: false});
+}

@@ -26,10 +26,10 @@ func (a *App) automationHumanCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch input.Name {
-	case "commands.create", "commands.patch", "settings.patch", "tasks.answer":
-	case "workspaces.get", "workspace_files.list", "workspace_files.search", "workspace_files.read",
-		"workspace_versions.list", "workspace_versions.get", "workspace_versions.restore", "turn_activities.list", "turn_activities.get",
-		"workspace_operations.get", "workspace_operations.resolve", "artifacts.list", "artifacts.get", "artifacts.read":
+	case "commands_create", "commands_patch", "settings_patch", "tasks_answer":
+	case "workspaces_get", "workspace_files_list", "workspace_files_search", "workspace_files_read",
+		"workspace_versions_list", "workspace_versions_get", "workspace_versions_restore", "turn_activities_list", "turn_activities_get",
+		"workspace_operations_get", "workspace_operations_resolve", "artifacts_list", "artifacts_get", "artifacts_read":
 	default:
 		a.fail(w, r, 403, automation.Fail("forbidden", "Operation is not part of the human editor facade"))
 		return

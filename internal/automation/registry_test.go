@@ -31,13 +31,13 @@ func TestDispatchReplayScopesAndCancellation(t *testing.T) {
 		Revision string `json:"revision"`
 	}
 	calls := 0
-	automation.Register(r, automation.Definition{Name: "commands.run", Role: "execute", Write: true}, func(a arguments) string { return a.ID },
+	automation.Register(r, automation.Definition{Name: "commands_run", Role: "execute", Write: true}, func(a arguments) string { return a.ID },
 		func(p automation.Principal, a arguments) error { return p.Require("commands", a.ID) },
 		func(ctx context.Context, c automation.Call, a arguments) (automation.Outcome, error) {
 			calls++
 			return automation.Outcome{Accepted: true, Summary: map[string]string{"run_id": "first"}}, nil
 		})
-	req := automation.Request{Version: "1", Node: "node", Operation: "commands.run", ID: operations.NewID(time.Now()), Arguments: json.RawMessage(`{"command_id":"one","revision":"before"}`)}
+	req := automation.Request{Version: "1", Node: "node", Operation: "commands_run", ID: operations.NewID(time.Now()), Arguments: json.RawMessage(`{"command_id":"one","revision":"before"}`)}
 	first := r.Dispatch(context.Background(), "token", req)
 	if first.Error != nil || !first.Receipt.Accepted {
 		t.Fatal(first)

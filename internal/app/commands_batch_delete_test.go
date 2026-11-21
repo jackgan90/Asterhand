@@ -104,11 +104,11 @@ func TestCommandBatchDeletePartialResultsReplayAndScripts(t *testing.T) {
 	}
 	// The public entry uses the identical object revision and domain deletion.
 	_, token := grantTestAutomation(t, n.app, []string{"read", "edit"}, map[string][]string{"commands": {"*"}})
-	bad := testAutomationCall(n.app, token, "commands.delete", operations.NewID(time.Now()), automation.CommandVersion{ID: stale.ID, Revision: stale.Revision})
+	bad := testAutomationCall(n.app, token, "commands_delete", operations.NewID(time.Now()), automation.CommandVersion{ID: stale.ID, Revision: stale.Revision})
 	if bad.Error == nil || bad.Error.Code != "conflict" {
 		t.Fatal(bad)
 	}
-	good := testAutomationCall(n.app, token, "commands.delete", operations.NewID(time.Now()), automation.CommandVersion{ID: stale.ID, Revision: catalog.Commands[0].Revision})
+	good := testAutomationCall(n.app, token, "commands_delete", operations.NewID(time.Now()), automation.CommandVersion{ID: stale.ID, Revision: catalog.Commands[0].Revision})
 	if good.Error != nil || good.Receipt.State != "completed" {
 		t.Fatal(good)
 	}
@@ -139,7 +139,7 @@ func TestCommandBatchDeletePreflightAndAuthentication(t *testing.T) {
 		t.Fatal("invalid batch had side effects", err)
 	}
 	_, token := grantTestAutomation(t, n.app, []string{"read", "edit"}, map[string][]string{"commands": {"unrelated"}})
-	denied := testAutomationCall(n.app, token, "batches.submit", operations.NewID(time.Now()), automation.BatchSubmit{Items: []automation.BatchItem{{Operation: "commands.delete", Arguments: compactResult(automation.CommandVersion{ID: item.ID, Revision: item.Revision})}}})
+	denied := testAutomationCall(n.app, token, "batches_submit", operations.NewID(time.Now()), automation.BatchSubmit{Items: []automation.BatchItem{{Operation: "commands_delete", Arguments: compactResult(automation.CommandVersion{ID: item.ID, Revision: item.Revision})}}})
 	if denied.Error == nil || denied.Error.Code != "forbidden" {
 		t.Fatal(denied)
 	}

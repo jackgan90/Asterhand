@@ -19,7 +19,7 @@ func TestAutomationRemoteTaskAnswerUsesOriginalOutboxAndActor(t *testing.T) {
 	p, token := grantTestAutomation(t, a.app, []string{"read", "execute"}, map[string][]string{"projects": {b.cfg.Get().NodeID + ":workspace"}})
 	id := operations.NewID(time.Now())
 	input := automation.TaskSubmit{Target: b.cfg.Get().NodeID, Project: "workspace", Goal: "ask then write"}
-	reply := testAutomationCall(a.app, token, "tasks.submit", id, input)
+	reply := testAutomationCall(a.app, token, "tasks_submit", id, input)
 	if reply.Error != nil {
 		t.Fatal(reply)
 	}
@@ -36,7 +36,7 @@ func TestAutomationRemoteTaskAnswerUsesOriginalOutboxAndActor(t *testing.T) {
 	answer := automation.TaskAnswer{Task: target, Attempt: question.Attempt, Interaction: question.ID, Answer: "agent answer"}
 	answerID := operations.NewID(time.Now())
 	for range 2 {
-		reply = testAutomationCall(a.app, token, "tasks.answer", answerID, answer)
+		reply = testAutomationCall(a.app, token, "tasks_answer", answerID, answer)
 		if reply.Error != nil {
 			t.Fatal(reply)
 		}
@@ -50,7 +50,7 @@ func TestAutomationRemoteTaskAnswerUsesOriginalOutboxAndActor(t *testing.T) {
 	if err = a.app.Store.List("answer-outbox", &answers); err != nil || len(answers) != 1 || answers[0].Actor != "automation:"+p.ID {
 		t.Fatal(answers, err)
 	}
-	reply = testAutomationCall(a.app, token, "tasks.events", "", automation.TaskEvents{Task: target})
+	reply = testAutomationCall(a.app, token, "tasks_events", "", automation.TaskEvents{Task: target})
 	if reply.Error != nil {
 		t.Fatal(reply)
 	}
@@ -63,7 +63,7 @@ func TestAutomationRemoteTaskAnswerUsesOriginalOutboxAndActor(t *testing.T) {
 		t.Fatal(reply, err)
 	}
 	target.Target = a.cfg.Get().NodeID
-	if reply = testAutomationCall(a.app, token, "tasks.get", "", automation.TaskGet{Task: target}); reply.Error == nil {
+	if reply = testAutomationCall(a.app, token, "tasks_get", "", automation.TaskGet{Task: target}); reply.Error == nil {
 		t.Fatal("target scope substituted")
 	}
 }

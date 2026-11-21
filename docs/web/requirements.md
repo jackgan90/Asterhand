@@ -144,13 +144,13 @@ WEB-CHAT-09—12 及失焦策略调整的实施状态、详细验收标准见[�
 
 WEB-TOOLS-01：日常界面面向普通用户，不提供独立“助手文件”入口或目录、搜索、产物管理面板；相关文件查询和下载能力保留在公共 CLI/MCP 接口。WEB-TOOLS-02：文件版本、恢复和未知操作核对继续由共享服务提供，保留修订校验、操作身份与恢复前快照；这些低频维护操作不进入常用设置。WEB-TOOLS-03：聊天按发生顺序交替显示文字、有界工具调用与模型声明的进度，每条工具调用以紧凑同行布局（最多两行）同时展示工具名、由命令定义声明的关键目标摘要（如目标目录、文件路径、检索词或记忆片段，排除大体积正文或编辑前后文本，`progress_card` 不重复拼摘要）与本地化状态，工具状态原位更新，不产生空助手气泡或独立尾部工具列表；保留失败、unknown 和部分修改，停止不撤销文件；工具会话能够正常向前翻页读到最初消息。WEB-TOOLS-04：在“设置 → 助手”只提供“允许助手调用工具”开关，人工切换后立即保存，后续轮次使用新权限；忙时说明等待或停止后再试，失败显示实际状态，不输出内部原因码。详见[能力设计](../assistant/runtime-capabilities.md)。
 
-## Coding Harness 托管与协作观测（Milestone 1 已实现最小设置入口，Milestone 2—4 规划中）
+## Coding Harness 托管与协作观测（Milestone 1—2 已实现并通过本机用户验收，Milestone 3—4 规划中）
 
 以下需求对应[多 Coding Harness 中介计划](../development/features/multi-harness-broker/plan.md)，所有运行期可见文案与错误均纳入统一中英国际化词表：
 
 | ID | 要求 |
 |---|---|
-| WEB-HARNESS-01 | Milestone 1 在 Web「设置 → Coding Harness」提供免逐项目登记的精简设置入口（控制当前已接入的 Antigravity 与 Codex 权限开关、展示安装状态与路径、按需提示外部配置冲突/漂移并提供接管/重新接入修复入口，以及活跃/待核对轮次停止与核对关闭）；Milestone 2 扩展四家自动发现、路径覆盖与更多 Harness 的接入管理 |
-| WEB-HARNESS-02 | 每个已接入的 Harness 按实际支持的能力呈现清晰权限开关（允许使用 Asterhand 通用能力、允许调用其他 Harness、允许被其他 Harness 调用），不展示无实际生效能力的开关或内部凭据/MCP 噪音；静态不支持被控的 Harness（如 Antigravity）清晰标注不支持被调用；外部配置冲突时按需提示并仅在人工确认后接管 |
-| WEB-HARNESS-03 | 提供独立的 Coding Workers 观测视图（Milestone 2），展示活跃与历史 Worker 的所属项目目录、逻辑别名、所属 Harness、访问档位、运行状态、实时日志与一键停止/强杀 |
+| WEB-HARNESS-01 | 在 Web「设置 → Coding Harness」提供免逐项目登记的精简设置入口，自动发现四家本机 Harness（Antigravity、Codex、Claude Code、DeepSeek Harness）并展示安装状态、版本与路径，支持按需展开手工路径覆盖、控制权限开关（含 Codex「允许修改项目文件」受控写入开关）、按需提示外部配置冲突/漂移并提供接管/重新接入修复入口，以及活跃/待核对轮次停止与核对关闭 |
+| WEB-HARNESS-02 | 每个 Harness 按实际支持的能力呈现清晰权限开关（允许使用 Asterhand 通用能力、允许调用其他 Harness、允许被其他 Harness 调用、允许修改项目文件），不展示无实际生效能力的开关或内部凭据/MCP 噪音；静态不支持被控或尚未接入的 Harness 清晰标注边界；外部配置冲突时按需提示并仅在人工确认后接管 |
+| WEB-HARNESS-03 | 在顶栏提供独立的「Coding Workers」观测面板（Milestone 2 已实现），展示活跃与已归档 Worker 的所属项目目录、逻辑别名、所属 Harness、访问档位、运行状态、工作树变更快照、结果正文预览、实时结构化日志以及一键停止/对账/人工关闭/归档操作 |
 | WEB-HARNESS-04 | 后续在设置页支持预设常用 Worker 角色模板（Milestone 3），并在桌面通知/原位卡片承接被控 Harness 的高危权限人工确认（Milestone 4） |

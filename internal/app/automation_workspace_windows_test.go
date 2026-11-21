@@ -43,7 +43,7 @@ func TestAutomationWorkspaceSharesVersionsScopeAndReceipts(t *testing.T) {
 	_, token := grantTestAutomation(t, a, []string{"read", "edit"}, map[string][]string{"workspaces": {files.ID()}, "conversations": {"*"}})
 	args := automation.WorkspaceMutate{Workspace: files.ID(), Policy: "policy", Mutations: []workspace.Mutation{{Action: "write", Path: "data.txt", Expected: workspace.MissingRevision, Content: strings.Repeat("中<", 20000)}}}
 	id := operations.NewID(time.Now())
-	reply := testAutomationCall(a, token, "workspace_files.mutate", id, args)
+	reply := testAutomationCall(a, token, "workspace_files_mutate", id, args)
 	if reply.Error != nil {
 		t.Fatal(reply.Error)
 	}
@@ -53,7 +53,7 @@ func TestAutomationWorkspaceSharesVersionsScopeAndReceipts(t *testing.T) {
 		t.Fatal(created)
 	}
 	for range 2 {
-		if result := testAutomationCall(a, token, "workspace_files.mutate", id, args); result.Error != nil {
+		if result := testAutomationCall(a, token, "workspace_files_mutate", id, args); result.Error != nil {
 			t.Fatal(result.Error)
 		}
 	}
@@ -61,7 +61,7 @@ func TestAutomationWorkspaceSharesVersionsScopeAndReceipts(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("replayed mutation: %d", len(items))
 	}
-	read := testAutomationCall(a, token, "workspace_files.read", "", automation.WorkspaceRead{Workspace: files.ID(), Path: "data.txt"})
+	read := testAutomationCall(a, token, "workspace_files_read", "", automation.WorkspaceRead{Workspace: files.ID(), Path: "data.txt"})
 	if read.Error != nil || len(compactResult(read)) > automation.MaxResponse {
 		t.Fatal("unbounded or failed read", read.Error)
 	}
@@ -73,23 +73,23 @@ func TestAutomationWorkspaceSharesVersionsScopeAndReceipts(t *testing.T) {
 	if _, err = files.Mutate("human-edit", workspace.Scope{Policy: "policy"}, []workspace.Mutation{{Action: "write", Path: "data.txt", Expected: fragment.Revision, Content: "human"}}); err != nil {
 		t.Fatal(err)
 	}
-	stale := testAutomationCall(a, token, "workspace_versions.restore", operations.NewID(time.Now()), automation.WorkspaceRestore{Workspace: files.ID(), Policy: "policy", Version: created.ID, Path: "data.txt", Revision: fragment.Revision})
+	stale := testAutomationCall(a, token, "workspace_versions_restore", operations.NewID(time.Now()), automation.WorkspaceRestore{Workspace: files.ID(), Policy: "policy", Version: created.ID, Path: "data.txt", Revision: fragment.Revision})
 	if stale.Error == nil || stale.Error.Code != "revision_conflict" {
 		t.Fatalf("stale restore %+v", stale)
 	}
 	if err = files.AcquireTurn("native-turn", "policy"); err != nil {
 		t.Fatal(err)
 	}
-	busy := testAutomationCall(a, token, "workspace_files.mutate", operations.NewID(time.Now()), args)
+	busy := testAutomationCall(a, token, "workspace_files_mutate", operations.NewID(time.Now()), args)
 	if busy.Error == nil || busy.Error.Code != "busy" {
 		t.Fatal("native lease was bypassed", busy)
 	}
 	files.ReleaseTurn("native-turn", true)
 	_, other := grantTestAutomation(t, a, []string{"read", "edit"}, map[string][]string{"workspaces": {"different"}})
-	if testAutomationCall(a, other, "workspace_files.read", "", automation.WorkspaceRead{Workspace: files.ID(), Path: "data.txt"}).Error == nil {
+	if testAutomationCall(a, other, "workspace_files_read", "", automation.WorkspaceRead{Workspace: files.ID(), Path: "data.txt"}).Error == nil {
 		t.Fatal("scope leaked")
 	}
-	if testAutomationCall(a, token, "workspace_files.read", "", automation.WorkspaceRead{Workspace: files.ID(), Path: "../outside"}).Error == nil {
+	if testAutomationCall(a, token, "workspace_files_read", "", automation.WorkspaceRead{Workspace: files.ID(), Path: "../outside"}).Error == nil {
 		t.Fatal("path escaped")
 	}
 	data, err := os.ReadFile(filepath.Join(files.Root(), "data.txt"))

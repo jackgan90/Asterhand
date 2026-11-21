@@ -14,6 +14,35 @@ import (
 	"github.com/jackgan90/Asterhand/internal/localcommands"
 )
 
+// OptionalInt distinguishes an omitted JSON integer from an explicit 0 or
+// negative value while still presenting a clean {"type":"integer"} schema.
+type OptionalInt struct {
+	Set   bool
+	Value int
+}
+
+func Int(v int) OptionalInt { return OptionalInt{Set: true, Value: v} }
+
+func (o OptionalInt) IsZero() bool { return !o.Set }
+
+func (o OptionalInt) MarshalJSON() ([]byte, error) {
+	return json.Marshal(o.Value)
+}
+
+func (o *OptionalInt) UnmarshalJSON(b []byte) error {
+	trimmed := bytes.TrimSpace(b)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return Fail("invalid_parameters", "Value cannot be null")
+	}
+	var n int
+	if err := json.Unmarshal(trimmed, &n); err != nil {
+		return Fail("invalid_parameters", "Expected an integer")
+	}
+	o.Set = true
+	o.Value = n
+	return nil
+}
+
 // Decode rejects unknown fields, trailing JSON, duplicate keys, invalid Unicode
 // and missing required fields, identically for CLI, MCP and the local transport.
 func Decode[T any](raw json.RawMessage) (T, error) {
@@ -53,6 +82,9 @@ func requiredFields(value any, typ reflect.Type, field string) error {
 	}
 	if value == nil {
 		return &Error{Code: "invalid_parameters", Message: "Value cannot be null", Field: field}
+	}
+	if typ == reflect.TypeFor[OptionalInt]() {
+		return nil
 	}
 	if typ.Kind() == reflect.Struct {
 		obj, ok := value.(map[string]any)
@@ -114,6 +146,9 @@ func typeSchema(typ reflect.Type) map[string]any {
 	if typ == reflect.TypeFor[localcommands.NotificationSetting]() {
 		return map[string]any{"type": "boolean"}
 	}
+	if typ == reflect.TypeFor[OptionalInt]() {
+		return map[string]any{"type": "integer"}
+	}
 	if typ == reflect.TypeFor[[]byte]() {
 		return map[string]any{"type": "string", "contentEncoding": "base64"}
 	}
@@ -148,6 +183,10 @@ func typeSchema(typ reflect.Type) map[string]any {
 			props[name] = typeSchema(f.Type)
 			if description := f.Tag.Get("description"); description != "" {
 				props[name].(map[string]any)["description"] = description
+			}
+			if enumTag := f.Tag.Get("enum"); enumTag != "" {
+				values := strings.Split(enumTag, ",")
+				props[name].(map[string]any)["enum"] = values
 			}
 			if !optional {
 				required = append(required, name)

@@ -19,8 +19,8 @@ type Command struct {
 	Graph              *ScriptGraph        `json:"graph,omitempty" description:"Static execution DAG owned by this command"`
 	AllowConcurrent    bool                `json:"allow_concurrent" description:"False restricts the command to one active run; true allows up to 8 active runs for this command (32 active runs node-wide, sharing 8 script execution slots)"`
 	TimeoutSeconds     *int64              `json:"timeout_seconds,omitempty" description:"Optional whole-graph timeout in seconds (1..9223372036, or null for no timeout; includes dependency and slot wait time)"`
-	ID                 string              `json:"id" description:"Stable command ID matching ^[a-zA-Z0-9_-]{16,64}$ (empty string on unsaved commands.validate output)"`
-	Revision           string              `json:"revision" description:"Current command revision matching ^[a-zA-Z0-9_-]{16,64}$ (empty string on unsaved commands.validate output)"`
+	ID                 string              `json:"id" description:"Stable command ID matching ^[a-zA-Z0-9_-]{16,64}$ (empty string on unsaved commands_validate output)"`
+	Revision           string              `json:"revision" description:"Current command revision matching ^[a-zA-Z0-9_-]{16,64}$ (empty string on unsaved commands_validate output)"`
 	Name               string              `json:"name" description:"Primary ASCII command name matching ^[A-Za-z][A-Za-z0-9_-]{0,63}$; case-insensitively unique across all command names and aliases"`
 	Aliases            []string            `json:"aliases" description:"0..16 aliases (<=128 UTF-8 bytes each, no control chars, no leading '/'); case-insensitively unique across all commands"`
 	Description        string              `json:"description" description:"Command description (<=512 UTF-8 bytes, no control chars)"`

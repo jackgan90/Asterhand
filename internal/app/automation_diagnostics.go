@@ -13,7 +13,7 @@ func (a *App) registerAutomationDiagnostics(r *automation.Registry) {
 	type inspect struct {
 		ID string `json:"operation_id,omitempty"`
 	}
-	automation.Register(r, automation.Definition{Name: "diagnostics.inspect", Description: "Read current model readiness or the original diagnostic result without a model call", Role: "read"}, nil, func(p automation.Principal, v inspect) error { return p.Require("node", r.Node) },
+	automation.Register(r, automation.Definition{Name: "diagnostics_inspect", Description: "Read current model readiness or the original diagnostic result without a model call", Role: "read"}, nil, func(p automation.Principal, v inspect) error { return p.Require("node", r.Node) },
 		func(ctx context.Context, call automation.Call, v inspect) (automation.Outcome, error) {
 			if v.ID == "" {
 				data := a.probeSnapshot("en-US")
@@ -25,7 +25,7 @@ func (a *App) registerAutomationDiagnostics(r *automation.Registry) {
 			if err != nil {
 				return automation.Outcome{}, err
 			}
-			if receipt.Name != "diagnostics.run" {
+			if receipt.Name != "diagnostics_run" {
 				return automation.Outcome{}, automation.Fail("invalid_parameters", "This identity is not a diagnostic")
 			}
 			state, err := a.Store.AutomationState(receipt.Identity)
@@ -42,7 +42,7 @@ func (a *App) registerAutomationDiagnostics(r *automation.Registry) {
 			data["operation_id"] = v.ID
 			return automation.Outcome{Data: data}, nil
 		})
-	automation.Register(r, automation.Definition{Name: "diagnostics.run", Description: "Explicitly run the existing model/tool diagnostic; consumes API quota", Role: "execute", Write: true}, func(v automation.Empty) string { return r.Node }, func(p automation.Principal, v automation.Empty) error { return p.Require("node", r.Node) },
+	automation.Register(r, automation.Definition{Name: "diagnostics_run", Description: "Explicitly run the existing model/tool diagnostic; consumes API quota", Role: "execute", Write: true}, func(v automation.Empty) string { return r.Node }, func(p automation.Principal, v automation.Empty) error { return p.Require("node", r.Node) },
 		func(ctx context.Context, call automation.Call, v automation.Empty) (automation.Outcome, error) {
 			err := a.startProbe(&call.Identity, call.Check)
 			ref := map[string]string{"operation_id": call.Identity.ID, "state": "running"}
@@ -52,7 +52,7 @@ func (a *App) registerAutomationDiagnostics(r *automation.Registry) {
 		View    string `json:"view"`
 		Command string `json:"command_id"`
 	}
-	automation.Register(r, automation.Definition{Name: "desktop.open", Description: "Explicitly open the existing command settings or logs window on the local desktop", Role: "execute", Write: true}, func(v open) string { return v.Command }, func(p automation.Principal, v open) error { return p.Require("commands", v.Command) },
+	automation.Register(r, automation.Definition{Name: "desktop_open", Description: "Explicitly open the existing command settings or logs window on the local desktop", Role: "execute", Write: true}, func(v open) string { return v.Command }, func(p automation.Principal, v open) error { return p.Require("commands", v.Command) },
 		func(ctx context.Context, call automation.Call, v open) (automation.Outcome, error) {
 			if runtime.GOOS != "windows" || !a.Input.Status().Supported {
 				return automation.Outcome{}, automation.Fail("desktop_unavailable", "An interactive Windows desktop is required")

@@ -81,7 +81,7 @@ func (a *App) liveGet(ctx context.Context, p automation.Principal, id string) (l
 	var s liveSnapshot
 	page, key, ok := strings.Cut(id, ":")
 	if !ok || key == "" {
-		return s, automation.Fail("invalid_parameters", "Use the editor ID returned by drafts.list")
+		return s, automation.Fail("invalid_parameters", "Use the editor ID returned by drafts_list")
 	}
 	data, err := a.Editors.Call(ctx, page, editors.Command{Action: "get", Editor: key}, nil)
 	if err != nil {
@@ -208,20 +208,20 @@ func (a *App) writeLive(ctx context.Context, call automation.Call, name string, 
 	return automation.Outcome{Data: response, Summary: response, Accepted: true}, nil
 }
 func (a *App) registerLiveEditors(r *automation.Registry) {
-	automation.Register(r, automation.Definition{Name: "drafts.list", Description: "Find open editors by business target; each window has a distinct editor ID", Role: "read"}, nil, nil, func(ctx context.Context, c automation.Call, query liveList) (automation.Outcome, error) {
+	automation.Register(r, automation.Definition{Name: "drafts_list", Description: "Find open editors by business target; each window has a distinct editor ID", Role: "read"}, nil, nil, func(ctx context.Context, c automation.Call, query liveList) (automation.Outcome, error) {
 		return a.listLive(ctx, c.Principal, query)
 	})
-	automation.Register(r, automation.Definition{Name: "drafts.get", Description: "Read the current unsaved ordinary fields of an open editor", Role: "read", Large: true}, func(v automation.DraftGet) string { return v.ID }, nil, func(ctx context.Context, c automation.Call, v automation.DraftGet) (automation.Outcome, error) {
+	automation.Register(r, automation.Definition{Name: "drafts_get", Description: "Read the current unsaved ordinary fields of an open editor", Role: "read", Large: true}, func(v automation.DraftGet) string { return v.ID }, nil, func(ctx context.Context, c automation.Call, v automation.DraftGet) (automation.Outcome, error) {
 		s, e := a.liveGet(ctx, c.Principal, v.ID)
 		if e != nil {
 			return automation.Outcome{}, e
 		}
 		return automationObject(s, v.Format, v.Cursor, []string{v.ID, s.Revision})
 	})
-	automation.Register(r, automation.Definition{Name: "drafts.update", Description: "Apply edits in the original editor at the given revision", Role: "edit", Write: true}, func(v liveUpdate) string { return v.ID }, nil, func(ctx context.Context, c automation.Call, v liveUpdate) (automation.Outcome, error) {
+	automation.Register(r, automation.Definition{Name: "drafts_update", Description: "Apply edits in the original editor at the given revision", Role: "edit", Write: true}, func(v liveUpdate) string { return v.ID }, nil, func(ctx context.Context, c automation.Call, v liveUpdate) (automation.Outcome, error) {
 		return a.writeLive(ctx, c, "update", liveWrite{v.ID, v.Revision}, v.Content)
 	})
-	automation.Register(r, automation.Definition{Name: "drafts.commit", Description: "Save or send the specified live revision through its ordinary business action", Role: "edit", Write: true}, func(v liveWrite) string { return v.ID }, nil, func(ctx context.Context, c automation.Call, v liveWrite) (automation.Outcome, error) {
+	automation.Register(r, automation.Definition{Name: "drafts_commit", Description: "Save or send the specified live revision through its ordinary business action", Role: "edit", Write: true}, func(v liveWrite) string { return v.ID }, nil, func(ctx context.Context, c automation.Call, v liveWrite) (automation.Outcome, error) {
 		return a.writeLive(ctx, c, "commit", v, nil)
 	})
 }

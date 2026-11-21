@@ -264,3 +264,56 @@ func TestModelAndReasoningEffortDefaultsAndPerTurnOverride(t *testing.T) {
 		t.Fatalf("turn 2 did not apply overrides: %+v", seen[1])
 	}
 }
+
+func TestSummarizeCodexItems(t *testing.T) {
+	exit0 := 0
+	dur := int64(125)
+	// Structured commandActions (read + search).
+	k, s, ok := summarizeCodexItem(codexThreadItem{
+		Type:       "commandExecution",
+		Command:    "rg UpdateAtlas engine/world/gi",
+		ExitCode:   &exit0,
+		DurationMs: &dur,
+		CommandActions: []struct {
+			Type    string `json:"type"`
+			Command string `json:"command"`
+			Path    string `json:"path"`
+			Query   string `json:"query"`
+		}{
+			{Type: "search", Query: "UpdateAtlas", Path: "engine/world/gi"},
+		},
+	})
+	if !ok || k != "command" || s != "search UpdateAtlas in engine/world/gi (exit 0, 125ms)" {
+		t.Fatalf("unexpected structured command summary: ok=%v k=%q s=%q", ok, k, s)
+	}
+
+	// Raw shell command fallback when commandActions has unknown action.
+	k, s, ok = summarizeCodexItem(codexThreadItem{
+		Type:     "commandExecution",
+		Command:  "pwsh -c \"Get-Content foo.cpp\"",
+		ExitCode: &exit0,
+	})
+	if !ok || k != "command" || s != `pwsh -c "Get-Content foo.cpp" (exit 0)` {
+		t.Fatalf("unexpected raw command summary: ok=%v k=%q s=%q", ok, k, s)
+	}
+
+	// File changes list paths clearly.
+	k, s, ok = summarizeCodexItem(codexThreadItem{
+		Type:   "fileChange",
+		Status: "completed",
+		Changes: []struct {
+			Path string `json:"path"`
+		}{{Path: "note.txt"}, {Path: "calc.go"}},
+	})
+	if !ok || k != "edit" || s != "note.txt, calc.go" {
+		t.Fatalf("unexpected fileChange summary: ok=%v k=%q s=%q", ok, k, s)
+	}
+
+	// UserMessage and empty reasoning are suppressed from activity logs.
+	if _, _, ok := summarizeCodexItem(codexThreadItem{Type: "userMessage", Text: "hi"}); ok {
+		t.Fatal("expected userMessage suppressed")
+	}
+	if _, _, ok := summarizeCodexItem(codexThreadItem{Type: "reasoning"}); ok {
+		t.Fatal("expected empty reasoning suppressed")
+	}
+}

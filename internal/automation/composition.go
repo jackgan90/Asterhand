@@ -15,7 +15,7 @@ type BatchSubmit struct {
 	OnError string      `json:"on_error,omitempty" description:"Error policy: \"stop\" (default) or \"continue\""`
 }
 type BatchGet struct {
-	ID     string `json:"batch_id" description:"Batch operation_id returned by batches.submit"`
+	ID     string `json:"batch_id" description:"Batch operation_id returned by batches_submit"`
 	Cursor string `json:"cursor,omitempty" description:"Opaque pagination cursor for additional batch items"`
 }
 type MultiRead struct {
@@ -27,7 +27,7 @@ type MultiRead struct {
 // It performs no domain call or journal admission.
 func (r *Registry) PrepareItem(p Principal, item BatchItem, write bool) (operations.Identity, error) {
 	d, ok := r.definitions[item.Operation]
-	if !ok || d.Write != write || !p.Role(d.Role) || write && !d.Batch || !write && (d.Wait || d.Name == "read.many" || d.Name == "batches.get") {
+	if !ok || d.Write != write || !p.Role(d.Role) || write && !d.Batch || !write && (d.Wait || d.Name == "read_many" || d.Name == "batches_get") {
 		return operations.Identity{}, Fail("invalid_parameters", "Operation is not available in this composition")
 	}
 	if !p.AllowsToolset(d.EffectiveToolset()) {

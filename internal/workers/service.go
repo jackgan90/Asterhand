@@ -108,10 +108,17 @@ func NewService(home string, hs *harnesses.Service, adapters ...Adapter) (*Servi
 	}
 	if hs != nil {
 		hs.OnRevokeWorker = s.RevokeWorkerHarness
+		hs.OnRevokeWorkerWrite = s.RevokeWorkerWriteHarness
 	}
 	s.wg.Add(1)
 	go s.idleReaperLoop()
 	return s, nil
+}
+
+func (s *Service) Budgets() Budgets {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.budgets
 }
 
 func (s *Service) SetBudgets(b Budgets) {
@@ -280,9 +287,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Worker, error) {
 	if _, ok := s.adapters[in.HarnessID]; !ok {
 		return Worker{}, automation.Fail("unsupported_worker", "No runtime adapter is registered for this harness yet")
 	}
-	enabled, exe := s.harnesses.IsWorkerEnabled(in.HarnessID)
-	if !enabled {
-		return Worker{}, automation.Fail("forbidden", "Target harness is not enabled as a collaboration worker")
+	exe, err := s.harnesses.IsWorkerAccessEnabled(in.HarnessID, in.AccessMode)
+	if err != nil {
+		return Worker{}, err
 	}
 	if exe == "" && in.HarnessID == harnesses.HarnessCodex {
 		return Worker{}, automation.Fail("unavailable", "Target harness executable was not found")
@@ -426,9 +433,9 @@ func (s *Service) validateSendLocked(in SendInput) (Worker, string, []string, er
 	if len(s.activeTurns) >= s.budgets.MaxActiveTurns {
 		return Worker{}, "", nil, automation.Fail("worker_capacity", "Node active worker turn capacity reached")
 	}
-	enabled, exe := s.harnesses.IsWorkerEnabled(w.HarnessID)
-	if !enabled {
-		return Worker{}, "", nil, automation.Fail("forbidden", "Target harness worker authorization is disabled")
+	exe, err := s.harnesses.IsWorkerAccessEnabled(w.HarnessID, w.AccessMode)
+	if err != nil {
+		return Worker{}, "", nil, err
 	}
 	ws, _, err := s.harnesses.ResolveWorkspace(w.WorkspaceRoot, w.AccessMode)
 	if err != nil {

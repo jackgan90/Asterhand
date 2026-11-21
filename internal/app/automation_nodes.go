@@ -13,24 +13,24 @@ import (
 )
 
 func (a *App) registerAutomationNodes(r *automation.Registry) {
-	automation.Register(r, automation.Definition{Name: "node.start", Description: "Explicitly start the human-granted installed node, or acknowledge the already running instance; never installs or changes configuration", Role: "execute", Write: true}, func(v automation.Empty) string { return r.Node }, func(p automation.Principal, v automation.Empty) error { return p.Require("node", r.Node) },
+	automation.Register(r, automation.Definition{Name: "node_start", Description: "Explicitly start the human-granted installed node, or acknowledge the already running instance; never installs or changes configuration", Role: "execute", Write: true}, func(v automation.Empty) string { return r.Node }, func(p automation.Principal, v automation.Empty) error { return p.Require("node", r.Node) },
 		func(ctx context.Context, call automation.Call, v automation.Empty) (automation.Outcome, error) {
 			data := map[string]any{"running": true, "node_id": r.Node, "instance_id": r.Instance}
 			return automation.Outcome{Data: data, Summary: data, Accepted: true}, nil
 		})
-	automation.Register(r, automation.Definition{Name: "nodes.list", Description: "Read permitted local and paired nodes from bounded cached metadata", Role: "read"}, nil, nil, a.automationNodesList)
-	for _, name := range []string{"nodes.get", "nodes.capabilities"} {
+	automation.Register(r, automation.Definition{Name: "nodes_list", Description: "Read permitted local and paired nodes from bounded cached metadata", Role: "read"}, nil, nil, a.automationNodesList)
+	for _, name := range []string{"nodes_get", "nodes_capabilities"} {
 		automation.Register(r, automation.Definition{Name: name, Description: "Read the selected node's available capabilities and metadata timestamp", Role: "read"}, func(v automation.NodeGet) string { return v.ID }, func(p automation.Principal, v automation.NodeGet) error { return p.Require("node", v.ID) },
 			func(ctx context.Context, call automation.Call, v automation.NodeGet) (automation.Outcome, error) {
 				data, err := a.automationNode(call.Principal, v.ID)
 				return automation.Outcome{Data: data}, err
 			})
 	}
-	automation.Register(r, automation.Definition{Name: "node.status", Description: "Read this node instance's status without starting it or making a model call", Role: "read"}, nil, func(p automation.Principal, v automation.Empty) error { return p.Require("node", r.Node) },
+	automation.Register(r, automation.Definition{Name: "node_status", Description: "Read this node instance's status without starting it or making a model call", Role: "read"}, nil, func(p automation.Principal, v automation.Empty) error { return p.Require("node", r.Node) },
 		func(ctx context.Context, call automation.Call, v automation.Empty) (automation.Outcome, error) {
 			return automation.Outcome{Data: map[string]any{"node_id": r.Node, "instance_id": r.Instance, "running": true, "stopping": a.Stopping(), "version": config.Version}}, nil
 		})
-	automation.Register(r, automation.Definition{Name: "node.stop", Description: "Stop this exact node instance; active work requires explicit stop_active_work", Role: "execute", Write: true, Control: true}, func(v automation.NodeStop) string { return r.Node }, func(p automation.Principal, v automation.NodeStop) error { return p.Require("node", r.Node) },
+	automation.Register(r, automation.Definition{Name: "node_stop", Description: "Stop this exact node instance; active work requires explicit stop_active_work", Role: "execute", Write: true, Control: true}, func(v automation.NodeStop) string { return r.Node }, func(p automation.Principal, v automation.NodeStop) error { return p.Require("node", r.Node) },
 		func(ctx context.Context, call automation.Call, v automation.NodeStop) (automation.Outcome, error) {
 			if v.Instance != r.Instance {
 				return automation.Outcome{}, automation.Fail("instance_changed", "The requested node instance has changed")

@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/jackgan90/Asterhand/internal/automation"
 	"github.com/jackgan90/Asterhand/internal/workers"
@@ -12,26 +14,26 @@ type workerCreateInput struct {
 	HarnessID       string `json:"harness_id" description:"Target worker harness identifier (e.g. \"codex\")"`
 	WorkspaceRoot   string `json:"workspace_root" description:"Absolute path to the local project directory"`
 	Alias           string `json:"alias,omitempty" description:"Optional stable worker alias unique within the project (e.g. \"codex-reviewer\")"`
-	AccessMode      string `json:"access_mode,omitempty" description:"Worker access mode: \"read_only\" (default)"`
+	AccessMode      string `json:"access_mode,omitempty" enum:"read_only,workspace_write" description:"Worker access mode: \"read_only\" (default) or \"workspace_write\" (requires enabling workspace write for the target harness in Asterhand settings)"`
 	RoleHint        string `json:"role_hint,omitempty" description:"Optional role instructions passed to the worker (e.g. reviewer persona)"`
 	Model           string `json:"model,omitempty" description:"Optional default model name for this worker"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty" description:"Optional default reasoning effort / thinking level (e.g. low, medium, high, xhigh)"`
 }
 
 type workerListInput struct {
-	WorkspaceRoot string `json:"workspace_root,omitempty" description:"Optional absolute project directory path to filter workers"`
-	WorkspaceID   string `json:"workspace_id,omitempty" description:"Optional derived workspace_id to filter workers"`
-	IncludeClosed bool   `json:"include_closed,omitempty" description:"Include closed workers in results (default false)"`
-	Limit         int    `json:"limit,omitempty" description:"Maximum number of workers to return (default 50)"`
+	WorkspaceRoot string                 `json:"workspace_root,omitempty" description:"Optional absolute project directory path to filter workers"`
+	WorkspaceID   string                 `json:"workspace_id,omitempty" description:"Optional derived workspace_id to filter workers"`
+	IncludeClosed bool                   `json:"include_closed,omitempty" description:"Include closed workers in results (default false)"`
+	Limit         automation.OptionalInt `json:"limit,omitempty,omitzero" description:"Maximum number of workers to return (1..200, default 50)"`
 }
 
 type workerGetInput struct {
-	WorkerID    string `json:"worker_id" description:"Worker identifier returned by workers.create or workers.list"`
+	WorkerID    string `json:"worker_id" description:"Worker identifier returned by workers_create or workers_list"`
 	WorkspaceID string `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
 }
 
 type workerSendInput struct {
-	WorkerID        string   `json:"worker_id" description:"Target worker identifier returned by workers.create or workers.list"`
+	WorkerID        string   `json:"worker_id" description:"Target worker identifier returned by workers_create or workers_list"`
 	WorkspaceID     string   `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
 	Prompt          string   `json:"prompt" description:"Task instruction or review prompt for this turn"`
 	Model           string   `json:"model,omitempty" description:"Optional per-turn model override (defaults to worker model)"`
@@ -43,23 +45,23 @@ type workerSendInput struct {
 }
 
 type workerWaitInput struct {
-	TurnID      string `json:"turn_id" description:"Turn identifier returned by workers.send"`
-	WorkspaceID string `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
-	WaitSeconds int    `json:"wait_seconds,omitempty" description:"Seconds to wait for progress or completion (1..30, default 30)"`
+	TurnID      string                 `json:"turn_id" description:"Turn identifier returned by workers_send"`
+	WorkspaceID string                 `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
+	WaitSeconds automation.OptionalInt `json:"wait_seconds,omitempty,omitzero" description:"Seconds to wait for progress or completion (1..30, default 30)"`
 }
 
 type workerResultInput struct {
-	TurnID      string `json:"turn_id" description:"Turn identifier returned by workers.send"`
-	WorkspaceID string `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
-	Cursor      string `json:"cursor,omitempty" description:"Byte offset cursor returned by a previous truncated workers.wait or workers.result call"`
-	MaxBytes    int    `json:"max_bytes,omitempty" description:"Maximum UTF-8 bytes to return per page (up to 32768, default 24576)"`
+	TurnID      string                 `json:"turn_id" description:"Turn identifier returned by workers_send"`
+	WorkspaceID string                 `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
+	Cursor      string                 `json:"cursor,omitempty" description:"Byte offset cursor returned by a previous truncated workers_wait or workers_result call (must align to a UTF-8 character boundary)"`
+	MaxBytes    automation.OptionalInt `json:"max_bytes,omitempty,omitzero" description:"Maximum UTF-8 bytes to return per page (1..32768, default 24576)"`
 }
 
 type workerLogsInput struct {
-	TurnID      string `json:"turn_id" description:"Turn identifier returned by workers.send"`
-	WorkspaceID string `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
-	AfterSeq    int64  `json:"after_seq,omitempty" description:"Return log entries with seq greater than this value"`
-	Limit       int    `json:"limit,omitempty" description:"Maximum log entries to return (default 50)"`
+	TurnID      string                 `json:"turn_id" description:"Turn identifier returned by workers_send"`
+	WorkspaceID string                 `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
+	AfterSeq    int64                  `json:"after_seq,omitempty" description:"Return log entries with seq greater than this value"`
+	Limit       automation.OptionalInt `json:"limit,omitempty,omitzero" description:"Maximum log entries to return (1..200, default 50)"`
 }
 
 type workerCancelInput struct {
@@ -103,13 +105,23 @@ type workerLogsView struct {
 	HasMore  bool               `json:"has_more"`
 }
 
+func optionalIntRange(opt automation.OptionalInt, name string, def, min, max int) (int, error) {
+	if !opt.Set {
+		return def, nil
+	}
+	if opt.Value < min || opt.Value > max {
+		return 0, automation.Fail("invalid_parameters", fmt.Sprintf("%s must be between %d and %d", name, min, max))
+	}
+	return opt.Value, nil
+}
+
 func (a *App) registerAutomationWorkers(r *automation.Registry) {
 	scopeWorkers := func(p automation.Principal, target string) error {
 		return p.Require("workers", target)
 	}
 
 	automation.Register(r, automation.Definition{
-		Name:        "workers.create",
+		Name:        "workers_create",
 		Description: "Create a persistent coding harness worker bound to a project directory and stable alias (e.g. codex-reviewer); optional model and reasoning_effort (e.g. low, medium, high, xhigh)",
 		Role:        "execute",
 		Toolset:     automation.ToolsetCollab,
@@ -141,7 +153,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 		})
 
 	automation.Register(r, automation.Definition{
-		Name:        "workers.list",
+		Name:        "workers_list",
 		Description: "List coding harness workers, optionally filtered by project workspace_root or workspace_id",
 		Role:        "read",
 		Toolset:     automation.ToolsetCollab,
@@ -151,7 +163,11 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			if a.Workers == nil {
 				return automation.Outcome{}, automation.Fail("unavailable", "Workers service is unavailable")
 			}
-			items, err := a.Workers.List(v.WorkspaceRoot, v.WorkspaceID, v.IncludeClosed, v.Limit)
+			limit, err := optionalIntRange(v.Limit, "limit", 50, 1, 200)
+			if err != nil {
+				return automation.Outcome{}, err
+			}
+			items, err := a.Workers.List(v.WorkspaceRoot, v.WorkspaceID, v.IncludeClosed, limit)
 			if err != nil {
 				return automation.Outcome{}, err
 			}
@@ -159,7 +175,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 		})
 
 	automation.Register(r, automation.Definition{
-		Name:        "workers.get",
+		Name:        "workers_get",
 		Description: "Read a worker's metadata, persistent session binding, and recent turns",
 		Role:        "read",
 		Toolset:     automation.ToolsetCollab,
@@ -177,8 +193,8 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 		})
 
 	automation.Register(r, automation.Definition{
-		Name:        "workers.send",
-		Description: "Dispatch a new turn to an existing worker (optional per-turn model and reasoning_effort override) and return turn_id immediately; follow up with workers.wait(turn_id)",
+		Name:        "workers_send",
+		Description: "Dispatch a new turn to an existing worker (optional per-turn model and reasoning_effort override) and return turn_id immediately; follow up with workers_wait(turn_id)",
 		Role:        "execute",
 		Toolset:     automation.ToolsetCollab,
 		Write:       true,
@@ -212,7 +228,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 		})
 
 	automation.Register(r, automation.Definition{
-		Name:        "workers.wait",
+		Name:        "workers_wait",
 		Description: "Wait up to 30 seconds for a worker turn to progress or finish; returns status, final answer preview, or next-step guidance",
 		Role:        "read",
 		Toolset:     automation.ToolsetCollab,
@@ -223,10 +239,11 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			if a.Workers == nil {
 				return automation.Outcome{}, automation.Fail("unavailable", "Workers service is unavailable")
 			}
-			dur, err := boundedWait(v.WaitSeconds)
+			waitSec, err := optionalIntRange(v.WaitSeconds, "wait_seconds", 30, 1, 30)
 			if err != nil {
 				return automation.Outcome{}, err
 			}
+			dur := time.Duration(waitSec) * time.Second
 			t, preview, trunc, err := a.Workers.Wait(ctx, v.TurnID, v.WorkspaceID, dur)
 			if err != nil {
 				return automation.Outcome{}, err
@@ -246,7 +263,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 		})
 
 	automation.Register(r, automation.Definition{
-		Name:        "workers.result",
+		Name:        "workers_result",
 		Description: "Read paginated full final review/output text for a completed worker turn",
 		Role:        "read",
 		Toolset:     automation.ToolsetCollab,
@@ -264,7 +281,11 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 				}
 				offset = n
 			}
-			page, err := a.Workers.ReadResult(v.TurnID, v.WorkspaceID, offset, v.MaxBytes)
+			maxBytes, err := optionalIntRange(v.MaxBytes, "max_bytes", 24<<10, 1, 32<<10)
+			if err != nil {
+				return automation.Outcome{}, err
+			}
+			page, err := a.Workers.ReadResult(v.TurnID, v.WorkspaceID, offset, maxBytes)
 			if err != nil {
 				return automation.Outcome{}, err
 			}
@@ -272,7 +293,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 		})
 
 	automation.Register(r, automation.Definition{
-		Name:        "workers.logs",
+		Name:        "workers_logs",
 		Description: "Read bounded structured progress and tool activity logs for a worker turn",
 		Role:        "read",
 		Toolset:     automation.ToolsetCollab,
@@ -282,7 +303,11 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			if a.Workers == nil {
 				return automation.Outcome{}, automation.Fail("unavailable", "Workers service is unavailable")
 			}
-			t, entries, hasMore, err := a.Workers.ReadLogs(v.TurnID, v.WorkspaceID, v.AfterSeq, v.Limit)
+			limit, err := optionalIntRange(v.Limit, "limit", 50, 1, 200)
+			if err != nil {
+				return automation.Outcome{}, err
+			}
+			t, entries, hasMore, err := a.Workers.ReadLogs(v.TurnID, v.WorkspaceID, v.AfterSeq, limit)
 			if err != nil {
 				return automation.Outcome{}, err
 			}
@@ -296,7 +321,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 		})
 
 	automation.Register(r, automation.Definition{
-		Name:        "workers.cancel",
+		Name:        "workers_cancel",
 		Description: "Cancel a specific active worker turn by explicit turn_id",
 		Role:        "execute",
 		Toolset:     automation.ToolsetCollab,
@@ -320,7 +345,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 		})
 
 	automation.Register(r, automation.Definition{
-		Name:        "workers.close",
+		Name:        "workers_close",
 		Description: "Close and archive an idle worker and release its resident process",
 		Role:        "execute",
 		Toolset:     automation.ToolsetCollab,
@@ -343,7 +368,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 		})
 
 	automation.Register(r, automation.Definition{
-		Name:        "workers.resolve",
+		Name:        "workers_resolve",
 		Description: "Explicitly resolve a reconciliation_required turn with an audit reason without faking success",
 		Role:        "execute",
 		Toolset:     automation.ToolsetCollab,
@@ -368,14 +393,14 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 }
 
 func describeWorkerAutomationResults(r *automation.Registry) {
-	r.DescribeData("workers.create", automation.Schema[workers.Worker]())
-	r.DescribeData("workers.list", resultObject("", "", "", map[string]any{"items": arrayOf(automation.Schema[workers.Worker]())}))
-	r.DescribeData("workers.get", automation.Schema[workerGetView]())
-	r.DescribeData("workers.send", automation.Schema[workers.Turn]())
-	r.DescribeData("workers.wait", automation.Schema[workerWaitView]())
-	r.DescribeData("workers.result", automation.Schema[workers.ResultPage]())
-	r.DescribeData("workers.logs", automation.Schema[workerLogsView]())
-	r.DescribeData("workers.cancel", automation.Schema[workers.Turn]())
-	r.DescribeData("workers.close", automation.Schema[workers.Worker]())
-	r.DescribeData("workers.resolve", automation.Schema[workers.Turn]())
+	r.DescribeData("workers_create", automation.Schema[workers.Worker]())
+	r.DescribeData("workers_list", resultObject("", "", "", map[string]any{"items": arrayOf(automation.Schema[workers.Worker]())}))
+	r.DescribeData("workers_get", automation.Schema[workerGetView]())
+	r.DescribeData("workers_send", automation.Schema[workers.Turn]())
+	r.DescribeData("workers_wait", automation.Schema[workerWaitView]())
+	r.DescribeData("workers_result", automation.Schema[workers.ResultPage]())
+	r.DescribeData("workers_logs", automation.Schema[workerLogsView]())
+	r.DescribeData("workers_cancel", automation.Schema[workers.Turn]())
+	r.DescribeData("workers_close", automation.Schema[workers.Worker]())
+	r.DescribeData("workers_resolve", automation.Schema[workers.Turn]())
 }

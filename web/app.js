@@ -3,7 +3,7 @@ import {appLifecycle} from "./app-lifecycle.mjs";
 import {browserActions} from "./browser-actions.mjs";
 import {t} from "./i18n.mjs";
 import {localeController} from "./locale-controller.mjs";
-import {$, localizeError, noticeView, applyTheme, restoreTheme, settingsTabs} from "./ui.mjs";
+import {$, localizeError, noticeView, applyTheme, restoreTheme, settingsTabs, trapDialogWheel} from "./ui.mjs";
 import {desktopSettings} from "./desktop-settings.mjs";
 import {desktopShortcut} from "./desktop-shortcut.mjs";
 import {displayNodeName, nodeController} from "./node-controller.mjs";
@@ -14,6 +14,7 @@ import {localCommands} from "./local-commands.mjs";
 import {liveEditors} from "./live-editors.mjs";
 import {toolSettings} from "./tool-settings.mjs";
 import {harnessesSettings} from "./harnesses-settings.mjs";
+import {workersPanel} from "./workers-panel.mjs";
 
 export function mountApp() {
   restoreTheme();
@@ -37,6 +38,7 @@ export function mountApp() {
   const commands = localCommands({...client, listen, session, guarded, actions, editors});
   const tools = toolSettings({...client,listen,session});
   const harnesses = harnessesSettings({...client, listen, session, notice});
+  const workers = workersPanel({...client, listen, session, notice});
   let commandTarget = new URLSearchParams(location.hash.slice(1)).get("commands");
   const nodes = nodeController({...client, session, guarded, notice, actions, listen, isSubmitting:() => tasks?.submitting() || false});
   const settings = nodeSettings({...client, session, desktop, shortcut, tools, harnesses, guarded, notice, listen, editors, refreshPeers:nodes.refresh});
@@ -84,6 +86,7 @@ export function mountApp() {
     commands.relocalize();
     tools.relocalize();
     harnesses.relocalize();
+    workers.relocalize();
   };
   const locale = localeController({
     desktop,
@@ -149,7 +152,7 @@ export function mountApp() {
       await tasks.refresh(scope);
     },
     connection,
-    stopped:() => { editors.stop(); settings.stop(); desktop.stop(); shortcut.stop(); commands.stop(); tools.stop(); notices.stop(); },
+    stopped:() => { editors.stop(); settings.stop(); desktop.stop(); shortcut.stop(); commands.stop(); tools.stop(); workers.stop(); notices.stop(); },
     failed:error => {
       if (error?.messageKey === "err.http.login_link_required") return;
       notice(localizeError(error));
@@ -157,6 +160,8 @@ export function mountApp() {
   });
   for (const element of document.querySelectorAll("[data-close]"))
     listen(element, "click", () => document.getElementById(element.dataset.close).close());
+  for (const dlg of document.querySelectorAll("dialog"))
+    trapDialogWheel(dlg, listen);
   listen($("#login-form"), "submit", event => {
     event.preventDefault();
     const token = new FormData(event.target).get("token");

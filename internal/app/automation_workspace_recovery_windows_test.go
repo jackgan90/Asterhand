@@ -25,7 +25,7 @@ func TestWorkspaceReceiptRecoversOnlyDurableDomainEvidence(t *testing.T) {
 	}
 	a.Chat = conversation.New(a.Config.Get().NodeID, a.Store, &alternateWorkspaceRuntime{files: files})
 	scope := workspace.Scope{Policy: "policy"}
-	for _, name := range []string{"workspace_files.mutate", "workspace_versions.restore", "workspace_operations.resolve"} {
+	for _, name := range []string{"workspace_files_mutate", "workspace_versions_restore", "workspace_operations_resolve"} {
 		t.Run(name, func(t *testing.T) {
 			identity := operations.Identity{Actor: "recovery-test", Node: a.Config.Get().NodeID, ID: operations.NewID(time.Now()), Name: name, Digest: "fixture", Target: files.ID()}
 			receipt, _, err := a.Store.Begin(identity, time.Now())
@@ -38,9 +38,9 @@ func TestWorkspaceReceiptRecoversOnlyDurableDomainEvidence(t *testing.T) {
 			}
 			var op workspace.Operation
 			switch name {
-			case "workspace_files.mutate":
+			case "workspace_files_mutate":
 				op, err = files.Mutate(identity.NativeID(), scope, []workspace.Mutation{{Action: "write", Path: "file.txt", Expected: workspace.MissingRevision, Content: "saved"}})
-			case "workspace_versions.restore":
+			case "workspace_versions_restore":
 				versions, _, e := files.Versions("file.txt", 0)
 				if e != nil || len(versions) != 1 {
 					t.Fatal(versions, e)
@@ -50,7 +50,7 @@ func TestWorkspaceReceiptRecoversOnlyDurableDomainEvidence(t *testing.T) {
 					t.Fatal(e)
 				}
 				op, err = files.Restore(identity.NativeID(), scope, versions[0].ID, "file.txt", current.Revision)
-			case "workspace_operations.resolve":
+			case "workspace_operations_resolve":
 				_, err = files.Begin(workspace.Begin{ID: "interrupted", Scope: scope, Tool: "write_file", Fingerprint: "fixture", Targets: []workspace.Target{{Path: "pending.txt"}}, NewBytes: 3})
 				if err != nil {
 					t.Fatal(err)

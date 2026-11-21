@@ -68,7 +68,7 @@ func newTokenClient(profile Profile, secret string) (*Client, error) {
 func (c *Client) Close() { c.http.CloseIdleConnections() }
 
 func (c *Client) Call(ctx context.Context, operation, id string, arguments json.RawMessage) (Response, error) {
-	if operation == "node.start" {
+	if operation == "node_start" {
 		if c.callerID != "" {
 			if err := c.requireCallerToolset(ctx, ToolsetGeneral); err != nil {
 				return Response{Version: APIVersion, Node: c.Profile.Node, ID: id, Error: PublicError(err)}, nil
@@ -76,7 +76,7 @@ func (c *Client) Call(ctx context.Context, operation, id string, arguments json.
 		}
 		return c.startNode(ctx, id, arguments)
 	}
-	if operation == "operations.get" && c.home != "" && c.callerID == "" {
+	if operation == "operations_get" && c.home != "" && c.callerID == "" {
 		if id != "" {
 			return Response{}, Fail("invalid_parameters", "Read operations do not accept an operation identity")
 		}
@@ -90,7 +90,7 @@ func (c *Client) Call(ctx context.Context, operation, id string, arguments json.
 func (c *Client) requireCallerToolset(ctx context.Context, toolset string) error {
 	resp, err := c.remoteCall(ctx, "capabilities", "", json.RawMessage("{}"))
 	if err != nil {
-		return Fail("forbidden", "Managed caller cannot invoke local node.start without verified general toolset permission")
+		return Fail("forbidden", "Managed caller cannot invoke local node_start without verified general toolset permission")
 	}
 	if resp.Error != nil {
 		return resp.Error
@@ -181,4 +181,47 @@ func (c *Client) remoteCall(ctx context.Context, operation, id string, arguments
 		return Response{}, Fail("invalid_response", "The node response did not match the request")
 	}
 	return result, nil
+}
+
+// FetchDefinitions pulls the running daemon's live tool definitions and schemas
+// for the current authenticated principal so long-lived MCP processes hot-sync
+// across node restarts and upgrades without dropping the stdio session.
+func (c *Client) FetchDefinitions(ctx context.Context) (string, []Definition, error) {
+	if c.callerID != "" && c.home != "" {
+		c.ReloadCallerToken()
+	}
+	tok := c.currentToken()
+	if c.callerID != "" && tok == "" {
+		return "", nil, Fail("forbidden", "Managed caller credential is missing or revoked")
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://asterhand.local/v1/definitions", nil)
+	if err != nil {
+		return "", nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", nil, Fail("node_unavailable", "The node could not be reached")
+	}
+	defer resp.Body.Close()
+	const maxDefsBytes = 2 << 20
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxDefsBytes+1))
+	if err != nil || len(b) > maxDefsBytes {
+		return "", nil, Fail("invalid_response", "The node definitions response exceeded its budget")
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		return "", nil, Fail("forbidden", "Caller credential is not authorized")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", nil, Fail("invalid_response", "The node rejected the definitions request")
+	}
+	var payload struct {
+		Version     string       `json:"api_version"`
+		InstanceID  string       `json:"instance_id"`
+		Definitions []Definition `json:"definitions"`
+	}
+	if err := json.Unmarshal(b, &payload); err != nil || payload.Version != APIVersion {
+		return "", nil, Fail("invalid_response", "The node returned invalid definitions JSON")
+	}
+	return payload.InstanceID, payload.Definitions, nil
 }

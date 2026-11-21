@@ -6,6 +6,7 @@
     <title data-i18n="brand.page_title">Asterhand · 星伴</title>
     <link rel="stylesheet" href="/style.css" />
     <link rel="stylesheet" href="/graph-editor.css" />
+    <link rel="stylesheet" href="/workers.css" />
     <script type="module" src="/app.js"></script>
   </head>
   <body>
@@ -17,6 +18,9 @@
         <select id="locale-select" class="locale-select" aria-label="界面语言" data-i18n-aria-label="web.topbar.language_aria"></select>
         <button id="commands-open" class="quiet" type="button">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 8 4 4-4 4M12 16h7" /></svg><span data-i18n="web.topbar.commands">命令</span>
+        </button>
+        <button id="workers-open" class="quiet" type="button">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2" /><path d="M9 9h6M9 13h4" /></svg><span data-i18n="web.topbar.workers">Workers</span>
         </button>
         <button id="settings-open" class="quiet" type="button">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M12 2.5v3M12 18.5v3M4.2 6.5l2.6 1.5M17.2 16l2.6 1.5M4.2 17.5l2.6-1.5M17.2 8l2.6-1.5" /></svg><span data-i18n="web.topbar.settings">设置</span>
@@ -340,6 +344,27 @@
         </form>
       </div>
       <div id="commands-status" class="status-line" role="status"></div>
+    </dialog>
+
+    <dialog id="coding-workers" class="workers-dialog">
+      <div class="dialog-head">
+        <h2 data-i18n="web.workers.title">Coding Workers</h2>
+        <button type="button" data-close="coding-workers" class="icon-btn" aria-label="关闭" data-i18n-aria-label="web.common.close">×</button>
+      </div>
+      <div class="workers-toolbar">
+        <p class="dialog-lead" data-i18n="web.workers.lead">查看各项目的协作 Worker、任务轮次、工作树变更与实时执行日志。</p>
+        <div class="workers-toolbar-right">
+          <label class="workers-check"><input id="workers-include-closed" type="checkbox" /><span data-i18n="web.workers.include_closed">显示已归档</span></label>
+          <button id="workers-refresh" type="button" class="secondary icon-btn" title="刷新" data-i18n-title="web.workers.refresh" aria-label="刷新" data-i18n-aria-label="web.workers.refresh">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M20 12a8 8 0 1 0-2.3 5.7" /></svg>
+          </button>
+        </div>
+      </div>
+      <div class="workers-layout">
+        <aside id="workers-list" class="workers-sidebar"></aside>
+        <section id="workers-detail" class="workers-detail"></section>
+      </div>
+      <div id="workers-status" class="status-line" role="status"></div>
     </dialog>
   </body>
 </html>

@@ -17,7 +17,7 @@ func TestOperationRetryAfterRestartAndExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	i := operations.Identity{Actor: "actor", Node: "node", ID: operations.NewID(now), Name: "commands.run", Digest: "digest", Target: "command"}
+	i := operations.Identity{Actor: "actor", Node: "node", ID: operations.NewID(now), Name: "commands_run", Digest: "digest", Target: "command"}
 	r, fresh, err := s.Begin(i, now)
 	if err != nil || !fresh {
 		t.Fatal(r, fresh, err)

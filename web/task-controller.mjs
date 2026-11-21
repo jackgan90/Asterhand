@@ -46,7 +46,7 @@ export function taskController({api, post, view, selection, session, notice, act
     const scope = session(), interaction = job.interaction;
     const key = `${interaction.id}:${text}`;
     if (editorID) {
-      await editorOperation(post,'tasks.answer',editorID,{
+      await editorOperation(post,'tasks_answer',editorID,{
         task:{kind:out?'outbox':'job',id:out?.id||job.id,target_node_id:out?.peer_id||job.owner,project_id:job.request.project_id},
         interaction_id:interaction.id, attempt:interaction.attempt, answer:text
       });

@@ -61,22 +61,21 @@ func TestAutomationCoverage(t *testing.T) {
 	for name := range names {
 		t.Errorf("coverage advertises missing operation %s", name)
 	}
-	// Verify "." -> "_" MCP tool-name projection for managed harnesses matches
-	// ^[a-zA-Z0-9_-]+$ (no dots or illegal chars) and has zero collisions.
-	seenMCP := map[string]string{}
+	// Enforce that every canonical automation operation name directly matches
+	// ^[a-zA-Z0-9_-]+$ (no dots or illegal chars) so CLI, HTTP, and all MCP
+	// clients share identical tool names without boundary translation.
 	for _, d := range AutomationDefinitions() {
-		mapped := strings.ReplaceAll(d.Name, ".", "_")
-		for i := 0; i < len(mapped); i++ {
-			c := mapped[i]
+		if d.Name == "" {
+			t.Errorf("empty operation name")
+			continue
+		}
+		for i := 0; i < len(d.Name); i++ {
+			c := d.Name[i]
 			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
-				t.Errorf("MCP tool name %q (from %s) contains invalid character %q; only [a-zA-Z0-9_-] is allowed", mapped, d.Name, c)
+				t.Errorf("operation name %q contains invalid character %q; only [a-zA-Z0-9_-] is allowed", d.Name, c)
 				break
 			}
 		}
-		if prev, dup := seenMCP[mapped]; dup {
-			t.Errorf("MCP underscore tool name collision: %s and %s both map to %s", prev, d.Name, mapped)
-		}
-		seenMCP[mapped] = d.Name
 	}
 }
 
@@ -89,12 +88,12 @@ func TestCommandAndGraphSchemasAreSelfDescribing(t *testing.T) {
 	for _, d := range defs {
 		byName[d.Name] = d
 	}
-	for _, op := range []string{"commands.create", "commands.patch", "commands.validate", "commands.run", "logs.read"} {
+	for _, op := range []string{"commands_create", "commands_patch", "commands_validate", "commands_run", "logs_read"} {
 		if _, ok := byName[op]; !ok {
 			t.Fatalf("missing definition %s", op)
 		}
 	}
-	createText := string(compactResult(byName["commands.create"].Schema))
+	createText := string(compactResult(byName["commands_create"].Schema))
 	for _, want := range []string{
 		"^[A-Za-z][A-Za-z0-9_-]{0,63}$",
 		"^[a-zA-Z0-9_-]{16,64}$",
@@ -107,30 +106,30 @@ func TestCommandAndGraphSchemasAreSelfDescribing(t *testing.T) {
 		"only 'abort'",
 	} {
 		if !strings.Contains(createText, want) {
-			t.Fatalf("commands.create schema missing %q", want)
+			t.Fatalf("commands_create schema missing %q", want)
 		}
 	}
-	validateOut := string(compactResult(byName["commands.validate"].OutputSchema))
-	if !strings.Contains(validateOut, "empty string on unsaved commands.validate output") {
-		t.Fatalf("commands.validate output schema missing empty id/revision note")
+	validateOut := string(compactResult(byName["commands_validate"].OutputSchema))
+	if !strings.Contains(validateOut, "empty string on unsaved commands_validate output") {
+		t.Fatalf("commands_validate output schema missing empty id/revision note")
 	}
 	n := newNode(t, &fakeExecutor{})
 	a := n.app
 	_, token := grantTestAutomation(t, a, []string{"read", "edit"}, map[string][]string{"commands": {"*"}})
 	valid := automation.CommandValidate{Candidate: automation.CommandInput{Name: "valid_cmd", Graph: apiTestGraph(filepath.Join(t.TempDir(), "missing.ps1"))}}
-	reply := testAutomationCall(a, token, "commands.validate", "", valid)
+	reply := testAutomationCall(a, token, "commands_validate", "", valid)
 	if reply.Error != nil {
 		t.Fatalf("expected valid candidate, got %v", reply.Error)
 	}
 	shortID := localcommands.Command{Name: "short_id", Graph: apiTestGraph(filepath.Join(t.TempDir(), "missing.ps1"))}
 	shortID.Graph.Nodes[1].ID = "short"
-	badIDReply := testAutomationCall(a, token, "commands.validate", "", automation.CommandValidate{Candidate: automation.CommandInput{Name: shortID.Name, Graph: shortID.Graph}})
+	badIDReply := testAutomationCall(a, token, "commands_validate", "", automation.CommandValidate{Candidate: automation.CommandInput{Name: shortID.Name, Graph: shortID.Graph}})
 	if badIDReply.Error == nil || badIDReply.Error.MessageKey != "err.graph.identity" || !strings.Contains(badIDReply.Error.Message, "16") {
 		t.Fatalf("unexpected identity validation error: %+v", badIDReply.Error)
 	}
 	badStart := apiTestGraph(filepath.Join(t.TempDir(), "missing.ps1"))
 	badStart.Nodes[0].Script = filepath.Join(t.TempDir(), "x.ps1")
-	badStartReply := testAutomationCall(a, token, "commands.validate", "", automation.CommandValidate{Candidate: automation.CommandInput{Name: "bad_start", Graph: badStart}})
+	badStartReply := testAutomationCall(a, token, "commands_validate", "", automation.CommandValidate{Candidate: automation.CommandInput{Name: "bad_start", Graph: badStart}})
 	if badStartReply.Error == nil || badStartReply.Error.MessageKey != "err.graph.node" || !strings.Contains(badStartReply.Error.Message, "start/script/end") {
 		t.Fatalf("unexpected node validation error: %+v", badStartReply.Error)
 	}

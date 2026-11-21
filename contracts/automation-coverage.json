@@ -14,15 +14,15 @@
         "internal/app/commands_batch_delete_test.go"
       ],
       "operations": [
-        "commands.clone",
-        "commands.create",
-        "commands.delete",
-        "commands.get",
-        "commands.list",
-        "commands.patch",
-        "commands.run",
-        "commands.search",
-        "commands.validate"
+        "commands_clone",
+        "commands_create",
+        "commands_delete",
+        "commands_get",
+        "commands_list",
+        "commands_patch",
+        "commands_run",
+        "commands_search",
+        "commands_validate"
       ]
     },
     {
@@ -35,13 +35,13 @@
         "internal/app/automation_logs_windows_test.go"
       ],
       "operations": [
-        "logs.read",
-        "logs.tail",
-        "logs.wait",
-        "runs.get",
-        "runs.list",
-        "runs.stop",
-        "runs.wait"
+        "logs_read",
+        "logs_tail",
+        "logs_wait",
+        "runs_get",
+        "runs_list",
+        "runs_stop",
+        "runs_wait"
       ]
     },
     {
@@ -56,17 +56,17 @@
         "tests/chat-timeline.test.mjs"
       ],
       "operations": [
-        "conversations.connect",
-        "conversations.connection",
-        "conversations.create",
-        "conversations.get",
-        "conversations.list",
-        "conversations.send",
-        "messages.get",
-        "messages.list",
-        "turns.get",
-        "turns.stop",
-        "turns.wait"
+        "conversations_connect",
+        "conversations_connection",
+        "conversations_create",
+        "conversations_get",
+        "conversations_list",
+        "conversations_send",
+        "messages_get",
+        "messages_list",
+        "turns_get",
+        "turns_stop",
+        "turns_wait"
       ]
     },
     {
@@ -80,14 +80,14 @@
         "internal/app/automation_tasks_test.go"
       ],
       "operations": [
-        "tasks.answer",
-        "tasks.cancel",
-        "tasks.events",
-        "tasks.get",
-        "tasks.list",
-        "tasks.reconcile",
-        "tasks.resolve",
-        "tasks.submit"
+        "tasks_answer",
+        "tasks_cancel",
+        "tasks_events",
+        "tasks_get",
+        "tasks_list",
+        "tasks_reconcile",
+        "tasks_resolve",
+        "tasks_submit"
       ]
     },
     {
@@ -100,14 +100,14 @@
         "tests/web-interactions.test.mjs"
       ],
       "operations": [
-        "desktop.open",
-        "desktop.retry",
-        "models.list",
-        "models.select",
-        "settings.check_hotkey",
-        "settings.desktop_shortcut",
-        "settings.get",
-        "settings.patch"
+        "desktop_open",
+        "desktop_retry",
+        "models_list",
+        "models_select",
+        "settings_check_hotkey",
+        "settings_desktop_shortcut",
+        "settings_get",
+        "settings_patch"
       ]
     },
     {
@@ -118,15 +118,15 @@
         "internal/app/automation_composition_test.go"
       ],
       "operations": [
-        "diagnostics.inspect",
-        "diagnostics.run",
-        "node.start",
-        "node.status",
-        "node.stop",
-        "node.version",
-        "nodes.capabilities",
-        "nodes.get",
-        "nodes.list"
+        "diagnostics_inspect",
+        "diagnostics_run",
+        "node_start",
+        "node_status",
+        "node_stop",
+        "node_version",
+        "nodes_capabilities",
+        "nodes_get",
+        "nodes_list"
       ]
     },
     {
@@ -137,10 +137,10 @@
         "tests/live-editors.test.mjs"
       ],
       "operations": [
-        "drafts.list",
-        "drafts.get",
-        "drafts.update",
-        "drafts.commit"
+        "drafts_list",
+        "drafts_get",
+        "drafts_update",
+        "drafts_commit"
       ]
     },
     {
@@ -152,12 +152,12 @@
         "internal/app/automation_transport_windows_test.go"
       ],
       "operations": [
-        "batches.get",
-        "batches.submit",
+        "batches_get",
+        "batches_submit",
         "capabilities",
-        "operations.get",
-        "operations.new_id",
-        "read.many"
+        "operations_get",
+        "operations_new_id",
+        "read_many"
       ]
     },
     {
@@ -169,22 +169,22 @@
         "tests/workspace.test.mjs"
       ],
       "operations": [
-        "workspaces.get",
-        "conversations.capabilities",
-        "workspace_files.list",
-        "workspace_files.search",
-        "workspace_files.read",
-        "workspace_files.mutate",
-        "workspace_versions.list",
-        "workspace_versions.get",
-        "workspace_versions.restore",
-        "turn_activities.list",
-        "turn_activities.get",
-        "workspace_operations.get",
-        "workspace_operations.resolve",
-        "artifacts.list",
-        "artifacts.get",
-        "artifacts.read"
+        "workspaces_get",
+        "conversations_capabilities",
+        "workspace_files_list",
+        "workspace_files_search",
+        "workspace_files_read",
+        "workspace_files_mutate",
+        "workspace_versions_list",
+        "workspace_versions_get",
+        "workspace_versions_restore",
+        "turn_activities_list",
+        "turn_activities_get",
+        "workspace_operations_get",
+        "workspace_operations_resolve",
+        "artifacts_list",
+        "artifacts_get",
+        "artifacts_read"
       ]
     },
     {
@@ -193,19 +193,22 @@
       "tests": [
         "internal/harnesses/service_test.go",
         "internal/workers/service_test.go",
-        "internal/app/automation_workers_test.go"
+        "internal/app/automation_workers_test.go",
+        "tests/workers-panel.test.mjs"
       ],
       "operations": [
-        "workers.create",
-        "workers.list",
-        "workers.get",
-        "workers.send",
-        "workers.wait",
-        "workers.result",
-        "workers.logs",
-        "workers.cancel",
-        "workers.close",
-        "workers.resolve"
+        "harnesses_list",
+        "harnesses_get",
+        "workers_create",
+        "workers_list",
+        "workers_get",
+        "workers_send",
+        "workers_wait",
+        "workers_result",
+        "workers_logs",
+        "workers_cancel",
+        "workers_close",
+        "workers_resolve"
       ]
     }
   ],
@@ -244,7 +247,11 @@
     "/api/workspace/permission": "human",
     "/api/harnesses/status": "human",
     "/api/harnesses/policy": "human",
-    "/api/harnesses/turn-action": "human"
+    "/api/harnesses/turn-action": "human",
+    "/api/workers/list": "workers",
+    "/api/workers/get": "workers",
+    "/api/workers/logs": "workers",
+    "/api/workers/action": "workers"
   },
   "native_actions": {
     "internal/localcommands/wire/protocol.go": {
@@ -287,7 +294,7 @@
   },
   "exceptions": {
     "human": "认证、秘密、配对及授权须人类操作；混合入口逐字段按 coverage.md 分类。",
-    "display": "纯展示操作以结构化读取或显式设置等价替代；实体按键录制不需要模拟。完成卡片的动画、排队和关闭以 runs.get/wait、logs.read 等价读取，展示可用性由 settings.get.notifications 提供。",
+    "display": "纯展示操作以结构化读取或显式设置等价替代；实体按键录制不需要模拟。完成卡片的动画、排队和关闭以 runs_get/wait、logs_read 等价读取，展示可用性由 settings.get.notifications 提供。",
     "known-path": "脚本选择器以设置已知本地绝对路径等价替代，不增加任意目录浏览。"
   }
 }

@@ -250,7 +250,7 @@ export function localCommands({api, post, session, listen, guarded, actions, edi
       let result;
       if (external) {
         const {id, revision, ...fields} = command;
-        const saved = await editorOperation(post, id ? 'commands.patch' : 'commands.create', external,
+        const saved = await editorOperation(post, id ? 'commands_patch' : 'commands_create', external,
           id ? {...fields,command_id:id,expected_revision:revision} : fields);
         result = {id:saved.command_id, catalog:await api('/api/local-commands')};
       } else {

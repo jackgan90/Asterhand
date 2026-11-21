@@ -87,7 +87,7 @@ func publicTurn(turn *conversation.Turn) any {
 
 func (a *App) registerAutomationConversations(r *automation.Registry) {
 	for _, action := range []string{"connection", "connect"} {
-		automation.Register(r, automation.Definition{Name: "conversations." + action, Description: "Inspect or explicitly establish the existing chat connection without a model request", Role: "read", Write: action == "connect"}, nil, func(p automation.Principal, v automation.ConversationTarget) error {
+		automation.Register(r, automation.Definition{Name: "conversations_" + action, Description: "Inspect or explicitly establish the existing chat connection without a model request", Role: "read", Write: action == "connect"}, nil, func(p automation.Principal, v automation.ConversationTarget) error {
 			if len(p.Scopes["conversations"]) == 0 {
 				return automation.Fail("forbidden", "No conversations are granted")
 			}
@@ -98,8 +98,8 @@ func (a *App) registerAutomationConversations(r *automation.Registry) {
 				return automation.Outcome{Data: publicChat(call.Principal, reply), Summary: map[string]string{"connection": reply.Connection}, Accepted: err == nil}, chatError(err)
 			})
 	}
-	automation.Register(r, automation.Definition{Name: "conversations.list", Description: "List permitted persistent conversations without changing the human selection", Role: "read"}, nil, nil, a.automationConversationList)
-	automation.Register(r, automation.Definition{Name: "conversations.get", Description: "Read one conversation and its latest visible turn", Role: "read"}, func(v automation.ConversationID) string { return v.ID }, func(p automation.Principal, v automation.ConversationID) error {
+	automation.Register(r, automation.Definition{Name: "conversations_list", Description: "List permitted persistent conversations without changing the human selection", Role: "read"}, nil, nil, a.automationConversationList)
+	automation.Register(r, automation.Definition{Name: "conversations_get", Description: "Read one conversation and its latest visible turn", Role: "read"}, func(v automation.ConversationID) string { return v.ID }, func(p automation.Principal, v automation.ConversationID) error {
 		return p.Require("conversations", v.ID)
 	},
 		func(ctx context.Context, call automation.Call, v automation.ConversationID) (automation.Outcome, error) {
@@ -108,10 +108,10 @@ func (a *App) registerAutomationConversations(r *automation.Registry) {
 			reply, err := a.Chat.Call(ctx, request)
 			return automation.Outcome{Data: publicChat(call.Principal, reply)}, chatError(err)
 		})
-	automation.Register(r, automation.Definition{Name: "conversations.create", Description: "Prepare one persistent conversation with a stable identity; no message is sent", Role: "edit", Write: true, Batch: true}, nil, func(p automation.Principal, v automation.ConversationTarget) error {
+	automation.Register(r, automation.Definition{Name: "conversations_create", Description: "Prepare one persistent conversation with a stable identity; no message is sent", Role: "edit", Write: true, Batch: true}, nil, func(p automation.Principal, v automation.ConversationTarget) error {
 		return p.Require("conversations", "")
 	}, a.automationConversationCreate)
-	automation.Register(r, automation.Definition{Name: "conversations.send", Description: "Queue one message through the existing send queue; queued is RAM custody, accepted is native durable custody", Role: "execute", Write: true, Batch: true}, func(v automation.ConversationSend) string { return v.ID }, func(p automation.Principal, v automation.ConversationSend) error {
+	automation.Register(r, automation.Definition{Name: "conversations_send", Description: "Queue one message through the existing send queue; queued is RAM custody, accepted is native durable custody", Role: "execute", Write: true, Batch: true}, func(v automation.ConversationSend) string { return v.ID }, func(p automation.Principal, v automation.ConversationSend) error {
 		return p.Require("conversations", v.ID)
 	}, a.automationConversationSend)
 	for _, action := range []string{"get", "stop"} {
@@ -119,20 +119,20 @@ func (a *App) registerAutomationConversations(r *automation.Registry) {
 		if action == "stop" {
 			role = "execute"
 		}
-		automation.Register(r, automation.Definition{Name: "turns." + action, Description: "Observe or stop the explicitly identified turn; never stop a later reply", Role: role, Write: action == "stop", Control: true, Batch: action == "stop"}, func(v automation.TurnInput) string { return v.Conversation }, func(p automation.Principal, v automation.TurnInput) error {
+		automation.Register(r, automation.Definition{Name: "turns_" + action, Description: "Observe or stop the explicitly identified turn; never stop a later reply", Role: role, Write: action == "stop", Control: true, Batch: action == "stop"}, func(v automation.TurnInput) string { return v.Conversation }, func(p automation.Principal, v automation.TurnInput) error {
 			return p.Require("conversations", v.Conversation)
 		},
 			func(ctx context.Context, call automation.Call, v automation.TurnInput) (automation.Outcome, error) {
 				return a.automationTurn(ctx, call, v, action == "stop")
 			})
 	}
-	automation.Register(r, automation.Definition{Name: "turns.wait", Description: "Observe the original turn for up to 30 seconds without resending or cancelling it", Role: "read", Wait: true}, func(v automation.TurnWait) string { return v.Conversation }, func(p automation.Principal, v automation.TurnWait) error {
+	automation.Register(r, automation.Definition{Name: "turns_wait", Description: "Observe the original turn for up to 30 seconds without resending or cancelling it", Role: "read", Wait: true}, func(v automation.TurnWait) string { return v.Conversation }, func(p automation.Principal, v automation.TurnWait) error {
 		return p.Require("conversations", v.Conversation)
 	}, a.automationTurnWait)
-	automation.Register(r, automation.Definition{Name: "messages.list", Description: "Read a bounded page of visible user/assistant messages", Role: "read"}, func(v automation.MessagesList) string { return v.Conversation }, func(p automation.Principal, v automation.MessagesList) error {
+	automation.Register(r, automation.Definition{Name: "messages_list", Description: "Read a bounded page of visible user/assistant messages", Role: "read"}, func(v automation.MessagesList) string { return v.Conversation }, func(p automation.Principal, v automation.MessagesList) error {
 		return p.Require("conversations", v.Conversation)
 	}, a.automationMessages)
-	automation.Register(r, automation.Definition{Name: "messages.get", Description: "Read a bounded raw-text fragment of a visible message", Role: "read"}, func(v automation.MessageInput) string { return v.Conversation }, func(p automation.Principal, v automation.MessageInput) error {
+	automation.Register(r, automation.Definition{Name: "messages_get", Description: "Read a bounded raw-text fragment of a visible message", Role: "read"}, func(v automation.MessageInput) string { return v.Conversation }, func(p automation.Principal, v automation.MessageInput) error {
 		return p.Require("conversations", v.Conversation)
 	}, a.automationMessage)
 }

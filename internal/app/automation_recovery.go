@@ -17,15 +17,15 @@ func (a *App) reconcileAutomationOperation(receipt operations.Receipt) (operatio
 	}
 	var summary any
 	switch receipt.Name {
-	case "drafts.commit":
+	case "drafts_commit":
 		return a.reconcileEditorCommit(receipt)
-	case "workspace_files.mutate", "workspace_versions.restore", "workspace_operations.resolve":
+	case "workspace_files_mutate", "workspace_versions_restore", "workspace_operations_resolve":
 		files, err := a.Chat.Workspace()
 		if err != nil {
 			return receipt, err
 		}
 		op, err := files.Operation(receipt.NativeID())
-		if receipt.Name == "workspace_operations.resolve" {
+		if receipt.Name == "workspace_operations_resolve" {
 			op, err = files.Resolution(receipt.NativeID())
 		}
 		if err != nil {
@@ -35,7 +35,7 @@ func (a *App) reconcileAutomationOperation(receipt operations.Receipt) (operatio
 			return receipt, nil
 		}
 		summary = map[string]string{"activity_id": op.ID, "state": op.State}
-	case "conversations.create", "conversations.send":
+	case "conversations_create", "conversations_send":
 		conversation, turn, err := a.Chat.OperationStatus(receipt.NativeID())
 		if errors.Is(err, store.ErrNotFound) {
 			return receipt, nil
@@ -43,12 +43,12 @@ func (a *App) reconcileAutomationOperation(receipt operations.Receipt) (operatio
 		if err != nil {
 			return receipt, err
 		}
-		if receipt.Name == "conversations.create" && conversation != nil {
+		if receipt.Name == "conversations_create" && conversation != nil {
 			summary = map[string]any{"turn_operation_id": receipt.NativeID(), "conversation_id": conversation.ID, "state": conversation.State}
-		} else if receipt.Name == "conversations.send" && turn != nil {
+		} else if receipt.Name == "conversations_send" && turn != nil {
 			summary = map[string]any{"conversation_id": turn.Conversation, "turn_operation_id": receipt.NativeID(), "delivery": turn.Delivery, "turn_id": turn.ID}
 		}
-	case "workers.create", "workers.send":
+	case "workers_create", "workers_send":
 		if a.Workers == nil {
 			return receipt, nil
 		}
@@ -60,7 +60,7 @@ func (a *App) reconcileAutomationOperation(receipt operations.Receipt) (operatio
 			return receipt, nil
 		}
 		summary = s
-	case "tasks.submit":
+	case "tasks_submit":
 		job, err := a.Store.RequestJob(receipt.Node, receipt.NativeID())
 		if errors.Is(err, store.ErrNotFound) {
 			return receipt, nil
@@ -69,7 +69,7 @@ func (a *App) reconcileAutomationOperation(receipt operations.Receipt) (operatio
 			return receipt, err
 		}
 		summary = map[string]any{"task_id": job.ID, "request_id": receipt.NativeID(), "target_node_id": taskTarget(job), "project_id": job.Request.ProjectID}
-	case "diagnostics.run", "batches.submit":
+	case "diagnostics_run", "batches_submit":
 		state, err := a.Store.AutomationState(receipt.Identity)
 		if errors.Is(err, store.ErrNotFound) {
 			return receipt, nil
@@ -77,12 +77,12 @@ func (a *App) reconcileAutomationOperation(receipt operations.Receipt) (operatio
 		if err != nil {
 			return receipt, err
 		}
-		if receipt.Name == "diagnostics.run" {
+		if receipt.Name == "diagnostics_run" {
 			summary = map[string]string{"operation_id": receipt.ID, "state": "running"}
 		} else {
 			summary = map[string]string{"batch_id": state.ID}
 		}
-	case "settings.desktop_shortcut":
+	case "settings_desktop_shortcut":
 		state, err := a.Store.AutomationState(receipt.Identity)
 		if errors.Is(err, store.ErrNotFound) {
 			return receipt, nil

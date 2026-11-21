@@ -41,12 +41,12 @@ func TestRestrictedCallerNodeStartRequiresGeneralToolset(t *testing.T) {
 		},
 	}
 
-	resp, err := c.Call(context.Background(), "node.start", "op_start_1", json.RawMessage("{}"))
+	resp, err := c.Call(context.Background(), "node_start", "op_start_1", json.RawMessage("{}"))
 	if err != nil {
 		t.Fatalf("unexpected transport error: %v", err)
 	}
 	if resp.Error == nil || resp.Error.Code != "forbidden" {
-		t.Fatalf("expected node.start rejected with forbidden for collab-only caller, got %+v", resp)
+		t.Fatalf("expected node_start rejected with forbidden for collab-only caller, got %+v", resp)
 	}
 }
 

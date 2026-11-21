@@ -64,6 +64,7 @@ try {
     Invoke-BuildProcess 'Verify UI automation coverage' $Node @('--test',(Join-Path $repo 'tests/automation-coverage.test.mjs'))
     foreach ($target in @(
         @{name='asterhand';file='asterhand.exe';gui=$false},
+        @{name='asterhand-mcp';file='asterhand-mcp.exe';gui=$false},
         @{name='asterhand-launcher';file='AsterhandLauncher.exe';gui=$true},
         @{name='asterhand-input-host';file='AsterhandInputHost.exe';gui=$true})) {
         $flags = "-s -w -X github.com/jackgan90/Asterhand/internal/config.SourceDigest=$SourceDigest"

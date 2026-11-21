@@ -39,7 +39,7 @@ func workspaceOutcome(op workspace.Operation, err error) (automation.Outcome, er
 }
 
 func (a *App) registerAutomationWorkspace(r *automation.Registry) {
-	for _, name := range []string{"workspaces.get", "conversations.capabilities"} {
+	for _, name := range []string{"workspaces_get", "conversations_capabilities"} {
 		automation.Register(r, automation.Definition{Name: name, Description: "Read supported, authorized and ready workspace capabilities without starting the model", Role: "read"}, nil, nil,
 			func(ctx context.Context, call automation.Call, v automation.WorkspaceInput) (automation.Outcome, error) {
 				files, err := a.publicWorkspace(call.Principal, v.Workspace, false)
@@ -49,7 +49,7 @@ func (a *App) registerAutomationWorkspace(r *automation.Registry) {
 				return automation.Outcome{Data: files.Status()}, nil
 			})
 	}
-	automation.Register(r, automation.Definition{Name: "workspace_files.list", Description: "List one bounded page of workspace-relative entries", Role: "read"}, nil, nil,
+	automation.Register(r, automation.Definition{Name: "workspace_files_list", Description: "List one bounded page of workspace-relative entries", Role: "read"}, nil, nil,
 		func(ctx context.Context, call automation.Call, v automation.WorkspaceList) (automation.Outcome, error) {
 			files, err := a.publicWorkspace(call.Principal, v.Workspace, true)
 			if err != nil {
@@ -58,7 +58,7 @@ func (a *App) registerAutomationWorkspace(r *automation.Registry) {
 			page, err := files.SearchContext(ctx, v.Path, "", v.Cursor, false, false)
 			return automation.Outcome{Data: page}, workspacePublicError(err)
 		})
-	automation.Register(r, automation.Definition{Name: "workspace_files.search", Description: "Find files by literal filename or content with bounded scanning and pagination", Role: "read"}, nil, nil,
+	automation.Register(r, automation.Definition{Name: "workspace_files_search", Description: "Find files by literal filename or content with bounded scanning and pagination", Role: "read"}, nil, nil,
 		func(ctx context.Context, call automation.Call, v automation.WorkspaceSearch) (automation.Outcome, error) {
 			files, err := a.publicWorkspace(call.Principal, v.Workspace, true)
 			if err != nil {
@@ -67,7 +67,7 @@ func (a *App) registerAutomationWorkspace(r *automation.Registry) {
 			page, err := files.SearchContext(ctx, v.Path, v.Query, v.Cursor, v.Content, true)
 			return automation.Outcome{Data: page}, workspacePublicError(err)
 		})
-	automation.Register(r, automation.Definition{Name: "workspace_files.read", Description: "Read a bounded base64 fragment, checking the expected file revision", Role: "read"}, nil, nil,
+	automation.Register(r, automation.Definition{Name: "workspace_files_read", Description: "Read a bounded base64 fragment, checking the expected file revision", Role: "read"}, nil, nil,
 		func(ctx context.Context, call automation.Call, v automation.WorkspaceRead) (automation.Outcome, error) {
 			files, err := a.publicWorkspace(call.Principal, v.Workspace, true)
 			if err != nil {
@@ -76,7 +76,7 @@ func (a *App) registerAutomationWorkspace(r *automation.Registry) {
 			data, err := files.ReadContext(ctx, v.Path, v.Revision, v.Offset)
 			return automation.Outcome{Data: data}, workspacePublicError(err)
 		})
-	automation.Register(r, automation.Definition{Name: "workspace_files.mutate", Description: "Create, replace, move or remove workspace text files with expected revisions and recoverable versions; a batch may partially complete", Role: "edit", Write: true, Batch: true}, func(v automation.WorkspaceMutate) string { return v.Workspace }, nil,
+	automation.Register(r, automation.Definition{Name: "workspace_files_mutate", Description: "Create, replace, move or remove workspace text files with expected revisions and recoverable versions; a batch may partially complete", Role: "edit", Write: true, Batch: true}, func(v automation.WorkspaceMutate) string { return v.Workspace }, nil,
 		func(ctx context.Context, call automation.Call, v automation.WorkspaceMutate) (automation.Outcome, error) {
 			files, err := a.publicWorkspace(call.Principal, v.Workspace, true)
 			if err != nil {
@@ -88,7 +88,7 @@ func (a *App) registerAutomationWorkspace(r *automation.Registry) {
 			op, err := files.Mutate(call.Identity.NativeID(), workspace.Scope{Policy: v.Policy}, v.Mutations)
 			return workspaceOutcome(op, err)
 		})
-	automation.Register(r, automation.Definition{Name: "workspace_versions.list", Description: "Read saved before-images and actual outcomes for a workspace file", Role: "read"}, nil, nil,
+	automation.Register(r, automation.Definition{Name: "workspace_versions_list", Description: "Read saved before-images and actual outcomes for a workspace file", Role: "read"}, nil, nil,
 		func(ctx context.Context, call automation.Call, v automation.WorkspaceVersions) (automation.Outcome, error) {
 			files, err := a.publicWorkspace(call.Principal, v.Workspace, true)
 			if err != nil {
@@ -97,7 +97,7 @@ func (a *App) registerAutomationWorkspace(r *automation.Registry) {
 			items, next, err := files.Versions(v.Path, v.After)
 			return automation.Outcome{Data: map[string]any{"items": items, "next": next}}, workspacePublicError(err)
 		})
-	automation.Register(r, automation.Definition{Name: "workspace_versions.restore", Description: "Restore a saved before-image after checking the current revision; records a new recoverable change", Role: "edit", Write: true, Batch: true}, func(v automation.WorkspaceRestore) string { return v.Workspace }, nil,
+	automation.Register(r, automation.Definition{Name: "workspace_versions_restore", Description: "Restore a saved before-image after checking the current revision; records a new recoverable change", Role: "edit", Write: true, Batch: true}, func(v automation.WorkspaceRestore) string { return v.Workspace }, nil,
 		func(ctx context.Context, call automation.Call, v automation.WorkspaceRestore) (automation.Outcome, error) {
 			files, err := a.publicWorkspace(call.Principal, v.Workspace, true)
 			if err != nil {

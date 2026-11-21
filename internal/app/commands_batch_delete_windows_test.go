@@ -75,7 +75,7 @@ func TestCommandBatchDeleteProtectsRunningCommandAcrossEntrypoints(t *testing.T)
 		t.Fatal(result)
 	}
 	_, token := grantTestAutomation(t, n.app, []string{"read", "edit"}, map[string][]string{"commands": {"*"}})
-	public := testAutomationCall(n.app, token, "commands.delete", operations.NewID(time.Now()), automation.CommandVersion{ID: busy.ID, Revision: busy.Revision})
+	public := testAutomationCall(n.app, token, "commands_delete", operations.NewID(time.Now()), automation.CommandVersion{ID: busy.ID, Revision: busy.Revision})
 	if public.Error == nil || public.Error.Code != result.Results[0].Error.Code {
 		t.Fatal(public, result)
 	}

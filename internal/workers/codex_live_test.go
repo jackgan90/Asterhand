@@ -121,3 +121,103 @@ func TestCodexAdapterLiveTwoTurnReview(t *testing.T) {
 	}
 	t.Logf("Turn 2 OK (same thread=%s, turn=%s): %s", done2.NativeSessionID, done2.NativeTurnID, ans2)
 }
+
+// TestCodexAdapterLiveWorkspaceWrite exercises real Codex workspace_write mode
+// in a temporary Git repo with a dirty baseline, verifying actual file mutation,
+// VCS before/after snapshots, and ExternalChangesPossible metadata.
+// Opt-in via ASTERHAND_LIVE_CODEX=1.
+func TestCodexAdapterLiveWorkspaceWrite(t *testing.T) {
+	if os.Getenv("ASTERHAND_LIVE_CODEX") != "1" {
+		t.Skip("set ASTERHAND_LIVE_CODEX=1 to run live Codex workspace_write test")
+	}
+	home := t.TempDir()
+	repoDir := t.TempDir()
+	if _, err := runGit(context.Background(), repoDir, "init"); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+	_, _ = runGit(context.Background(), repoDir, "config", "user.email", "test@example.com")
+	_, _ = runGit(context.Background(), repoDir, "config", "user.name", "Test")
+	target := filepath.Join(repoDir, "note.txt")
+	if err := os.WriteFile(target, []byte("STATUS=OLD\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = runGit(context.Background(), repoDir, "add", "note.txt")
+	_, _ = runGit(context.Background(), repoDir, "commit", "-m", "init")
+	// Add a pre-existing dirty baseline file to verify DirtyBaseline=true reporting.
+	if err := os.WriteFile(filepath.Join(repoDir, "baseline-dirty.txt"), []byte("local edit\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	hs, err := harnesses.Open(home, `C:\Asterhand\asterhand.exe`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs.AntigravityConfigPath = filepath.Join(home, "ag_mcp.json")
+	hs.ClaudeConfigPath = filepath.Join(home, "claude.json")
+	tr := true
+	if _, err := hs.UpdatePolicy(harnesses.UpdatePolicyInput{
+		HarnessID:           harnesses.HarnessCodex,
+		CollabWorkerEnabled: &tr,
+		AllowWorkspaceWrite: &tr,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := NewService(home, hs, NewCodexAdapter())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = svc.Close(ctx)
+	}()
+
+	w, err := svc.Create(context.Background(), CreateInput{
+		OperationID:   "live_write_create",
+		HarnessID:     harnesses.HarnessCodex,
+		WorkspaceRoot: repoDir,
+		Alias:         "codex-writer",
+		AccessMode:    harnesses.AccessWorkspaceWrite,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := svc.Send(context.Background(), SendInput{
+		OperationID:         "live_write_send",
+		WorkerID:            w.ID,
+		ExpectedWorkspaceID: w.WorkspaceID,
+		Prompt:              "Edit note.txt in the current workspace so its exact content is 'STATUS=UPDATED' (with trailing newline). Do not modify baseline-dirty.txt. Reply with WRITE_DONE once saved.",
+		ArtifactPaths:       []string{"note.txt"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var done Turn
+	var ans string
+	for i := 0; i < 6; i++ {
+		done, ans, _, err = svc.Wait(context.Background(), turn.ID, w.WorkspaceID, 25*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if IsTurnTerminal(done.State) {
+			break
+		}
+	}
+	if done.State != TurnCompleted || !done.AnswerAvailable {
+		t.Fatalf("live workspace_write failed: state=%s err=%s ans=%q", done.State, done.ErrorMessage, ans)
+	}
+	gotBytes, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(gotBytes), "STATUS=UPDATED") {
+		t.Fatalf("expected note.txt updated to STATUS=UPDATED, got %q", string(gotBytes))
+	}
+	if done.BaselineVCS == nil || !done.BaselineVCS.DirtyBaseline || !done.BaselineVCS.ExternalChangesPossible {
+		t.Fatalf("expected dirty baseline in BaselineVCS, got %+v", done.BaselineVCS)
+	}
+	if done.AfterVCS == nil || done.AfterVCS.UnstagedCount < 1 {
+		t.Fatalf("expected unstaged modification in AfterVCS, got %+v", done.AfterVCS)
+	}
+	t.Logf("Live workspace_write OK (thread=%s, turn=%s, changed=%v): %s", done.NativeSessionID, done.NativeTurnID, done.AfterVCS.ChangedFiles, ans)
+}

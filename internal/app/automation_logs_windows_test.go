@@ -27,13 +27,13 @@ func TestPublicLogPagesFilterDecodeAndEscapeWithoutLoss(t *testing.T) {
 	if err := os.WriteFile(script, []byte(body), 0600); err != nil {
 		t.Fatal(err)
 	}
-	created := testAutomationCall(a, token, "commands.create", operations.NewID(time.Now()), automation.CommandInput{Name: "log_bytes", Graph: apiTestGraph(script)})
+	created := testAutomationCall(a, token, "commands_create", operations.NewID(time.Now()), automation.CommandInput{Name: "log_bytes", Graph: apiTestGraph(script)})
 	if created.Error != nil {
 		t.Fatal(created)
 	}
 	var ref localcommands.CommandReference
 	_ = json.Unmarshal(created.Receipt.Result, &ref)
-	started := testAutomationCall(a, token, "commands.run", operations.NewID(time.Now()), automation.CommandVersion{ID: ref.ID, Revision: ref.Revision})
+	started := testAutomationCall(a, token, "commands_run", operations.NewID(time.Now()), automation.CommandVersion{ID: ref.ID, Revision: ref.Revision})
 	if started.Error != nil {
 		t.Fatal(started)
 	}
@@ -43,7 +43,7 @@ func TestPublicLogPagesFilterDecodeAndEscapeWithoutLoss(t *testing.T) {
 	v := automation.LogRead{CommandID: ref.ID, RunID: run.ID, Stream: "stdout", Encoding: "utf-8", Format: "text"}
 	var got strings.Builder
 	for i := 0; i < 2000; i++ {
-		reply := testAutomationCall(a, token, "logs.read", "", v)
+		reply := testAutomationCall(a, token, "logs_read", "", v)
 		if reply.Error != nil {
 			t.Fatal(reply)
 		}
@@ -73,7 +73,7 @@ func TestPublicLogPagesFilterDecodeAndEscapeWithoutLoss(t *testing.T) {
 		t.Fatalf("decoded bytes mismatch: got %d want %d", got.Len(), len(want)+3)
 	}
 	v.Stream = "stderr"
-	if reply := testAutomationCall(a, token, "logs.read", "", v); reply.Error == nil || reply.Error.Code != "invalid_cursor" {
+	if reply := testAutomationCall(a, token, "logs_read", "", v); reply.Error == nil || reply.Error.Code != "invalid_cursor" {
 		t.Fatal("cursor crossed filter", reply)
 	}
 }

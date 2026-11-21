@@ -40,7 +40,7 @@ type startReceipts struct {
 // checks. A prepared receipt is written before spawning; an old unknown request
 // only probes, never calls launchLocked a second time.
 func StartOperation(ctx context.Context, path, home string, identity operations.Identity, check func() error) (operations.Receipt, error) {
-	if identity.Name != "node.start" {
+	if identity.Name != "node_start" {
 		return operations.Receipt{}, operations.ErrInvalid
 	}
 	if err := operations.CheckName(identity.ID, identity.Name); err != nil {

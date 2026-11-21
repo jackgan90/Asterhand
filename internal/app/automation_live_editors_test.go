@@ -69,19 +69,19 @@ func TestLocalCLIReadsAndWritesOpenEditorWithoutProfile(t *testing.T) {
 		return resp
 	}
 	id := page + ":field"
-	if listed := run("drafts.list", map[string]any{}, false); listed.Error != nil || !strings.Contains(string(compactResult(listed.Data)), id) {
+	if listed := run("drafts_list", map[string]any{}, false); listed.Error != nil || !strings.Contains(string(compactResult(listed.Data)), id) {
 		t.Fatal(listed)
 	}
-	if got := run("drafts.get", map[string]string{"draft_id": id}, false); got.Error != nil || !strings.Contains(string(compactResult(got.Data)), "unfinished") {
+	if got := run("drafts_get", map[string]string{"draft_id": id}, false); got.Error != nil || !strings.Contains(string(compactResult(got.Data)), "unfinished") {
 		t.Fatal(got)
 	}
-	if updated := run("drafts.update", map[string]any{"draft_id": id, "expected_revision": "initial", "content": map[string]string{"text": "finished"}}, true); updated.Error != nil {
+	if updated := run("drafts_update", map[string]any{"draft_id": id, "expected_revision": "initial", "content": map[string]string{"text": "finished"}}, true); updated.Error != nil {
 		t.Fatal(updated.Error)
 	}
-	if stale := run("drafts.commit", map[string]string{"draft_id": id, "expected_revision": "initial"}, true); stale.Error == nil || stale.Error.Code != "conflict" {
+	if stale := run("drafts_commit", map[string]string{"draft_id": id, "expected_revision": "initial"}, true); stale.Error == nil || stale.Error.Code != "conflict" {
 		t.Fatal(stale)
 	}
-	if done := run("drafts.commit", map[string]string{"draft_id": id, "expected_revision": "updated"}, true); done.Error != nil || !strings.Contains(string(compactResult(done.Data)), "accepted") {
+	if done := run("drafts_commit", map[string]string{"draft_id": id, "expected_revision": "updated"}, true); done.Error != nil || !strings.Contains(string(compactResult(done.Data)), "accepted") {
 		t.Fatal(done)
 	}
 }

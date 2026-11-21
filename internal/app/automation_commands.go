@@ -20,10 +20,10 @@ func commandError(err error) error {
 }
 
 func (a *App) registerAutomationCommands(r *automation.Registry) {
-	for _, name := range []string{"commands.list", "commands.search"} {
+	for _, name := range []string{"commands_list", "commands_search"} {
 		automation.Register(r, automation.Definition{Name: name, Description: "Search permitted commands by name or alias; return bounded summaries", Role: "read"}, nil, nil, a.automationCommandList)
 	}
-	automation.Register(r, automation.Definition{Name: "commands.get", Description: "Read a complete command and its object revision; large objects support json_fragments", Role: "read", Large: true}, func(p automation.CommandGet) string { return p.ID }, func(p automation.Principal, v automation.CommandGet) error { return p.Require("commands", v.ID) },
+	automation.Register(r, automation.Definition{Name: "commands_get", Description: "Read a complete command and its object revision; large objects support json_fragments", Role: "read", Large: true}, func(p automation.CommandGet) string { return p.ID }, func(p automation.Principal, v automation.CommandGet) error { return p.Require("commands", v.ID) },
 		func(ctx context.Context, call automation.Call, v automation.CommandGet) (automation.Outcome, error) {
 			c, err := a.Commands.Get(v.ID)
 			if err != nil {
@@ -31,23 +31,23 @@ func (a *App) registerAutomationCommands(r *automation.Registry) {
 			}
 			return automationObject(c, v.Format, v.Cursor, []any{"command", call.Principal.ID, v.ID, c.Revision})
 		})
-	automation.Register(r, automation.Definition{Name: "commands.validate", Description: "Normalize and validate a candidate command and DAG without saving or executing it (missing script files on disk are allowed at save time; returns empty id/revision)", Role: "read", Large: true}, nil, func(p automation.Principal, v automation.CommandValidate) error { return p.Require("commands", v.ID) },
+	automation.Register(r, automation.Definition{Name: "commands_validate", Description: "Normalize and validate a candidate command and DAG without saving or executing it (missing script files on disk are allowed at save time; returns empty id/revision)", Role: "read", Large: true}, nil, func(p automation.Principal, v automation.CommandValidate) error { return p.Require("commands", v.ID) },
 		func(ctx context.Context, call automation.Call, v automation.CommandValidate) (automation.Outcome, error) {
 			c, err := a.Commands.Validate(v.Candidate.Command())
 			return automation.Outcome{Data: c}, commandError(err)
 		})
-	automation.Register(r, automation.Definition{Name: "commands.create", Description: "Atomically create a command with a complete DAG; script file availability transitions asynchronously from checking to ready", Role: "edit", Write: true, Batch: true, Large: true}, nil, func(p automation.Principal, v automation.CommandInput) error { return p.Require("commands", "") },
+	automation.Register(r, automation.Definition{Name: "commands_create", Description: "Atomically create a command with a complete DAG; script file availability transitions asynchronously from checking to ready", Role: "edit", Write: true, Batch: true, Large: true}, nil, func(p automation.Principal, v automation.CommandInput) error { return p.Require("commands", "") },
 		func(ctx context.Context, call automation.Call, v automation.CommandInput) (automation.Outcome, error) {
 			return a.saveAutomationCommand(call, v.Command(), "")
 		})
-	automation.Register(r, automation.Definition{Name: "commands.patch", Description: "Atomically apply command metadata and full-graph or step-level edits against expected_revision (rejected while any instance is running)", Role: "edit", Write: true, Batch: true}, func(v automation.CommandPatch) string { return v.ID }, func(p automation.Principal, v automation.CommandPatch) error { return p.Require("commands", v.ID) }, a.automationCommandPatch)
-	automation.Register(r, automation.Definition{Name: "commands.clone", Description: "Copy configuration with new command and step identities", Role: "edit", Write: true, Batch: true}, func(v automation.CommandClone) string { return v.ID }, func(p automation.Principal, v automation.CommandClone) error {
+	automation.Register(r, automation.Definition{Name: "commands_patch", Description: "Atomically apply command metadata and full-graph or step-level edits against expected_revision (rejected while any instance is running)", Role: "edit", Write: true, Batch: true}, func(v automation.CommandPatch) string { return v.ID }, func(p automation.Principal, v automation.CommandPatch) error { return p.Require("commands", v.ID) }, a.automationCommandPatch)
+	automation.Register(r, automation.Definition{Name: "commands_clone", Description: "Copy configuration with new command and step identities", Role: "edit", Write: true, Batch: true}, func(v automation.CommandClone) string { return v.ID }, func(p automation.Principal, v automation.CommandClone) error {
 		if err := p.Require("commands", v.ID); err != nil {
 			return err
 		}
 		return p.Require("commands", "")
 	}, a.automationCommandClone)
-	automation.Register(r, automation.Definition{Name: "commands.delete", Description: "Delete a command and removable detailed run data; preserve operation receipts", Role: "edit", Write: true, Batch: true}, func(v automation.CommandVersion) string { return v.ID }, func(p automation.Principal, v automation.CommandVersion) error { return p.Require("commands", v.ID) },
+	automation.Register(r, automation.Definition{Name: "commands_delete", Description: "Delete a command and removable detailed run data; preserve operation receipts", Role: "edit", Write: true, Batch: true}, func(v automation.CommandVersion) string { return v.ID }, func(p automation.Principal, v automation.CommandVersion) error { return p.Require("commands", v.ID) },
 		func(ctx context.Context, call automation.Call, v automation.CommandVersion) (automation.Outcome, error) {
 			if err := call.Check(); err != nil {
 				return automation.Outcome{}, err
@@ -55,7 +55,7 @@ func (a *App) registerAutomationCommands(r *automation.Registry) {
 			ref, err := a.Commands.DeleteOperation(v.ID, v.Revision, call.Identity)
 			return automation.Outcome{Data: ref, Summary: ref, Accepted: ref.ID != "", Unknown: ref.ID != "" && err != nil}, commandError(err)
 		})
-	automation.Register(r, automation.Definition{Name: "commands.run", Description: "Start one graph instance at expected_revision and return its run_id; Windows runs each script step non-interactively in a non-breakaway Job object (holds 1 of 8 node slots until all child processes exit)", Role: "execute", Write: true, Batch: true}, func(v automation.CommandVersion) string { return v.ID }, func(p automation.Principal, v automation.CommandVersion) error { return p.Require("commands", v.ID) },
+	automation.Register(r, automation.Definition{Name: "commands_run", Description: "Start one graph instance at expected_revision and return its run_id; Windows runs each script step non-interactively in a non-breakaway Job object (holds 1 of 8 node slots until all child processes exit)", Role: "execute", Write: true, Batch: true}, func(v automation.CommandVersion) string { return v.ID }, func(p automation.Principal, v automation.CommandVersion) error { return p.Require("commands", v.ID) },
 		func(ctx context.Context, call automation.Call, v automation.CommandVersion) (automation.Outcome, error) {
 			record, err := a.Commands.LaunchOperation(ctx, v.ID, v.Revision, &call.Identity, call.Check)
 			if record == nil {
@@ -118,11 +118,11 @@ func (a *App) automationCommandClone(ctx context.Context, call automation.Call, 
 }
 
 func (a *App) registerAutomationRuns(r *automation.Registry) {
-	automation.Register(r, automation.Definition{Name: "runs.get", Description: "Read the exact graph instance and its steps", Role: "read"}, func(v automation.RunID) string { return v.CommandID }, func(p automation.Principal, v automation.RunID) error { return p.Require("commands", v.CommandID) },
+	automation.Register(r, automation.Definition{Name: "runs_get", Description: "Read the exact graph instance and its steps", Role: "read"}, func(v automation.RunID) string { return v.CommandID }, func(p automation.Principal, v automation.RunID) error { return p.Require("commands", v.CommandID) },
 		func(ctx context.Context, call automation.Call, v automation.RunID) (automation.Outcome, error) {
 			return a.automationRun(v)
 		})
-	automation.Register(r, automation.Definition{Name: "runs.stop", Description: "Request stopping only the explicit instance IDs; later runs are unaffected", Role: "execute", Write: true, Batch: true, Control: true}, func(v automation.RunStop) string { return v.CommandID }, func(p automation.Principal, v automation.RunStop) error { return p.Require("commands", v.CommandID) },
+	automation.Register(r, automation.Definition{Name: "runs_stop", Description: "Request stopping only the explicit instance IDs; later runs are unaffected", Role: "execute", Write: true, Batch: true, Control: true}, func(v automation.RunStop) string { return v.CommandID }, func(p automation.Principal, v automation.RunStop) error { return p.Require("commands", v.CommandID) },
 		func(ctx context.Context, call automation.Call, v automation.RunStop) (automation.Outcome, error) {
 			if err := call.Check(); err != nil {
 				return automation.Outcome{}, err
@@ -131,7 +131,7 @@ func (a *App) registerAutomationRuns(r *automation.Registry) {
 			summary := map[string]any{"command_id": v.CommandID, "run_ids": v.IDs, "stop_requested": err == nil}
 			return automation.Outcome{Data: summary, Summary: summary, Accepted: err == nil, Unknown: err != nil}, commandError(err)
 		})
-	automation.Register(r, automation.Definition{Name: "runs.wait", Description: "Observe one run for at most 30 seconds; cancelling observation does not stop it", Role: "read", Wait: true}, func(v automation.RunWait) string { return v.CommandID }, func(p automation.Principal, v automation.RunWait) error { return p.Require("commands", v.CommandID) }, a.automationRunWait)
+	automation.Register(r, automation.Definition{Name: "runs_wait", Description: "Observe one run for at most 30 seconds; cancelling observation does not stop it", Role: "read", Wait: true}, func(v automation.RunWait) string { return v.CommandID }, func(p automation.Principal, v automation.RunWait) error { return p.Require("commands", v.CommandID) }, a.automationRunWait)
 }
 
 func (a *App) automationRun(v automation.RunID) (automation.Outcome, error) {

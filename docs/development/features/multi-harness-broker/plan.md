@@ -8,9 +8,9 @@
   2. 为被调方提供**绑定授权工作区的稳定逻辑身份**（例如同项目内的 `codex-reviewer` 先审 Plan、再审 Code），在不强制跨 Harness 共享私有聊天库的前提下保持跨轮上下文连续；
   3. 由 Asterhand 统一发现本机已安装的 Coding Harness、托管其 MCP 注册/反注册与对账，并按**三项正交开关**控制每个 Harness 的工具暴露程度和参与角色，实现“最小必要工具暴露、升级不断连、一键启用/禁用即时生效”。
 - **状态及实施授权范围**：
-  - **当前状态**：`Milestone 1 已实现并完成工程验证及本机真实 Antigravity → Codex 端到端用户验收；Milestone 2—4 保持规划态，待后续独立授权后进入实现`。
-  - **授权边界**：Milestone 1 的代码、自动化测试、本机真实协议实测、用户真机验收与文档同步已完成；Milestone 2—4 实现、推送和 Release 发布各自独立授权。
-  - **预检与验证文档**：[M1 协议预检记录](preflight.md)、[M1 验证说明](validation.md)。
+  - **当前状态**：`Milestone 1—2 已完成实现、工程验证及本机端到端用户验收；Milestone 3—4 保持规划态，待后续独立授权后进入实现`。
+  - **授权边界**：Milestone 1—2 的代码、自动化测试、本机真实协议实测、用户真机验收与文档同步已完成；Milestone 3—4 实现、推送和 Release 发布各自独立授权。
+  - **预检与验证文档**：[协议预检记录](preflight.md)、[验证说明](validation.md)。
 - **关联 Rxx / Cxx / 领域需求 ID**：
   - 原始与收敛需求：`R10`、`R19`、`R20`、`R26`、`R27`、`R28`；扩展原 `C06`（见 [ADR-002](../../../overview/adr/002-mvp-scope.md) 后置范围的新立项增量）；
   - 领域需求：`EXEC-HARNESS-01`—`10`（[执行器需求](../../../executors/requirements.md)）、`AUTO-HARNESS-01`—`05`（[自动化需求](../../../automation/requirements.md)）、`INST-33`（[安装需求](../../../installation/requirements.md)）、`WEB-HARNESS-01`—`04`（[Web 需求](../../../web/requirements.md)）。
@@ -249,18 +249,19 @@
   - [安装需求](../../../installation/requirements.md)、[安装设计](../../../installation/design.md)；
   - [Web 需求](../../../web/requirements.md)、[Web 设计](../../../web/design.md)；
   - [开发路线图](../../roadmap.md)、[文档导航](../../../README.md)。
-- **已同步的实现与文档（Milestone 1）**：
-  - `contracts/automation-coverage.json` 已登记全部 `workers.*` 公共操作与 `/api/harnesses*`、`/api/workers*` 人工入口分类，并通过 `automation_coverage_test.go` 与 `tests/automation-coverage.test.mjs`；
+- **已同步的实现与文档（Milestone 1—2）**：
+  - `contracts/automation-coverage.json` 已登记全部 `harnesses.list/get`、`workers.*` 公共操作与 `/api/harnesses*`、`/api/workers/*` 端点分类，并通过 `automation_coverage_test.go` 与 `tests/automation-coverage.test.mjs`；
+  - `cmd/asterhand-mcp`（稳定无版本号 `asterhand-mcp.exe`）已纳入 `scripts/build-application.ps1`、`install.ps1` 与 `scripts/test-fast-local-install.ps1`；
   - 运行期可见文案与错误键已同步至 `internal/i18n/locales/zh-CN.json` / `en-US.json` 及生成词表，通过 `pwsh -NoProfile -File ./scripts/check-i18n.ps1` 与 `node ./scripts/verify-frontend-assets.mjs`；
-  - 已补充 [M1 协议预检记录](preflight.md) 与 [M1 验证说明](validation.md)；`harnesses.list` / `harnesses.get` 与 `cmd/asterhand-mcp` 随 Milestone 2 落地。
+  - 已补充 [协议预检记录](preflight.md) 与 [验证说明](validation.md)。
 
 ---
 
 ## 规模与拆分评估
 
 - 遵循 [代码风格](../../code-style.md) 单文件 ≤ 1000 物理行、单函数 ≤ 100 物理行软约束；
-- Milestone 1 全部新增与修改的手写 Go / JS / CSS 文件均控制在 1000 行以内：其中 `internal/workers` 按职责拆分为 `types.go`、`store.go`、`service.go`、`service_runner.go`、`service_query.go`、`codex_adapter.go`、`vcs.go`、`process_windows.go`（最大文件 `codex_adapter.go` 577 行）；`internal/harnesses` 拆分为 `types.go`、`path.go`、`mcp_antigravity.go`、`service.go`（最大 531 行）；前端新增独立模块 `web/harnesses-settings.mjs`（280 行）；
-- 仅生成的 `web/i18n-catalog.mjs`（1850 行，由 `scripts/sync-i18n.mjs` 生成）与既有扁平双语词典 `internal/i18n/locales/zh-CN.json` / `en-US.json`（各 1052 行，本次在原有 968 行上新增 M1 词条）超过 1000 行；扁平词典拆分会增加单一词表校验与同步复杂度且降低检索可读性，按软约束保留现状。
+- Milestone 1—2 全部新增与修改的手写 Go / JS / CSS 文件均控制在 1000 行以内：其中 `cmd/asterhand-mcp` 为独立入口（`main.go` 58 行）；`internal/workers` 按职责拆分为 `types.go`、`store.go`、`service.go`、`service_runner.go`、`service_query.go`、`codex_adapter.go`、`vcs.go`、`process_windows.go`（最大 621 行）；`internal/harnesses` 按职责拆分为 `types.go`、`path.go`、`discover.go`、`exec_windows.go`、`exec_other.go`、`mcp_antigravity.go`、`mcp_codex.go`、`mcp_claude.go`、`service.go`（最大 549 行）；前端拆分独立模块 `web/harnesses-settings.mjs`（395 行）、`web/workers-panel.mjs`（380 行）与独立样式 `web/workers.css`（47 行，保持 `web/style.css` 894 行不超 1000 行）；
+- 仅生成的 `web/i18n-catalog.mjs`（由 `scripts/sync-i18n.mjs` 生成）与既有扁平双语词典 `internal/i18n/locales/zh-CN.json` / `en-US.json`（各 1083 行，在原有结构上增量追加 M1/M2 词条）超过 1000 行；扁平词典拆分会增加单一词表校验与同步复杂度且降低检索可读性，按软约束保留现状。
 
 ---
 

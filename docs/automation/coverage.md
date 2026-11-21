@@ -105,12 +105,12 @@
 
 ## 多 Coding Harness 发现、托管接入与协作
 
-对应[多 Coding Harness 中介计划](../development/features/multi-harness-broker/plan.md)与[M1 验证说明](../development/features/multi-harness-broker/validation.md)：Milestone 1 的全部 `workers.*` 公共操作以及 `/api/harnesses*`、`/api/workers*` 人工入口分类已落地并同步登记至 [contracts/automation-coverage.json](../../contracts/automation-coverage.json)；Milestone 2 的 `harnesses.list` / `harnesses.get` 与 Milestone 4 的人工审批入口随对应里程碑交付：
+对应[多 Coding Harness 中介计划](../development/features/multi-harness-broker/plan.md)与[验证说明](../development/features/multi-harness-broker/validation.md)：全仓公共自动化操作名已统一采用 `[a-zA-Z0-9_-]` 下划线规范名（取消点号与边界映射）；Milestone 1—2 的全部 `harnesses_list/get`、`workers_*` 公共操作以及 `/api/harnesses*`、`/api/workers/*` 端点分类已落地并同步登记至 [contracts/automation-coverage.json](../../contracts/automation-coverage.json)；`batches_get` 与 `batches_submit` 成对归属 `general` 工具集；Milestone 4 的人工审批入口随对应里程碑交付：
 
 | 人类操作 / 入口 | 公共操作（CLI 与 MCP 等价） | 分类与规则 |
 |---|---|---|
-| 创建、查询、纯写派发、有界等待、分页读正文/日志、精确取消、关闭与人工核对协作 Worker | `workers.create/list/get/send/wait/result/logs/cancel/close/resolve`（Milestone 1 已实现） | 归属 `collab` 工具集；写操作统一使用 `operation_id` 幂等收据、单 Worker 活跃锁与规范化工作树写互斥；`cancel` 必填 `turn_id` |
-| Web 查看活跃/待核对 Worker 轮次、一键停止与人工核对关闭 | `workers.list/get/wait/result/logs/cancel/resolve`（Milestone 1 已实现） | 业务状态、日志分页、取消与核对关闭完全等价；界面滚动/筛选属展示等价 |
-| 修改 Harness 权限开关、执行外部配置接管/重新接入 | 无（Web「设置 → Coding Harness」`/api/harnesses*` 人工专用入口，Milestone 1 已实现） | **人工例外**（`AUTO-19`）：修改本机外部工具全局配置与协作权限边界，禁止开放给模型自动写入；日常任意常规本地项目免逐项目登记直通，敏感系统与凭据目录由服务端内置拦截 |
-| 查看全部已发现的 Coding Harness、版本、三开关、期望/观察 MCP 托管状态与授权工作区 | `harnesses.list`、`harnesses.get`（Milestone 2 待实现） | 公共只读查询，不含凭据或内部 token |
+| 创建、查询、纯写派发、有界等待、分页读正文/日志、精确取消、关闭与人工核对协作 Worker | `workers_create/list/get/send/wait/result/logs/cancel/close/resolve`（Milestone 1 已实现；Milestone 2 开放 Codex `workspace_write`） | 归属 `collab` 工具集；写操作统一使用 `operation_id` 幂等收据、单 Worker 活跃锁与规范化工作树写互斥；`cancel` 必填 `turn_id` |
+| Web「Coding Workers」面板查看各项目 Worker、轮次、工作树快照与实时日志、停止/核对/归档（`/api/workers/*`） | `workers_list/get/wait/result/logs/cancel/close/resolve`（Milestone 1—2 已实现） | 业务状态、日志分页、工作树快照、取消、归档与核对关闭完全等价；界面滚动/筛选/展开属展示等价 |
+| 修改 Harness 权限开关（含 `allow_workspace_write`）、手工路径覆盖、执行外部 MCP 配置接管/重新接入 | 无（Web「设置 → Coding Harness」`/api/harnesses*` 人工专用入口，Milestone 1—2 已实现） | **人工例外**（`AUTO-19`）：修改本机外部工具全局配置与协作权限边界，禁止开放给模型自动写入；日常任意常规本地项目免逐项目登记直通，敏感系统与凭据目录由服务端内置拦截 |
+| 查看全部已发现的 Coding Harness、版本、能力矩阵、三开关与期望/观察 MCP 托管状态 | `harnesses_list`、`harnesses_get`（Milestone 2 已实现） | 归属 `collab` 工具集，公共只读查询，不含凭据或内部 token |
 | 批准或拒绝被控 Harness B 的高危权限请求（Milestone 4 待实现） | 无（Asterhand 原位人工确认卡片/桌面入口） | **人工例外**（`AUTO-20`）：绝不开放给发起方 A 的模型代批 |

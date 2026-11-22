@@ -1,6 +1,6 @@
-# 多 Coding Harness 中介层 M1 协议预检记录
+# 多 Coding Harness 中介层协议预检记录
 
-本记录保存 Milestone 1 实施前针对本机锁定工具链与 `codex-cli 0.171.0` `app-server` 协议的只读/隔离实测结论，作为 [multi-harness-broker 计划](plan.md)与 `CodexAdapter` 实现的权威协议依据。本文件不包含个人绝对路径、账户凭据或原始长日志。
+本记录保存实施前针对本机锁定工具链的只读/隔离协议实测结论，作为 [multi-harness-broker 计划](plan.md)与各厂商适配器（`CodexAdapter`、`ClaudeAdapter`、`DeepSeekAdapter`）实现的权威协议依据。本文件不包含个人绝对路径、账户凭据或原始长日志。
 
 ## 1. 预检环境与版本
 
@@ -51,3 +51,25 @@
   - **DeepSeek Harness（`0.2.2-rc.5` 桌面版）**：默认安装于 `%LOCALAPPDATA%\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd`（不在全局 `PATH`），`dsh -V` 返回 `0.2.2-rc.5`。实测确认其 `desktop` profile 明确返回 `error: profile "desktop" is managed exclusively by the Electron application` 且未提供官方独立 `mcp add/remove` CLI。因此 Milestone 2 诚实落地 DeepSeek Harness 的自动发现、版本探测与手工路径覆盖，保持 `caller_managed = false`（不逆向或强改 Electron 独占配置），留待 Milestone 3 协议预检与适配。
   - **Codex `workspace_write` 真实写保护实测**：在临时 Git 仓库中启用 `sandbox="workspace-write"`、`sandboxPolicy={"type":"workspaceWrite","writableRoots":[repoDir]}`、`approvalPolicy="never"` 后，真实 Codex 正常修改目标文件且不触碰基线脏文件，前后 `CaptureVCSSnapshot` 准确返回 `dirty_baseline=true`、`external_changes_possible=true` 与变更文件清单。
 - 真实 Antigravity 对话中消费 `mcpResult` 双通道输出（`content[].text` + `structuredContent`）、工具集裁剪隔离、指定 `model` / `reasoning_effort` 与回传 Codex 只读分析结论的 Milestone 1 真机验收已通过，详见 [validation.md](validation.md)。
+
+## 5. Milestone 3 协议预检结论（Claude Code & DeepSeek Harness，Windows x64）
+
+### 5.1 Claude Code（`claude 2.1.330`）`stream-json` 双向协议
+
+| 预检项 | 实测方式 | 实测结论 | 对 `ClaudeAdapter` 的直接约束 |
+|---|---|---|---|
+| **持久多轮与双向控制** | `claude -p --verbose --input-format stream-json --output-format stream-json --no-chrome` 保持 stdin 打开，先发 `control_request(initialize)` 再连续发送多条 `{"type":"user","message":{"role":"user","content":"..."}}` | `initialize` 返回 `control_response(subtype:"success")`；单进程内连续多轮均正常产出 `system(init)` → `assistant` → `result(subtype:"success", session_id, result)`，保持同一 `session_id` | 复用持久子进程与空闲回收模型；支持 `control_request(subtype:"interrupt")` 精确中断进行中轮次 |
+| **防递归禁用 `asterhand` MCP** | 固定传 `--strict-mcp-config --mcp-config '{"mcpServers":{}}'` | `system(init)` 返回 `mcp_servers: []`，即使本机用户配置中存在 `asterhand` 或其他 MCP server 也不会加载 | 作为受控 Worker 启动时强制携带空 `--strict-mcp-config` |
+| **不要误用 `--restricted`** | 对比携带与不携带 `--restricted` | `--restricted` 会忽略用户设置文件（`~/.claude/settings.json`），导致自定义认证/代理设置失效并报错 `Not logged in · Please run /login` | **不得使用 `--restricted`**；使用正常认证链路配合 `--strict-mcp-config`、`--tools` 与 `--permission-mode` 控制能力边界 |
+| **只读 vs 工作区可写边界** | `read_only`：`--tools Read,Glob,Grep --permission-mode dontAsk --permission-prompts none`；`workspace_write`：`--tools Read,Glob,Grep,Edit,Write,Bash --permission-mode acceptEdits --permission-prompts host` | `read_only` 下模型无任何写文件/命令执行工具，尝试创建文件未落盘；`workspace_write` 下工作区内 `Write` 直接成功，工作区外路径写入被拒绝（记录于 `permission_denials`，文件未创建）；支持 `--effort`（`low`/`medium`/`high`/`xhigh`/`max`）、`--model` 与 `--append-system-prompt` | Windows 下按实测如实声明 `harness_tool_restricted`（应用层工具与权限限制 + `OrdinaryToken` 非提权进程）；收到 `control_request(subtype:"can_use_tool")` 时立即回复 `deny + interrupt:true` 收敛为 `blocked_unsupported_approval`（若为 `AskUserQuestion` 则为 `blocked_unsupported_user_input`） |
+| **预绑定会话与跨进程 `--resume`** | 首轮传 `--session-id <uuid>`；新进程传 `--resume <uuid>`；以及传入不存在的随机 UUID | 首轮直接采用预分配 UUID 作为 `session_id`；新进程 `--resume` 准确记住上一轮上下文；无效 UUID 返回 `is_error:true`、`subtype:"error_during_execution"` 及 stderr `No conversation found with session ID: ...` | 首轮可用预分配 UUID 提前落盘 `NativeSessionID`；恢复失败精确映射为 `native_session_unrecoverable`（绝不静默新建会话） |
+
+### 5.2 DeepSeek Harness（`dsh.cmd 0.2.2-rc.5`）ACP（Agent Client Protocol）协议
+
+| 预检项 | 实测方式 | 实测结论 | 对 `DeepSeekAdapter` 的直接约束 |
+|---|---|---|---|
+| **官方协议选型（`acp` vs `headless` vs `sdk`）** | 对比 `--dump-default-config` 与隔离实测 | `headless` 默认禁用 `deepseek-account` 与 `credentials`；`acp`（`dsh --profile acp`）完整保留账号/凭据插件并暴露标准 **Agent Client Protocol v1**（stdio 换行分隔 JSON-RPC 2.0），握手返回 `agentCapabilities.sessionCapabilities: {close, list, resume}` | 锁定 `dsh --profile acp` 作为 `DeepSeekAdapter` 唯一协议，无需逆向内部私有 RPC |
+| **会话创建、配置与跨进程恢复** | `initialize` → `session/new({cwd, mcpServers:[]})` → `session/set_config_option` → 跨进程 `session/resume` → `session/close` | `session/new` 返回 `sessionId` 与 `configOptions`（含实时 `model` 列表及 `reasoning_effort`: `off`/`low`/`high`/`max`）；`session/set_config_option` 支持动态切换模型与推理档位；新进程 `session/resume` 准确恢复上下文；无效 ID 返回 JSON-RPC `-32602: Invalid params: session is not resumable: ...`；`session/close` 返回 `{}` | 模型名按 `configOptions` 实时匹配（同时兼容完整 tuple JSON 与短模型名）；无效会话精确映射 `native_session_unrecoverable` |
+| **流式事件与精确取消** | `session/prompt({sessionId, prompt:[{type:"text", text}]})` + 运行中发通知 `session/cancel({sessionId})` | 持续流式推送 `session/update`（`agent_thought_chunk`、`tool_call`、`tool_call_update`、`agent_message_chunk`、`usage_update`），结束返回 `{"stopReason":"end_turn"}`；收到 `session/cancel` 后立即收敛返回 `{"stopReason":"cancelled"}` | `agent_thought_chunk` / `tool_call*` 归入实时进度与日志，`agent_message_chunk` 累积为 `final_answer`；取消映射 `session/cancel` |
+| **只读 / 可写与审批拦截边界** | 通过环境变量 `DSH_PERMISSION_MODE` 切换 `read-only` 与 `workspace-write`，测试区内/区外文件写入及 `pwsh` 写盘 | `read-only` 下 `write` 拒绝（`file access denied under read-only mode`），`pwsh` 写盘未创建文件；`workspace-write` 下区内写入直接成功、区外写入被拒；当模型尝试申请提权（`workspace-write` 或 `danger-full-access`）时服务端发出 JSON-RPC 请求 `session/request_permission`（选项 `allow-once` / `reject-once`），客户端回复 `{outcome:{outcome:"cancelled"}}` 即可阻断 | Windows 下 `pwsh` 沙箱受目录 ACL 影响（部分目录会触发 `0xC0000142`），文件工具依赖 `fs-sandbox`，因此诚实声明 `harness_tool_restricted`；收到 `session/request_permission` 时在 M3 阶段回复 cancelled 并触发 `session/cancel` 确定性收敛为 `blocked_unsupported_approval` |
+| **防递归与发起方托管边界** | 检查 `dsh --profile acp --dump-default-config` 与 `session/new` 入参 | `acp` 默认配置不挂载外部用户 MCP server，且 `session/new` / `session/resume` 显式传入 `mcpServers: []`；同时 `desktop` profile 仍由 Electron 独占、无官方独立 `mcp add/remove` CLI | 作为 Worker 启动时强制 `mcpServers: []` 且零 Asterhand 凭据注入；`deepseek-harness` 在 M3 开放 `worker_managed = true`，`caller_managed` 继续诚实保持 `false` |

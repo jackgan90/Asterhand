@@ -518,7 +518,7 @@ func TestM2HarnessesDiscoveryOpsAndWorkspaceWritePolicy(t *testing.T) {
 	}
 	capData := capResp.Data.(map[string]any)
 	limits := capData["limits"].(map[string]any)
-	if limits["worker_wall_clock_seconds"] != 900 || limits["worker_stall_seconds"] != 300 || limits["worker_max_active_turns"] != 4 {
+	if limits["worker_wall_clock_seconds"] != 1800 || limits["worker_max_wall_clock_seconds"] != 3600 || limits["worker_stall_seconds"] != 600 || limits["worker_max_active_turns"] != 4 {
 		t.Fatalf("unexpected worker budgets in capabilities.limits: %+v", limits)
 	}
 	for _, op := range capData["operations"].([]map[string]any) {
@@ -554,5 +554,16 @@ func TestM2HarnessesDiscoveryOpsAndWorkspaceWritePolicy(t *testing.T) {
 		if rr.Error == nil || rr.Error.Code != "invalid_parameters" || !strings.Contains(rr.Error.Message, "between 1 and 32768") {
 			t.Fatalf("expected range invalid_parameters for workers_result max_bytes=%d, got %+v", badMax, rr.Error)
 		}
+	}
+	// tail + after_seq conflict and workers_wait_any empty turn_ids rejected cleanly
+	if rTail := testAutomationCall(a, tok, "workers_logs", "", workerLogsInput{TurnID: "turn_missing", AfterSeq: 5, Tail: true}); rTail.Error == nil || rTail.Error.Code != "invalid_parameters" {
+		t.Fatalf("expected invalid_parameters when tail=true and after_seq>0, got %+v", rTail.Error)
+	}
+	if rAny := testAutomationCall(a, tok, "workers_wait_any", "", workerWaitAnyInput{TurnIDs: nil}); rAny.Error == nil || rAny.Error.Code != "invalid_parameters" {
+		t.Fatalf("expected invalid_parameters for empty workers_wait_any turn_ids, got %+v", rAny.Error)
+	}
+	opWC := testAutomationCall(a, tok, "operations_new_id", "", map[string]any{"operation": "workers_send"}).Data.(map[string]string)["operation_id"]
+	if rBadWC := testAutomationCall(a, tok, "workers_send", opWC, workerSendInput{WorkerID: "wkr_x", Prompt: "hi", WallClockSeconds: automation.Int(15)}); rBadWC.Error == nil || rBadWC.Error.Code != "invalid_parameters" {
+		t.Fatalf("expected invalid_parameters for wall_clock_seconds=15, got %+v", rBadWC.Error)
 	}
 }

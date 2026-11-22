@@ -107,8 +107,8 @@ func TestAllEightSwitchCombinationsMatrix(t *testing.T) {
 				if view.MCPDesired != wantDesired {
 					t.Fatalf("combo (%v,%v,%v): MCPDesired=%v want %v", gen, caller, worker, view.MCPDesired, wantDesired)
 				}
-				if view.CredentialActive != wantDesired {
-					t.Fatalf("combo (%v,%v,%v): CredentialActive=%v want %v", gen, caller, worker, view.CredentialActive, wantDesired)
+				if view.CallerCredentialActive != wantDesired {
+					t.Fatalf("combo (%v,%v,%v): CallerCredentialActive=%v want %v", gen, caller, worker, view.CallerCredentialActive, wantDesired)
 				}
 				if wantDesired {
 					tok, err := svc.CallerTokenForTest(HarnessCodex)

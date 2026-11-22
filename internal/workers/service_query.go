@@ -61,7 +61,7 @@ func (s *Service) Wait(ctx context.Context, turnID, expectedWorkspaceID string, 
 	}
 }
 
-func (s *Service) readPreview(t Turn) (string, bool) {
+func (s *Service) readPreviewCapped(t Turn, capBytes int) (string, bool) {
 	if !t.AnswerAvailable || t.State != TurnCompleted {
 		return "", false
 	}
@@ -69,11 +69,136 @@ func (s *Service) readPreview(t Turn) (string, bool) {
 	if err != nil || !ok {
 		return "", false
 	}
-	const previewCap = 24 << 10
-	if len(full) <= previewCap {
+	if len(full) <= capBytes {
 		return full, false
 	}
-	return full[:clampUTF8Bytes([]byte(full), previewCap)], true
+	return full[:clampUTF8Bytes([]byte(full), capBytes)], true
+}
+
+func (s *Service) readPreview(t Turn) (string, bool) {
+	return s.readPreviewCapped(t, 24<<10)
+}
+
+func (s *Service) buildWaitAnyItems(turnIDs []string, expectedWorkspaceID string) ([]WaitAnyItem, string, error) {
+	items := make([]WaitAnyItem, 0, len(turnIDs))
+	triggered := ""
+	for _, id := range turnIDs {
+		t, err := s.GetTurn(id, expectedWorkspaceID)
+		if err != nil {
+			return nil, "", err
+		}
+		if triggered == "" && (IsTurnTerminal(t.State) || t.State == TurnReconcile) {
+			triggered = t.ID
+		}
+		preview, trunc := s.readPreviewCapped(t, 4<<10)
+		items = append(items, WaitAnyItem{
+			TurnID:          t.ID,
+			WorkerID:        t.WorkerID,
+			WorkspaceID:     t.WorkspaceID,
+			HarnessID:       t.HarnessID,
+			State:           t.State,
+			Progress:        t.Progress,
+			AnswerAvailable: t.AnswerAvailable,
+			AnswerSource:    t.AnswerSource,
+			AnswerPreview:   preview,
+			Truncated:       trunc,
+			ResultBytes:     t.ResultBytes,
+			ElapsedSeconds:  t.ElapsedSeconds,
+			IdleSeconds:     t.IdleSeconds,
+			StreamEvents:    t.StreamEvents,
+			StreamBytes:     t.StreamBytes,
+			ErrorCode:       t.ErrorCode,
+			ErrorMessage:    t.ErrorMessage,
+			AfterVCS:        t.AfterVCS,
+		})
+	}
+	return items, triggered, nil
+}
+
+// WaitAny monitors up to 16 turns concurrently in a single bounded call and
+// returns immediately when any watched turn reaches a terminal or reconciliation
+// state, or when waitDur expires.
+func (s *Service) WaitAny(ctx context.Context, turnIDs []string, expectedWorkspaceID string, waitDur time.Duration) ([]WaitAnyItem, string, error) {
+	if waitDur <= 0 || waitDur > automation.MaxWait {
+		waitDur = automation.MaxWait
+	}
+	seen := map[string]bool{}
+	ids := make([]string, 0, len(turnIDs))
+	for _, raw := range turnIDs {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			return nil, "", automation.Fail("invalid_parameters", "turn_ids entries must be non-empty")
+		}
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 || len(ids) > 16 {
+		return nil, "", automation.Fail("invalid_parameters", "turn_ids must contain between 1 and 16 turn identifiers")
+	}
+
+	items, triggered, err := s.buildWaitAnyItems(ids, expectedWorkspaceID)
+	if err != nil || triggered != "" {
+		return items, triggered, err
+	}
+
+	type sub struct {
+		id string
+		ch chan struct{}
+	}
+	subs := make([]sub, 0, len(ids))
+	for _, id := range ids {
+		subs = append(subs, sub{id: id, ch: s.subscribeWaiter(id)})
+	}
+	stopFwd := make(chan struct{})
+	defer func() {
+		close(stopFwd)
+		for _, sb := range subs {
+			s.unsubscribeWaiter(sb.id, sb.ch)
+		}
+	}()
+
+	items, triggered, err = s.buildWaitAnyItems(ids, expectedWorkspaceID)
+	if err != nil || triggered != "" {
+		return items, triggered, err
+	}
+
+	anyCh := make(chan string, len(subs))
+	for _, sb := range subs {
+		go func(id string, ch chan struct{}) {
+			for {
+				select {
+				case <-stopFwd:
+					return
+				case <-ch:
+					select {
+					case anyCh <- id:
+					default:
+					}
+				}
+			}
+		}(sb.id, sb.ch)
+	}
+
+	timer := time.NewTimer(waitDur)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return s.buildWaitAnyItems(ids, expectedWorkspaceID)
+		case <-timer.C:
+			return s.buildWaitAnyItems(ids, expectedWorkspaceID)
+		case id := <-anyCh:
+			t, gErr := s.GetTurn(id, expectedWorkspaceID)
+			if gErr != nil {
+				return nil, "", gErr
+			}
+			if IsTurnTerminal(t.State) || t.State == TurnReconcile {
+				return s.buildWaitAnyItems(ids, expectedWorkspaceID)
+			}
+		}
+	}
 }
 
 type ResultPage struct {
@@ -153,6 +278,15 @@ func (s *Service) ReadLogs(turnID, expectedWorkspaceID string, afterSeq int64, l
 		return Turn{}, nil, false, err
 	}
 	entries, hasMore, err := s.store.ReadLogs(t.ID, afterSeq, limit)
+	return t, entries, hasMore, err
+}
+
+func (s *Service) ReadLogsTail(turnID, expectedWorkspaceID string, limit int) (Turn, []LogEntry, bool, error) {
+	t, err := s.GetTurn(turnID, expectedWorkspaceID)
+	if err != nil {
+		return Turn{}, nil, false, err
+	}
+	entries, hasMore, err := s.store.ReadLogsTail(t.ID, limit)
 	return t, entries, hasMore, err
 }
 

@@ -2,9 +2,15 @@ package workers
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 )
+
+// ErrPreStartFailed marks an adapter failure that occurred before any prompt
+// was transmitted to the underlying native session, allowing Service to fail
+// the turn cleanly without trapping the worker in reconciliation_required.
+var ErrPreStartFailed = errors.New("pre_start_failed")
 
 const (
 	WorkerIdle      = "idle"
@@ -62,6 +68,28 @@ type Worker struct {
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 	ClosedAt        *time.Time `json:"closed_at,omitempty"`
+	Warnings        []string   `json:"warnings,omitempty"`
+}
+
+type WaitAnyItem struct {
+	TurnID          string       `json:"turn_id"`
+	WorkerID        string       `json:"worker_id"`
+	WorkspaceID     string       `json:"workspace_id"`
+	HarnessID       string       `json:"harness_id"`
+	State           string       `json:"state"`
+	Progress        string       `json:"progress,omitempty"`
+	AnswerAvailable bool         `json:"answer_available"`
+	AnswerSource    string       `json:"answer_source,omitempty"`
+	AnswerPreview   string       `json:"answer_preview,omitempty"`
+	Truncated       bool         `json:"truncated,omitempty"`
+	ResultBytes     int          `json:"result_bytes"`
+	ElapsedSeconds  int          `json:"elapsed_seconds,omitempty"`
+	IdleSeconds     int          `json:"idle_seconds,omitempty"`
+	StreamEvents    int64        `json:"stream_events,omitempty"`
+	StreamBytes     int64        `json:"stream_bytes,omitempty"`
+	ErrorCode       string       `json:"error_code,omitempty"`
+	ErrorMessage    string       `json:"error_message,omitempty"`
+	AfterVCS        *VCSSnapshot `json:"after_vcs,omitempty"`
 }
 
 type VCSSnapshot struct {
@@ -107,6 +135,10 @@ type Turn struct {
 	StartedAt           time.Time    `json:"started_at"`
 	UpdatedAt           time.Time    `json:"updated_at"`
 	FinishedAt          *time.Time   `json:"finished_at,omitempty"`
+	ElapsedSeconds      int          `json:"elapsed_seconds,omitempty"`
+	IdleSeconds         int          `json:"idle_seconds,omitempty"`
+	StreamEvents        int64        `json:"stream_events,omitempty"`
+	StreamBytes         int64        `json:"stream_bytes,omitempty"`
 }
 
 type LogEntry struct {
@@ -137,6 +169,7 @@ type AdapterEvent struct {
 	ItemID  string
 	Phase   string
 	Summary string
+	Bytes   int
 	Item    *NativeItem
 }
 
@@ -154,6 +187,7 @@ type ThreadOpenSpec struct {
 	WorkspaceRoot   string
 	AccessMode      string
 	Model           string
+	ReasoningEffort string
 	RoleHint        string
 	NativeSessionID string
 }

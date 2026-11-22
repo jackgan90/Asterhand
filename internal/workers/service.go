@@ -25,12 +25,17 @@ func DefaultBudgets() Budgets {
 	return Budgets{
 		MaxActiveTurns:     4,
 		MaxResidentProcs:   4,
-		WallClockTimeout:   15 * time.Minute,
-		StallTimeout:       5 * time.Minute,
+		WallClockTimeout:   30 * time.Minute,
+		StallTimeout:       10 * time.Minute,
 		InterruptGrace:     10 * time.Second,
 		IdleRecycleTimeout: 10 * time.Minute,
 	}
 }
+
+const (
+	MinWallClockSeconds = 30
+	MaxWallClockSeconds = 3600
+)
 
 type runningTurn struct {
 	turnID       string
@@ -45,7 +50,10 @@ type runningTurn struct {
 	revokeReason string
 	cancelCh     chan struct{}
 	cancelOnce   sync.Once
+	wallClock    time.Duration
 	lastEventAt  time.Time
+	streamEvents int64
+	streamBytes  int64
 	doneCh       chan struct{}
 }
 
@@ -291,7 +299,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Worker, error) {
 	if err != nil {
 		return Worker{}, err
 	}
-	if exe == "" && in.HarnessID == harnesses.HarnessCodex {
+	if exe == "" && caps.WorkerManaged {
 		return Worker{}, automation.Fail("unavailable", "Target harness executable was not found")
 	}
 	protLevel := caps.ReadOnlyLevel
@@ -352,6 +360,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Worker, error) {
 	if err := s.store.SaveWorker(w); err != nil {
 		return Worker{}, err
 	}
+	if w.HarnessID == harnesses.HarnessDeepSeek {
+		w.Warnings = checkDeepSeekWorkspaceACL(w.WorkspaceRoot)
+	}
 	return w, nil
 }
 
@@ -393,7 +404,34 @@ func (s *Service) GetTurn(turnID, expectedWorkspaceID string) (Turn, error) {
 	if expectedWorkspaceID != "" && t.WorkspaceID != expectedWorkspaceID {
 		return Turn{}, automation.Fail("workspace_mismatch", "Turn does not belong to the expected workspace")
 	}
+	s.populateTurnActivity(&t)
 	return t, nil
+}
+
+func (s *Service) populateTurnActivity(t *Turn) {
+	now := s.now().UTC()
+	if t.FinishedAt != nil {
+		if sec := int(t.FinishedAt.Sub(t.StartedAt).Seconds()); sec >= 0 {
+			t.ElapsedSeconds = sec
+		}
+		return
+	}
+	if !t.StartedAt.IsZero() {
+		if sec := int(now.Sub(t.StartedAt).Seconds()); sec >= 0 {
+			t.ElapsedSeconds = sec
+		}
+	}
+	s.mu.Lock()
+	if rt, ok := s.activeTurns[t.ID]; ok {
+		if !rt.lastEventAt.IsZero() {
+			if idle := int(now.Sub(rt.lastEventAt).Seconds()); idle >= 0 {
+				t.IdleSeconds = idle
+			}
+		}
+		t.StreamEvents = rt.streamEvents
+		t.StreamBytes = rt.streamBytes
+	}
+	s.mu.Unlock()
 }
 
 type SendInput struct {
@@ -408,6 +446,7 @@ type SendInput struct {
 	GitRef              string
 	DiffBase            string
 	OutputContract      string
+	WallClockSeconds    int
 }
 
 func (s *Service) validateSendLocked(in SendInput) (Worker, string, []string, error) {
@@ -454,7 +493,11 @@ func (s *Service) validateSendLocked(in SendInput) (Worker, string, []string, er
 	}
 	if w.AccessMode == harnesses.AccessWorkspaceWrite {
 		if holder, locked := s.writeLocks[w.WorktreeKey]; locked && holder != "" {
-			return Worker{}, "", nil, automation.Fail("worker_busy", "Workspace worktree already has an active write turn")
+			msg := "Workspace worktree already has an active write turn (" + holder + "); serialize workspace_write turns on the same worktree"
+			if rt := s.activeTurns[holder]; rt != nil && rt.workerID != "" {
+				msg = "Workspace worktree already has an active write turn (" + holder + " on worker " + rt.workerID + "); serialize workspace_write turns on the same worktree"
+			}
+			return Worker{}, "", nil, automation.Fail("worktree_busy", msg)
 		}
 	}
 	return w, exe, resolvedArtifacts, nil
@@ -470,6 +513,9 @@ func (s *Service) Send(ctx context.Context, in SendInput) (Turn, error) {
 	turnEffort, err := validateReasoningEffort(in.ReasoningEffort)
 	if err != nil {
 		return Turn{}, err
+	}
+	if in.WallClockSeconds != 0 && (in.WallClockSeconds < MinWallClockSeconds || in.WallClockSeconds > MaxWallClockSeconds) {
+		return Turn{}, automation.Fail("invalid_parameters", "wall_clock_seconds must be between 30 and 3600")
 	}
 
 	s.mu.Lock()
@@ -538,6 +584,7 @@ func (s *Service) Send(ctx context.Context, in SendInput) (Turn, error) {
 		harnessID:   w.HarnessID,
 		accessMode:  w.AccessMode,
 		cancelCh:    make(chan struct{}),
+		wallClock:   time.Duration(in.WallClockSeconds) * time.Second,
 		lastEventAt: now,
 		doneCh:      make(chan struct{}),
 	}

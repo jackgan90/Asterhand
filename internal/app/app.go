@@ -138,7 +138,13 @@ func New(c *config.Manager, x executor.Executor) (*App, error) {
 	} else {
 		a.Harnesses = hs
 	}
-	if ws, err := workers.NewService(c.Home, a.Harnesses, workers.NewCodexAdapter()); err != nil {
+	if ws, err := workers.NewService(
+		c.Home,
+		a.Harnesses,
+		workers.NewCodexAdapter(),
+		workers.NewClaudeAdapter(),
+		workers.NewDeepSeekAdapter(),
+	); err != nil {
 		s.Close()
 		return nil, err
 	} else {

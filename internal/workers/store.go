@@ -409,6 +409,46 @@ func (s *Store) ReadLogs(turnID string, afterSeq int64, limit int) ([]LogEntry, 
 	return out, hasMore, nil
 }
 
+func (s *Store) ReadLogsTail(turnID string, limit int) ([]LogEntry, bool, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(
+		"SELECT body FROM turn_logs WHERE turn_id=? ORDER BY seq DESC LIMIT ?",
+		turnID, limit+1,
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	out := []LogEntry{}
+	for rows.Next() {
+		var b []byte
+		if err := rows.Scan(&b); err != nil {
+			return nil, false, err
+		}
+		var e LogEntry
+		if err := json.Unmarshal(b, &e); err != nil {
+			return nil, false, err
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	hasMore := false
+	if len(out) > limit {
+		hasMore = true
+		out = out[:limit]
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, hasMore, nil
+}
+
 // PruneExpiredDetails evicts terminal turn result/log details beyond
 // DetailRetention while never touching active or reconciliation_required turns.
 func (s *Store) PruneExpiredDetails(now time.Time) {

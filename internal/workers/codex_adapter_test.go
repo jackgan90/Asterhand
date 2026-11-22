@@ -317,3 +317,32 @@ func TestSummarizeCodexItems(t *testing.T) {
 		t.Fatal("expected empty reasoning suppressed")
 	}
 }
+
+func TestCodexAdapterStreamingDeltaNotificationsRefreshHeartbeat(t *testing.T) {
+	var deltas []AdapterEvent
+	sess := &codexSession{
+		active: &codexActiveTurn{
+			turnID: "nt1",
+			deltas: map[string]*strings.Builder{},
+			onEvent: func(ev AdapterEvent) {
+				deltas = append(deltas, ev)
+			},
+		},
+	}
+	for _, method := range []string{
+		"item/reasoning/summaryTextDelta",
+		"item/commandExecution/outputDelta",
+		"item/fileChange/outputDelta",
+		"item/plan/delta",
+	} {
+		sess.handleNotification(method, json.RawMessage(`{"turnId":"nt1","delta":"chunk"}`))
+	}
+	if len(deltas) != 4 {
+		t.Fatalf("expected 4 delta heartbeat events, got %d", len(deltas))
+	}
+	for i, ev := range deltas {
+		if ev.Kind != "delta" || ev.Bytes <= 0 {
+			t.Fatalf("delta[%d] expected kind=delta bytes>0, got %+v", i, ev)
+		}
+	}
+}

@@ -1035,7 +1035,7 @@
   "web.harnesses.turn_stop": "Stop",
   "web.harnesses.turn_reconcile": "Reconcile",
   "web.harnesses.turn_resolve": "Close manually",
-  "web.harnesses.switch_workspace_write": "Allow editing project files (controlled write)",
+  "web.harnesses.switch_workspace_write": "Allow editing project files (includes controlled test commands)",
   "web.harnesses.edit_path": "Path",
   "web.harnesses.path_placeholder": "Leave empty for automatic discovery",
   "web.harnesses.path_save": "Save",

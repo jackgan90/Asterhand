@@ -611,8 +611,11 @@ func TestWorkspaceWriteLockingCancelRevocationAndVCS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Send(context.Background(), SendInput{OperationID: "op_w2_busy", WorkerID: wSub.ID, Prompt: "second write"}); err == nil || !strings.Contains(err.Error(), "active write turn") {
-		t.Fatalf("expected worktree write mutex rejection, got %v", err)
+	if _, err := svc.Send(context.Background(), SendInput{OperationID: "op_w2_busy", WorkerID: wSub.ID, Prompt: "second write"}); err == nil ||
+		!strings.Contains(err.Error(), "worktree_busy") ||
+		!strings.Contains(err.Error(), t1.ID) ||
+		!strings.Contains(err.Error(), wRoot.ID) {
+		t.Fatalf("expected worktree_busy naming holding turn %s and worker %s, got %v", t1.ID, wRoot.ID, err)
 	}
 
 	// 3. Cancel t1 releases the worktree write lock so wSub can now run and capture VCS snapshots!
@@ -671,4 +674,264 @@ func TestWorkspaceWriteLockingCancelRevocationAndVCS(t *testing.T) {
 func runGitNoErr(dir string, args ...string) error {
 	_, err := runGit(context.Background(), dir, args...)
 	return err
+}
+
+func TestCompletedTurnUpdatesProgressToAnswerPreview(t *testing.T) {
+	fa := &fakeAdapter{
+		startFn: func(ctx context.Context, handle ThreadHandle, spec TurnStartSpec, onEvent func(AdapterEvent)) (string, <-chan TurnOutcome, error) {
+			ch := make(chan TurnOutcome, 1)
+			go func() {
+				if onEvent != nil {
+					onEvent(AdapterEvent{Kind: "progress", Summary: "Thinking..."})
+					onEvent(AdapterEvent{Kind: "delta"})
+				}
+				ch <- TurnOutcome{
+					State:        TurnCompleted,
+					NativeTurnID: "nturn_prog",
+					Items: []NativeItem{
+						{ItemID: "a1", Type: "agentMessage", Phase: "final_answer", Text: "Final concise answer for progress preview"},
+					},
+				}
+			}()
+			return "nturn_prog", ch, nil
+		},
+	}
+	svc, _, ws := setupTestService(t, fa)
+	defer func() { _ = svc.Close(context.Background()) }()
+
+	w, err := svc.Create(context.Background(), CreateInput{
+		HarnessID:     harnesses.HarnessCodex,
+		WorkspaceRoot: ws.RootPath,
+		Alias:         "prog-worker",
+		AccessMode:    harnesses.AccessReadOnly,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := svc.Send(context.Background(), SendInput{OperationID: "op_prog", WorkerID: w.ID, Prompt: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done, _, _, err := svc.Wait(context.Background(), turn.ID, "", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done.State != TurnCompleted {
+		t.Fatalf("expected completed, got %s", done.State)
+	}
+	if done.Progress != "Final concise answer for progress preview" {
+		t.Fatalf("expected turn.Progress updated to answer preview, got %q", done.Progress)
+	}
+}
+
+func TestPreStartErrorFailsCleanlyAndAbnormalTurnEvictsResidentAndTracksActivity(t *testing.T) {
+	var mu sync.Mutex
+	openCount := 0
+	closeCount := 0
+	callIdx := 0
+	gate := make(chan struct{})
+
+	fa := &fakeAdapter{
+		openFn: func(ctx context.Context, spec ThreadOpenSpec) (ThreadHandle, error) {
+			mu.Lock()
+			openCount++
+			n := openCount
+			mu.Unlock()
+			return ThreadHandle{Key: fmt.Sprintf("k_%d", n), NativeSessionID: "thr_clean"}, nil
+		},
+		closeFn: func(handle ThreadHandle) error {
+			mu.Lock()
+			closeCount++
+			mu.Unlock()
+			return nil
+		},
+		startFn: func(ctx context.Context, handle ThreadHandle, spec TurnStartSpec, onEvent func(AdapterEvent)) (string, <-chan TurnOutcome, error) {
+			mu.Lock()
+			callIdx++
+			n := callIdx
+			mu.Unlock()
+			if n == 1 {
+				// Live activity + blocked approval should evict resident on terminal.
+				ch := make(chan TurnOutcome, 1)
+				go func() {
+					if onEvent != nil {
+						onEvent(AdapterEvent{Kind: "delta", Bytes: 256})
+						onEvent(AdapterEvent{Kind: "delta", Bytes: 512})
+					}
+					<-gate
+					ch <- TurnOutcome{
+						State:        TurnBlockedApproval,
+						NativeTurnID: "nt_blk",
+						ErrorCode:    TurnBlockedApproval,
+						ErrorMessage: "approval denied",
+					}
+				}()
+				return "nt_blk", ch, nil
+			}
+			if n == 2 {
+				// Pre-start error must fail cleanly WITHOUT reconciliation_required.
+				return "", nil, fmt.Errorf("%w: respawn failed", ErrPreStartFailed)
+			}
+			ch := make(chan TurnOutcome, 1)
+			ch <- TurnOutcome{
+				State:        TurnCompleted,
+				NativeTurnID: "nt_ok",
+				Items:        []NativeItem{{ItemID: "a", Type: "agentMessage", Phase: "final_answer", Text: "RECOVERED"}},
+			}
+			return "nt_ok", ch, nil
+		},
+	}
+
+	svc, _, ws := setupTestService(t, fa)
+	defer func() { _ = svc.Close(context.Background()) }()
+
+	w, err := svc.Create(context.Background(), CreateInput{
+		HarnessID: harnesses.HarnessCodex, WorkspaceRoot: ws.RootPath, Alias: "resilient", AccessMode: harnesses.AccessReadOnly,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Turn 1: check live StreamEvents/StreamBytes, then finish with blocked_unsupported_approval -> resident evicted!
+	t1, err := svc.Send(context.Background(), SendInput{OperationID: "op_a1", WorkerID: w.ID, Prompt: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	liveT1, err := svc.GetTurn(t1.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if liveT1.StreamEvents < 2 || liveT1.StreamBytes < 768 {
+		t.Fatalf("expected live stream activity (>=2 events, >=768 bytes), got events=%d bytes=%d", liveT1.StreamEvents, liveT1.StreamBytes)
+	}
+	close(gate)
+	done1, _, _, err := svc.Wait(context.Background(), t1.ID, "", 5*time.Second)
+	if err != nil || done1.State != TurnBlockedApproval {
+		t.Fatalf("expected blocked_unsupported_approval, got %+v err=%v", done1, err)
+	}
+	mu.Lock()
+	closedAfter1 := closeCount
+	mu.Unlock()
+	if closedAfter1 != 1 {
+		t.Fatalf("expected dirty resident evicted & closed after abnormal turn, closeCount=%d", closedAfter1)
+	}
+
+	// Turn 2: triggers fresh OpenThread (openCount=2) and ErrPreStartFailed -> TurnFailed & WorkerIdle (NOT reconciliation_required!).
+	t2, err := svc.Send(context.Background(), SendInput{OperationID: "op_a2", WorkerID: w.ID, Prompt: "second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done2, _, _, err := svc.Wait(context.Background(), t2.ID, "", 5*time.Second)
+	if err != nil || done2.State != TurnFailed || done2.ErrorCode != "adapter_start_failed" {
+		t.Fatalf("expected clean TurnFailed(adapter_start_failed), got %+v err=%v", done2, err)
+	}
+	wAfter2, _, err := svc.Get(w.ID, "")
+	if err != nil || wAfter2.State != WorkerIdle {
+		t.Fatalf("expected worker idle after pre-start failure (no reconciliation_required), got %+v err=%v", wAfter2, err)
+	}
+
+	// Turn 3: immediately succeeds on the SAME worker without manual resolve/recreate!
+	t3, err := svc.Send(context.Background(), SendInput{OperationID: "op_a3", WorkerID: w.ID, Prompt: "third"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done3, ans3, _, err := svc.Wait(context.Background(), t3.ID, "", 5*time.Second)
+	if err != nil || done3.State != TurnCompleted || ans3 != "RECOVERED" {
+		t.Fatalf("expected Turn 3 RECOVERED, got state=%s ans=%q err=%v", done3.State, ans3, err)
+	}
+	mu.Lock()
+	if openCount != 3 {
+		t.Fatalf("expected fresh OpenThread after each abnormal eviction, openCount=%d", openCount)
+	}
+	mu.Unlock()
+}
+
+func TestWaitAnyLogsTailWallClockAndACLCheck(t *testing.T) {
+	slowGate := make(chan struct{})
+	defer close(slowGate)
+	fa := &fakeAdapter{
+		startFn: func(ctx context.Context, handle ThreadHandle, spec TurnStartSpec, onEvent func(AdapterEvent)) (string, <-chan TurnOutcome, error) {
+			ch := make(chan TurnOutcome, 1)
+			if strings.Contains(spec.Prompt, "slow") {
+				go func() {
+					<-slowGate
+					ch <- TurnOutcome{State: TurnCompleted, NativeTurnID: "nt_slow", Items: []NativeItem{{ItemID: "s", Type: "agentMessage", Phase: "final_answer", Text: "SLOW_OK"}}}
+				}()
+				return "nt_slow", ch, nil
+			}
+			go func() {
+				time.Sleep(60 * time.Millisecond)
+				ch <- TurnOutcome{State: TurnCompleted, NativeTurnID: "nt_fast", Items: []NativeItem{{ItemID: "f", Type: "agentMessage", Phase: "final_answer", Text: "FAST_OK"}}}
+			}()
+			return "nt_fast", ch, nil
+		},
+	}
+	svc, _, ws := setupTestService(t, fa)
+	defer func() { _ = svc.Close(context.Background()) }()
+
+	w1, err := svc.Create(context.Background(), CreateInput{HarnessID: harnesses.HarnessCodex, WorkspaceRoot: ws.RootPath, Alias: "w1", AccessMode: harnesses.AccessReadOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w2, err := svc.Create(context.Background(), CreateInput{HarnessID: harnesses.HarnessCodex, WorkspaceRoot: ws.RootPath, Alias: "w2", AccessMode: harnesses.AccessReadOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// WallClockSeconds validation bounds
+	if _, err := svc.Send(context.Background(), SendInput{OperationID: "op_wc_lo", WorkerID: w1.ID, Prompt: "hi", WallClockSeconds: 10}); err == nil || !strings.Contains(err.Error(), "invalid_parameters") {
+		t.Fatalf("expected invalid_parameters for wall_clock_seconds=10, got %v", err)
+	}
+	if _, err := svc.Send(context.Background(), SendInput{OperationID: "op_wc_hi", WorkerID: w1.ID, Prompt: "hi", WallClockSeconds: 4000}); err == nil || !strings.Contains(err.Error(), "invalid_parameters") {
+		t.Fatalf("expected invalid_parameters for wall_clock_seconds=4000, got %v", err)
+	}
+
+	t1, err := svc.Send(context.Background(), SendInput{OperationID: "op_s1", WorkerID: w1.ID, Prompt: "slow work", WallClockSeconds: 120})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t2, err := svc.Send(context.Background(), SendInput{OperationID: "op_s2", WorkerID: w2.ID, Prompt: "fast work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// WaitAny returns early as soon as fast turn finishes!
+	start := time.Now()
+	items, triggered, err := svc.WaitAny(context.Background(), []string{t1.ID, t2.ID}, "", 5*time.Second)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("WaitAny: %v", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("WaitAny should return promptly when fast turn finishes, elapsed=%v", elapsed)
+	}
+	if triggered != t2.ID || len(items) != 2 {
+		t.Fatalf("expected triggered=%s with 2 items, got triggered=%q len=%d", t2.ID, triggered, len(items))
+	}
+	if items[0].State != TurnRunning && items[0].State != TurnPrepared {
+		t.Fatalf("expected slow turn active, got %s", items[0].State)
+	}
+	if items[1].State != TurnCompleted || items[1].AnswerPreview != "FAST_OK" {
+		t.Fatalf("expected fast turn completed with FAST_OK, got %+v", items[1])
+	}
+
+	// ReadLogsTail returns latest N entries in ascending seq order.
+	for i := 1; i <= 8; i++ {
+		if _, err := svc.store.AppendLog(t2.ID, LogEntry{Kind: "tool", Summary: fmt.Sprintf("step-%d", i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, tail, hasMore, err := svc.ReadLogsTail(t2.ID, "", 3)
+	if err != nil {
+		t.Fatalf("ReadLogsTail: %v", err)
+	}
+	if !hasMore || len(tail) != 3 || tail[0].Summary != "step-6" || tail[1].Summary != "step-7" || tail[2].Summary != "step-8" {
+		t.Fatalf("unexpected tail logs: hasMore=%v tail=%+v", hasMore, tail)
+	}
+
+	// Read-only DeepSeek ACL preflight on user temp dir must not false-positive.
+	if warns := checkDeepSeekWorkspaceACL(t.TempDir()); len(warns) != 0 {
+		t.Fatalf("expected no ACL warning on user temp dir, got %v", warns)
+	}
 }

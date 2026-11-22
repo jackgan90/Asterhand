@@ -11,13 +11,13 @@ import (
 )
 
 type workerCreateInput struct {
-	HarnessID       string `json:"harness_id" description:"Target worker harness identifier (e.g. \"codex\")"`
+	HarnessID       string `json:"harness_id" enum:"codex,claude-code,deepseek-harness" description:"Target worker harness identifier: \"codex\", \"claude-code\", or \"deepseek-harness\""`
 	WorkspaceRoot   string `json:"workspace_root" description:"Absolute path to the local project directory"`
 	Alias           string `json:"alias,omitempty" description:"Optional stable worker alias unique within the project (e.g. \"codex-reviewer\")"`
 	AccessMode      string `json:"access_mode,omitempty" enum:"read_only,workspace_write" description:"Worker access mode: \"read_only\" (default) or \"workspace_write\" (requires enabling workspace write for the target harness in Asterhand settings)"`
 	RoleHint        string `json:"role_hint,omitempty" description:"Optional role instructions passed to the worker (e.g. reviewer persona)"`
 	Model           string `json:"model,omitempty" description:"Optional default model name for this worker"`
-	ReasoningEffort string `json:"reasoning_effort,omitempty" description:"Optional default reasoning effort / thinking level (e.g. low, medium, high, xhigh)"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty" description:"Optional default reasoning effort / thinking level (e.g. off, low, medium, high, xhigh, max)"`
 }
 
 type workerListInput struct {
@@ -33,21 +33,28 @@ type workerGetInput struct {
 }
 
 type workerSendInput struct {
-	WorkerID        string   `json:"worker_id" description:"Target worker identifier returned by workers_create or workers_list"`
-	WorkspaceID     string   `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
-	Prompt          string   `json:"prompt" description:"Task instruction or review prompt for this turn"`
-	Model           string   `json:"model,omitempty" description:"Optional per-turn model override (defaults to worker model)"`
-	ReasoningEffort string   `json:"reasoning_effort,omitempty" description:"Optional per-turn reasoning effort / thinking level override (e.g. low, medium, high, xhigh)"`
-	ArtifactPaths   []string `json:"artifact_paths,omitempty" description:"Optional list of project-relative or absolute file paths within the project to highlight"`
-	GitRef          string   `json:"git_ref,omitempty" description:"Optional git commit/branch reference for context"`
-	DiffBase        string   `json:"diff_base,omitempty" description:"Optional git diff base reference for review context"`
-	OutputContract  string   `json:"output_contract,omitempty" description:"Optional expected output structure or format constraint"`
+	WorkerID         string                 `json:"worker_id" description:"Target worker identifier returned by workers_create or workers_list"`
+	WorkspaceID      string                 `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
+	Prompt           string                 `json:"prompt" description:"Task instruction or review prompt for this turn"`
+	Model            string                 `json:"model,omitempty" description:"Optional per-turn model override (defaults to worker model)"`
+	ReasoningEffort  string                 `json:"reasoning_effort,omitempty" description:"Optional per-turn reasoning effort / thinking level override (e.g. off, low, medium, high, xhigh, max)"`
+	ArtifactPaths    []string               `json:"artifact_paths,omitempty" description:"Optional list of project-relative or absolute file paths within the project to highlight"`
+	GitRef           string                 `json:"git_ref,omitempty" description:"Optional git commit/branch reference for context"`
+	DiffBase         string                 `json:"diff_base,omitempty" description:"Optional git diff base reference for review context"`
+	OutputContract   string                 `json:"output_contract,omitempty" description:"Optional expected output structure or format constraint"`
+	WallClockSeconds automation.OptionalInt `json:"wall_clock_seconds,omitempty,omitzero" description:"Optional per-turn wall-clock timeout in seconds (30..3600, default 1800)"`
 }
 
 type workerWaitInput struct {
 	TurnID      string                 `json:"turn_id" description:"Turn identifier returned by workers_send"`
 	WorkspaceID string                 `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
 	WaitSeconds automation.OptionalInt `json:"wait_seconds,omitempty,omitzero" description:"Seconds to wait for progress or completion (1..30, default 30)"`
+}
+
+type workerWaitAnyInput struct {
+	TurnIDs     []string               `json:"turn_ids" description:"List of 1..16 turn identifiers returned by workers_send to monitor concurrently"`
+	WorkspaceID string                 `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
+	WaitSeconds automation.OptionalInt `json:"wait_seconds,omitempty,omitzero" description:"Seconds to wait until any watched turn reaches terminal/reconciliation state (1..30, default 30)"`
 }
 
 type workerResultInput struct {
@@ -60,8 +67,9 @@ type workerResultInput struct {
 type workerLogsInput struct {
 	TurnID      string                 `json:"turn_id" description:"Turn identifier returned by workers_send"`
 	WorkspaceID string                 `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
-	AfterSeq    int64                  `json:"after_seq,omitempty" description:"Return log entries with seq greater than this value"`
+	AfterSeq    int64                  `json:"after_seq,omitempty" description:"Return log entries with seq greater than this value (cannot be combined with tail=true)"`
 	Limit       automation.OptionalInt `json:"limit,omitempty,omitzero" description:"Maximum log entries to return (1..200, default 50)"`
+	Tail        bool                   `json:"tail,omitempty" description:"When true, return the latest limit log entries (ordered oldest-to-newest within the tail window); cannot be combined with after_seq"`
 }
 
 type workerCancelInput struct {
@@ -95,6 +103,15 @@ type workerWaitView struct {
 	PartialOutput   string       `json:"partial_output,omitempty"`
 	Truncated       bool         `json:"truncated,omitempty"`
 	ResultBytes     int          `json:"result_bytes"`
+	ElapsedSeconds  int          `json:"elapsed_seconds,omitempty"`
+	IdleSeconds     int          `json:"idle_seconds,omitempty"`
+	StreamEvents    int64        `json:"stream_events,omitempty"`
+	StreamBytes     int64        `json:"stream_bytes,omitempty"`
+}
+
+type workerWaitAnyView struct {
+	TriggeredTurnID string                `json:"triggered_turn_id,omitempty"`
+	Items           []workers.WaitAnyItem `json:"items"`
 }
 
 type workerLogsView struct {
@@ -194,7 +211,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 
 	automation.Register(r, automation.Definition{
 		Name:        "workers_send",
-		Description: "Dispatch a new turn to an existing worker (optional per-turn model and reasoning_effort override) and return turn_id immediately; follow up with workers_wait(turn_id)",
+		Description: "Dispatch a new turn to an existing worker (optional per-turn model and reasoning_effort override) and return turn_id immediately; follow up with workers_wait(turn_id). At most one active workspace_write turn is allowed per physical worktree (concurrent writes return worktree_busy); read_only turns may run concurrently",
 		Role:        "execute",
 		Toolset:     automation.ToolsetCollab,
 		Write:       true,
@@ -203,6 +220,10 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 		func(ctx context.Context, call automation.Call, v workerSendInput) (automation.Outcome, error) {
 			if a.Workers == nil {
 				return automation.Outcome{}, automation.Fail("unavailable", "Workers service is unavailable")
+			}
+			wallSec, err := optionalIntRange(v.WallClockSeconds, "wall_clock_seconds", 0, workers.MinWallClockSeconds, workers.MaxWallClockSeconds)
+			if err != nil {
+				return automation.Outcome{}, err
 			}
 			t, err := a.Workers.Send(ctx, workers.SendInput{
 				OperationID:         call.Identity.ID,
@@ -216,6 +237,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 				GitRef:              v.GitRef,
 				DiffBase:            v.DiffBase,
 				OutputContract:      v.OutputContract,
+				WallClockSeconds:    wallSec,
 			})
 			if err != nil {
 				return automation.Outcome{}, err
@@ -259,6 +281,41 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 				PartialOutput:   t.PartialOutput,
 				Truncated:       trunc,
 				ResultBytes:     t.ResultBytes,
+				ElapsedSeconds:  t.ElapsedSeconds,
+				IdleSeconds:     t.IdleSeconds,
+				StreamEvents:    t.StreamEvents,
+				StreamBytes:     t.StreamBytes,
+			}}, nil
+		})
+
+	automation.Register(r, automation.Definition{
+		Name:        "workers_wait_any",
+		Description: "Monitor up to 16 worker turns concurrently in one bounded wait (up to 30 seconds); returns immediately when any turn finishes or enters reconciliation, avoiding sequential wait overhead across multiple workers",
+		Role:        "read",
+		Toolset:     automation.ToolsetCollab,
+		Wait:        true,
+	}, func(v workerWaitAnyInput) string {
+		if len(v.TurnIDs) == 1 {
+			return v.TurnIDs[0]
+		}
+		return "*"
+	},
+		func(p automation.Principal, v workerWaitAnyInput) error { return scopeWorkers(p, "*") },
+		func(ctx context.Context, call automation.Call, v workerWaitAnyInput) (automation.Outcome, error) {
+			if a.Workers == nil {
+				return automation.Outcome{}, automation.Fail("unavailable", "Workers service is unavailable")
+			}
+			waitSec, err := optionalIntRange(v.WaitSeconds, "wait_seconds", 30, 1, 30)
+			if err != nil {
+				return automation.Outcome{}, err
+			}
+			items, triggered, err := a.Workers.WaitAny(ctx, v.TurnIDs, v.WorkspaceID, time.Duration(waitSec)*time.Second)
+			if err != nil {
+				return automation.Outcome{}, err
+			}
+			return automation.Outcome{Data: workerWaitAnyView{
+				TriggeredTurnID: triggered,
+				Items:           items,
 			}}, nil
 		})
 
@@ -307,7 +364,19 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			if err != nil {
 				return automation.Outcome{}, err
 			}
-			t, entries, hasMore, err := a.Workers.ReadLogs(v.TurnID, v.WorkspaceID, v.AfterSeq, limit)
+			if v.Tail && v.AfterSeq > 0 {
+				return automation.Outcome{}, automation.Fail("invalid_parameters", "tail cannot be combined with after_seq")
+			}
+			var (
+				t       workers.Turn
+				entries []workers.LogEntry
+				hasMore bool
+			)
+			if v.Tail {
+				t, entries, hasMore, err = a.Workers.ReadLogsTail(v.TurnID, v.WorkspaceID, limit)
+			} else {
+				t, entries, hasMore, err = a.Workers.ReadLogs(v.TurnID, v.WorkspaceID, v.AfterSeq, limit)
+			}
 			if err != nil {
 				return automation.Outcome{}, err
 			}
@@ -398,6 +467,7 @@ func describeWorkerAutomationResults(r *automation.Registry) {
 	r.DescribeData("workers_get", automation.Schema[workerGetView]())
 	r.DescribeData("workers_send", automation.Schema[workers.Turn]())
 	r.DescribeData("workers_wait", automation.Schema[workerWaitView]())
+	r.DescribeData("workers_wait_any", automation.Schema[workerWaitAnyView]())
 	r.DescribeData("workers_result", automation.Schema[workers.ResultPage]())
 	r.DescribeData("workers_logs", automation.Schema[workerLogsView]())
 	r.DescribeData("workers_cancel", automation.Schema[workers.Turn]())

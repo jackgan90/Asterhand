@@ -129,9 +129,10 @@ func (a *App) registerAutomationCore(r *automation.Registry) {
 				"waits_per_node":            16,
 				"writes_per_actor":          4,
 				"writes_per_node":           16,
-				"worker_wall_clock_seconds": int(wb.WallClockTimeout / time.Second),
-				"worker_stall_seconds":      int(wb.StallTimeout / time.Second),
-				"worker_max_active_turns":   wb.MaxActiveTurns,
+				"worker_wall_clock_seconds":     int(wb.WallClockTimeout / time.Second),
+				"worker_max_wall_clock_seconds": workers.MaxWallClockSeconds,
+				"worker_stall_seconds":          int(wb.StallTimeout / time.Second),
+				"worker_max_active_turns":       wb.MaxActiveTurns,
 			}
 			return automation.Outcome{Data: map[string]any{"api_version": automation.APIVersion, "node_id": r.Node, "instance_id": r.Instance, "caller_id": call.Principal.CallerID, "policy_revision": call.Principal.PolicyRevision, "roles": call.Principal.Roles, "toolsets": toolsets, "server_time_ms": r.Now().UnixMilli(), "operations": names, "limits": limits}}, nil
 		})

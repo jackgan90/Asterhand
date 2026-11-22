@@ -98,10 +98,10 @@ func NewMCPServer(client Caller, principal Principal, definitions []Definition) 
 func mcpInstructions(principal Principal) string {
 	var parts []string
 	if principal.AllowsToolset(ToolsetCore) {
-		parts = append(parts, "Write tools require an operation_id from operations_new_id; use operations_get to recover a lost receipt.")
+		parts = append(parts, "Write tools require an operation_id from operations_new_id (reuse unchanged after disconnection; obtain a new operation_id to retry after a rejected call); use operations_get to recover a lost receipt.")
 	}
 	if principal.AllowsToolset(ToolsetCollab) {
-		parts = append(parts, "For multi-harness collaboration: inspect available harnesses via harnesses_list, reuse an existing project worker via workers_list (or create one via workers_create), dispatch with workers_send, wait with workers_wait until finished, and read truncated output with workers_result.")
+		parts = append(parts, "For multi-harness collaboration: inspect available harnesses via harnesses_list, reuse an existing project worker via workers_list (or create one via workers_create), dispatch with workers_send (serialize workspace_write turns on the same physical worktree), wait with workers_wait (or workers_wait_any for multiple concurrent turns), inspect recent logs with workers_logs(tail=true), and read truncated output with workers_result.")
 	}
 	if principal.AllowsToolset(ToolsetGeneral) {
 		parts = append(parts, "Use capabilities to inspect enabled toolsets and node limits.")
@@ -259,7 +259,7 @@ func (h *MCPHost) addDefinition(d Definition) {
 		props["operation_id"] = map[string]any{
 			"type":        "string",
 			"pattern":     pattern,
-			"description": "Create once with operations_new_id, or offline CLI new-id. Reuse unchanged after disconnection; a new identity is a new side effect.",
+			"description": "Create once with operations_new_id, or offline CLI new-id. Reuse unchanged only after disconnection when outcome is unknown; generate a new operation_id for a new attempt or retry after a rejected call.",
 		}
 		required = append(required, "operation_id")
 	}

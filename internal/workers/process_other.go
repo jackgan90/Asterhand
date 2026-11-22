@@ -21,4 +21,5 @@ func (p *managedProc) Stderr() io.ReadCloser { return nil }
 func (p *managedProc) Done() <-chan struct{} { return p.done }
 func (p *managedProc) Kill() error           { return nil }
 
-func sanitizedWorkerEnv() []string { return nil }
+func sanitizedWorkerEnv() []string                              { return nil }
+func sanitizedWorkerEnvWith(overrides map[string]string) []string { return nil }

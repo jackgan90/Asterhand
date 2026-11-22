@@ -204,6 +204,7 @@
         "workers_get",
         "workers_send",
         "workers_wait",
+        "workers_wait_any",
         "workers_result",
         "workers_logs",
         "workers_cancel",

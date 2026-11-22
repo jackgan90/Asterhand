@@ -21,13 +21,15 @@ const (
 )
 
 type Capabilities struct {
-	SupportsCaller      bool   `json:"supports_caller"`
-	SupportsWorker      bool   `json:"supports_worker"`
-	CallerManaged       bool   `json:"caller_managed"`
-	WorkerManaged       bool   `json:"worker_managed"`
-	ReadOnlyLevel       string `json:"read_only_level"`
-	WorkspaceWriteLevel string `json:"workspace_write_level"`
-	WorkerNoticeKey     string `json:"worker_notice_key,omitempty"`
+	SupportsCaller      bool     `json:"supports_caller"`
+	SupportsWorker      bool     `json:"supports_worker"`
+	CallerManaged       bool     `json:"caller_managed"`
+	WorkerManaged       bool     `json:"worker_managed"`
+	ReadOnlyLevel       string   `json:"read_only_level"`
+	WorkspaceWriteLevel string   `json:"workspace_write_level"`
+	HasNativeFileTools  bool     `json:"has_native_file_tools,omitempty"`
+	ReasoningEfforts    []string `json:"reasoning_efforts,omitempty"`
+	WorkerNoticeKey     string   `json:"worker_notice_key,omitempty"`
 }
 
 func StaticCapabilities(harnessID string) (Capabilities, bool) {
@@ -50,24 +52,30 @@ func StaticCapabilities(harnessID string) (Capabilities, bool) {
 			WorkerManaged:       true,
 			ReadOnlyLevel:       ProtectionOSSandbox,
 			WorkspaceWriteLevel: ProtectionOSSandbox,
+			HasNativeFileTools:  true,
+			ReasoningEfforts:    []string{"low", "medium", "high", "xhigh"},
 		}, true
 	case HarnessClaudeCode:
 		return Capabilities{
 			SupportsCaller:      true,
 			SupportsWorker:      true,
 			CallerManaged:       true,
-			WorkerManaged:       false,
+			WorkerManaged:       true,
 			ReadOnlyLevel:       ProtectionHarnessRestrict,
 			WorkspaceWriteLevel: ProtectionHarnessRestrict,
+			HasNativeFileTools:  true,
+			ReasoningEfforts:    []string{"low", "medium", "high", "xhigh", "max"},
 		}, true
 	case HarnessDeepSeek:
 		return Capabilities{
 			SupportsCaller:      true,
 			SupportsWorker:      true,
 			CallerManaged:       false,
-			WorkerManaged:       false,
+			WorkerManaged:       true,
 			ReadOnlyLevel:       ProtectionHarnessRestrict,
 			WorkspaceWriteLevel: ProtectionHarnessRestrict,
+			HasNativeFileTools:  true,
+			ReasoningEfforts:    []string{"off", "low", "high", "max"},
 		}, true
 	default:
 		return Capabilities{}, false
@@ -124,9 +132,9 @@ type HarnessView struct {
 	GeneralToolsEnabled bool         `json:"general_tools_enabled"`
 	CollabCallerEnabled bool         `json:"collab_caller_enabled"`
 	CollabWorkerEnabled bool         `json:"collab_worker_enabled"`
-	AllowWorkspaceWrite bool         `json:"allow_workspace_write"`
-	CredentialActive    bool         `json:"credential_active"`
-	MCPDesired          bool         `json:"mcp_desired"`
+	AllowWorkspaceWrite    bool         `json:"allow_workspace_write"`
+	CallerCredentialActive bool         `json:"caller_credential_active" description:"Whether Asterhand has issued a local MCP caller token for this harness to call Asterhand (true only when general_tools_enabled or collab_caller_enabled is enabled; unrelated to the harness's own LLM credentials)"`
+	MCPDesired             bool         `json:"mcp_desired"`
 	MCPObserved         string       `json:"mcp_observed"`
 	MCPConfigPath       string       `json:"mcp_config_path,omitempty"`
 	LastReconcileError  string       `json:"last_reconcile_error,omitempty"`

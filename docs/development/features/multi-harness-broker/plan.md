@@ -8,8 +8,8 @@
   2. 为被调方提供**绑定授权工作区的稳定逻辑身份**（例如同项目内的 `codex-reviewer` 先审 Plan、再审 Code），在不强制跨 Harness 共享私有聊天库的前提下保持跨轮上下文连续；
   3. 由 Asterhand 统一发现本机已安装的 Coding Harness、托管其 MCP 注册/反注册与对账，并按**三项正交开关**控制每个 Harness 的工具暴露程度和参与角色，实现“最小必要工具暴露、升级不断连、一键启用/禁用即时生效”。
 - **状态及实施授权范围**：
-  - **当前状态**：`Milestone 1—2 已完成实现、工程验证及本机端到端用户验收；Milestone 3—4 保持规划态，待后续独立授权后进入实现`。
-  - **授权边界**：Milestone 1—2 的代码、自动化测试、本机真实协议实测、用户真机验收与文档同步已完成；Milestone 3—4 实现、推送和 Release 发布各自独立授权。
+  - **当前状态**：`Milestone 1—2 与 Milestone 3 第 1—2 步（协议预检、ClaudeAdapter + DeepSeekAdapter 适配器及长程多路编排加固）已完成实现、工程验证及本机三路长程用户验收；Milestone 3 第 3 步（Worker 角色模板）与 Milestone 4 保持规划态，待后续独立授权后进入实现`。
+  - **授权边界**：Milestone 1—2 已本地提交；当前完成 Milestone 3 第 1—2 步及验收加固的代码、测试、文档同步与本地提交（未推送、未发布）；第 3 步（角色模板）、Milestone 4、推送和 Release 发布各自独立授权。
   - **预检与验证文档**：[协议预检记录](preflight.md)、[验证说明](validation.md)。
 - **关联 Rxx / Cxx / 领域需求 ID**：
   - 原始与收敛需求：`R10`、`R19`、`R20`、`R26`、`R27`、`R28`；扩展原 `C06`（见 [ADR-002](../../../overview/adr/002-mvp-scope.md) 后置范围的新立项增量）；
@@ -112,8 +112,8 @@
   - 单次等待上限严格对齐现有 `automation.MaxWait = 30s`，复用独立 `waitSlots`（不占用 `writeSlots`）；客户端断开或超时仅释放观察等待，不取消已接纳轮次。
 - **活跃轮次运行预算、节点停机协同与撤销语义**：
   - **节点级活跃轮次上限**：默认同时最多 `4` 个活跃轮次，常驻适配器进程上限默认 `4` 个（超限时优先回收最久空闲且无活跃轮次的进程，全忙则返回 `worker_capacity` 拒绝新派发）；
-  - **单轮总墙钟时限**：默认 `15 分钟`（可配上限），计时不因输出或轮询重置；
-  - **无事件/无输出超时（Stall Timeout）**：默认 `5 分钟`（可配），防止子进程存活但不再发事件时无限占用 Worker；
+  - **单轮总墙钟时限**：默认 `30 分钟`（1800s，可配上限），计时不因输出或轮询重置；
+  - **无事件/无输出超时（Stall Timeout）**：默认 `10 分钟`（600s，可配），由各适配器流式 delta/chunk 心跳实时刷新，防止子进程存活但不再发事件时无限占用 Worker；
   - **超时与失联处置**：触发超时或取消时，先发原生中断（如 `turn/interrupt` 带双 ID），有界等待（默认 `10s`）未退出则强制终止 Windows 具名 `JobObject` 进程树；**必须确认进程/轮次已停止后再释放 Worker 活跃锁与工作区写锁**；若执行停止无法证明则保留 `reconciliation_required` 锁存，不提前放行新轮次；`workers.cancel` 走独立控制通道（`Control: true`），不被 `wait` 或日志读取阻塞；
   - **纳入节点停机原子链与关闭顺序**：`Workers.BeginStop(confirmed, next)` 接入 `App.RequestStop(confirmed)` 原子检查链（与 `Commands`、`Chat`、`Engine` 同链）。存在活跃 Worker 轮次时，`confirmed = false`（托盘普通退出或普通 `node.stop`）返回忙状态；仅存在无活跃轮次的空闲常驻 `app-server` 不算忙并直接优雅回收。`confirmed = true` 确认退出后先关闭新 Worker/轮次接纳，在 `App.Close()` 关闭 SQLite 之前停止所有活跃 Worker、落盘终态或待核对状态并回收进程树，最后关库；
   - **精细区分三类撤权对后续调用与在途轮次的影响**：
@@ -203,8 +203,11 @@
   4. 经 `install-local.cmd` 覆盖升级后，验证新连接走新版本、旧连接重连恢复、在途/已终结轮次可按原 `turn_id` 补读，自定义 `--home` 安装连接正确节点。
 
 ### Milestone 3：补齐 Claude Code & DeepSeek Harness 适配器 + Worker 角色模板
-- **实现范围**：
-  - 按同一 `HarnessAdapter` 契约接入 `ClaudeAdapter`（`claude -p --output-format stream-json --input-format stream-json --resume`，如实声明 Windows 下 `harness_tool_restricted` 等级与 `OrdinaryToken` 边界）与 `DeepSeekAdapter`（预检锁定桌面包内 CLI 的 `sdk`/`acp` 协议）；
+- **第 1—2 步（已完成实现、工程验证及本机三路长程用户验收）**：
+  - 按同一 `HarnessAdapter` 契约接入 `ClaudeAdapter`（`claude -p --verbose --input-format stream-json --output-format stream-json --include-partial-messages --strict-mcp-config`，不传 `--restricted` 保留用户登录态，预绑定 `--session-id` + 发过首轮后统一走 `--resume`，`stream_event` 心跳 + `content_block_start`/`tool_result` 实时刷新 `progress`，`workspace_write` 经 `--allowed-tools` 放行常用工作区检查/测试命令，Windows 诚实声明 `harness_tool_restricted`）与 `DeepSeekAdapter`（`dsh --profile acp` 标准 Agent Client Protocol v1 stdio JSON-RPC，`DSH_PERMISSION_MODE` + `mcpServers: []` 防递归，实时匹配 `configOptions`、工具前旁白冲刷为 `commentary`、非零 `pwsh` 退出码标为 `(exit N)`、Windows 只读 DACL 预检预警 `warnings`）；
+  - 共享层长程编排加固：`workers_wait_any` 多轮次批量监听、`workers_send` 可选 `wall_clock_seconds`（30..3600s，默认 1800s，静默默认 600s）、`workers_logs(tail=true)` 尾部查询、`worktree_busy` 写锁冲突码与占锁主体提示、`caller_credential_active` + `has_native_file_tools` / `reasoning_efforts` 能力画像、`workers_wait` 实时流式遥测与非成功终态 `after_vcs.changed_files` 提示、`Kill()` 同步等进程退出、异常终态淘汰脏常驻进程与前置启动失败不误锁 `reconciliation_required`；
+  - `internal/harnesses` 开启 `claude-code` 与 `deepseek-harness` 的 `worker_managed = true`（`deepseek-harness` 因桌面版无独立 MCP CLI 继续诚实保持 `caller_managed = false`），同步中文化 Web 界面（「编程智能体 / 协作者 / 编程协作者」）。
+- **第 3 步（规划待实施）**：
   - Web 新增常用 Worker 角色模板配置（预设别名、默认 Harness、默认访问档位、角色提示词），与对话即时创建共存。
 
 ### Milestone 4：人机高危审批、业务提问流转与 Git Worktree 并行写隔离

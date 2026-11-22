@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jackgan90/Asterhand/internal/model"
 	"github.com/jackgan90/Asterhand/internal/platform/userprocess"
@@ -121,6 +122,12 @@ func (p *managedProc) Kill() error {
 		_ = windows.TerminateJobObject(job, 1)
 		_ = windows.CloseHandle(job)
 	}
+	if p.done != nil {
+		select {
+		case <-p.done:
+		case <-time.After(2 * time.Second):
+		}
+	}
 	if proc != 0 {
 		_ = windows.CloseHandle(proc)
 	}
@@ -161,15 +168,31 @@ func quoteWinArg(s string) string {
 }
 
 func sanitizedWorkerEnv() []string {
+	return sanitizedWorkerEnvWith(nil)
+}
+
+func sanitizedWorkerEnvWith(overrides map[string]string) []string {
+	upperOverrides := map[string]string{}
+	for k, v := range overrides {
+		upperOverrides[strings.ToUpper(k)] = k + "=" + v
+	}
 	out := []string{}
 	for _, kv := range os.Environ() {
 		upper := strings.ToUpper(kv)
 		if strings.HasPrefix(upper, "ASTERHAND_") {
 			continue
 		}
+		if eq := strings.IndexByte(upper, '='); eq > 0 {
+			if _, skip := upperOverrides[upper[:eq]]; skip {
+				continue
+			}
+		}
 		out = append(out, kv)
 	}
 	out = append(out, "ASTERHAND_MANAGED_WORKER=1")
+	for _, kv := range upperOverrides {
+		out = append(out, kv)
+	}
 	return out
 }
 

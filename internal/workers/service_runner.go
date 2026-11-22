@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 )
@@ -70,8 +71,16 @@ func (s *Service) runTurn(rt *runningTurn, w Worker, t Turn, exe, prompt string)
 func (s *Service) awaitTurnStart(rt *runningTurn, w *Worker, t *Turn, adapter Adapter, handle ThreadHandle, prompt string) (turnStartResult, bool) {
 	onEvent := func(ev AdapterEvent) {
 		now := s.now().UTC()
+		sz := ev.Bytes
+		if sz <= 0 {
+			sz = len(ev.Summary)
+		}
 		s.mu.Lock()
 		rt.lastEventAt = now
+		rt.streamEvents++
+		if sz > 0 {
+			rt.streamBytes += int64(sz)
+		}
 		s.mu.Unlock()
 		if ev.Kind != "delta" && ev.Kind != "progress" {
 			_, _ = s.store.AppendLog(t.ID, LogEntry{
@@ -121,6 +130,14 @@ func (s *Service) awaitTurnStart(rt *runningTurn, w *Worker, t *Turn, adapter Ad
 	if sr.err != nil {
 		s.evictResident(w.ID)
 		_ = adapter.ForceKill(handle)
+		if errors.Is(sr.err, ErrPreStartFailed) {
+			code := "adapter_start_failed"
+			if strings.Contains(sr.err.Error(), "native_session_unrecoverable") {
+				code = "native_session_unrecoverable"
+			}
+			s.finalizeTurn(rt, w, t, TurnFailed, nil, code, sr.err.Error())
+			return turnStartResult{}, false
+		}
 		s.enterReconciliation(w, t, "turn_start_unacknowledged", sr.err.Error())
 		return turnStartResult{}, false
 	}
@@ -201,7 +218,11 @@ func (s *Service) awaitTurnExecution(rt *runningTurn, w *Worker, t *Turn, adapte
 	_ = s.store.SaveTurn(*t)
 	s.notifyWaiters(t.ID)
 
-	wallTimer := time.NewTimer(s.budgets.WallClockTimeout)
+	wallDur := rt.wallClock
+	if wallDur <= 0 {
+		wallDur = s.budgets.WallClockTimeout
+	}
+	wallTimer := time.NewTimer(wallDur)
 	defer wallTimer.Stop()
 	stallTick := time.NewTicker(minDuration(s.budgets.StallTimeout/4+50*time.Millisecond, 1*time.Second))
 	defer stallTick.Stop()
@@ -290,6 +311,7 @@ func (s *Service) finalizeRevoked(rt *runningTurn, w *Worker, t *Turn, reason, n
 	w.ActiveTurnID = ""
 	w.UpdatedAt = now
 	_ = s.store.SaveWorker(*w)
+	s.evictAndCloseResident(w.ID)
 	s.notifyWaiters(t.ID)
 }
 
@@ -306,6 +328,9 @@ func (s *Service) finalizeTurn(rt *runningTurn, w *Worker, t *Turn, state string
 	t.ErrorCode = errCode
 	t.ErrorMessage = errMsg
 	if avail && answer != "" {
+		if state == TurnCompleted {
+			t.Progress = truncateSummary(answer, 160)
+		}
 		n, _, err := s.store.SaveResultText(t.ID, answer, now)
 		if err == nil {
 			t.ResultBytes = n
@@ -320,7 +345,11 @@ func (s *Service) finalizeTurn(rt *runningTurn, w *Worker, t *Turn, state string
 	w.ActiveTurnID = ""
 	w.UpdatedAt = now
 	_ = s.store.SaveWorker(*w)
-	s.touchResident(w.ID, now)
+	if state == TurnCompleted {
+		s.touchResident(w.ID, now)
+	} else {
+		s.evictAndCloseResident(w.ID)
+	}
 	s.notifyWaiters(t.ID)
 }
 
@@ -381,6 +410,7 @@ func (s *Service) acquireHandle(ctx context.Context, adapter Adapter, w Worker, 
 		WorkspaceRoot:   w.WorkspaceRoot,
 		AccessMode:      w.AccessMode,
 		Model:           w.Model,
+		ReasoningEffort: w.ReasoningEffort,
 		RoleHint:        w.RoleHint,
 		NativeSessionID: w.NativeSessionID,
 	})
@@ -410,6 +440,20 @@ func (s *Service) evictResident(workerID string) {
 	s.mu.Lock()
 	delete(s.residents, workerID)
 	s.mu.Unlock()
+}
+
+func (s *Service) evictAndCloseResident(workerID string) {
+	s.mu.Lock()
+	rp, ok := s.residents[workerID]
+	if ok {
+		delete(s.residents, workerID)
+	}
+	s.mu.Unlock()
+	if ok && rp != nil {
+		if ad := s.adapters[rp.harnessID]; ad != nil {
+			_ = ad.CloseThread(rp.handle)
+		}
+	}
 }
 
 func (s *Service) evictResidentByHandle(key string) {

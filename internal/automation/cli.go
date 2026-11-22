@@ -24,7 +24,7 @@ func ErrorExit(code string) int {
 		return 2
 	case "forbidden", "authorization_required", "toolset_disabled":
 		return 3
-	case "conflict", "operation_conflict", "name_conflict", "lease_revoked", "lease_expired", "worker_busy", "workspace_mismatch":
+	case "conflict", "operation_conflict", "name_conflict", "lease_revoked", "lease_expired", "worker_busy", "worktree_busy", "workspace_mismatch":
 		return 4
 	case "result_unknown", "submission_pending", "reconciliation_required":
 		return 5

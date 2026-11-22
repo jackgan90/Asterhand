@@ -99,6 +99,11 @@ func nextStepHint(opName string, response Response) string {
 		tid, _ := dataMap["turn_id"].(string)
 		switch state {
 		case "running", "queued":
+			if ev, ok := dataMap["stream_events"].(float64); ok && ev > 0 {
+				elapsed, _ := dataMap["elapsed_seconds"].(float64)
+				idle, _ := dataMap["idle_seconds"].(float64)
+				return fmt.Sprintf("Turn is still %s (elapsed=%ds, idle=%ds, stream_events=%d). Continue calling workers_wait(turn_id=%q).", state, int(elapsed), int(idle), int64(ev), tid)
+			}
 			return fmt.Sprintf("Turn is still %s. Continue calling workers_wait(turn_id=%q).", state, tid)
 		case "completed":
 			if trunc, _ := dataMap["truncated"].(bool); trunc {
@@ -108,12 +113,17 @@ func nextStepHint(opName string, response Response) string {
 				return fmt.Sprintf("Turn completed without a candidate final answer; inspect workers_logs(turn_id=%q).", tid)
 			}
 		case "blocked_unsupported_approval", "blocked_unsupported_user_input":
-			return "Worker requested an unsupported interactive approval or user question and stopped cleanly; report the reason to the user."
+			return appendChangedFilesNote("Worker requested an unsupported interactive approval or user question and stopped cleanly; report the reason to the user.", dataMap)
 		case "interrupted", "cancelled", "cancelled_authorization_revoked", "failed":
-			return fmt.Sprintf("Turn ended with non-success state %q (partial output is not a completed review); inspect workers_logs(turn_id=%q).", state, tid)
+			return appendChangedFilesNote(fmt.Sprintf("Turn ended with non-success state %q (partial output is not a completed review); inspect workers_logs(turn_id=%q).", state, tid), dataMap)
 		case "reconciliation_required":
 			return fmt.Sprintf("Turn requires reconciliation before continuing; do not resend automatically. Inspect workers_get or workers_logs(turn_id=%q).", tid)
 		}
+	case "workers_wait_any":
+		if trig, _ := dataMap["triggered_turn_id"].(string); trig != "" {
+			return fmt.Sprintf("Turn %q reached a terminal or reconciliation state. Inspect its preview/result (workers_result) and continue monitoring remaining active turns with workers_wait_any.", trig)
+		}
+		return "All watched turns are still active. Continue calling workers_wait_any with the active turn_ids."
 	case "workers_result":
 		if next, _ := dataMap["next_cursor"].(string); next != "" {
 			tid, _ := dataMap["turn_id"].(string)
@@ -150,4 +160,27 @@ func clampUTF8(s string, maxBytes int) string {
 		n--
 	}
 	return s[:n]
+}
+
+func appendChangedFilesNote(base string, dataMap map[string]any) string {
+	turnObj, _ := dataMap["turn"].(map[string]any)
+	afterVCS, _ := turnObj["after_vcs"].(map[string]any)
+	filesAny, _ := afterVCS["changed_files"].([]any)
+	if len(filesAny) == 0 {
+		return base
+	}
+	var names []string
+	for i, f := range filesAny {
+		if i >= 8 {
+			names = append(names, fmt.Sprintf("... (+%d more)", len(filesAny)-8))
+			break
+		}
+		if s, ok := f.(string); ok && s != "" {
+			names = append(names, s)
+		}
+	}
+	if len(names) == 0 {
+		return base
+	}
+	return base + " Worktree currently has changed files on disk: " + strings.Join(names, ", ") + "."
 }

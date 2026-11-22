@@ -506,7 +506,7 @@ func (s *codexSession) handleNotification(method string, params json.RawMessage)
 			}
 			at.deltas[p.ItemID].WriteString(p.Delta)
 			if at.onEvent != nil {
-				at.onEvent(AdapterEvent{Kind: "delta", ItemID: p.ItemID, Summary: "streaming"})
+				at.onEvent(AdapterEvent{Kind: "delta", ItemID: p.ItemID, Summary: "streaming", Bytes: len(p.Delta)})
 			}
 		}
 		s.mu.Unlock()
@@ -584,6 +584,20 @@ func (s *codexSession) handleNotification(method string, params json.RawMessage)
 			})
 		}
 		s.mu.Unlock()
+
+	default:
+		if strings.HasSuffix(method, "Delta") || strings.HasSuffix(method, "/delta") {
+			s.mu.Lock()
+			at := s.active
+			var onEvent func(AdapterEvent)
+			if at != nil {
+				onEvent = at.onEvent
+			}
+			s.mu.Unlock()
+			if onEvent != nil {
+				onEvent(AdapterEvent{Kind: "delta", Bytes: len(params)})
+			}
+		}
 	}
 }
 

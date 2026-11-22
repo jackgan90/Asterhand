@@ -784,8 +784,15 @@ func verifyRound5EscalationResultMeta(t *testing.T, s *Service, scope Scope, ext
 			t.Fatalf("unexpected polled metadata: polled=%+v err=%v", polled, pErr)
 		}
 		listed, lErr := s.ControlExec(ExecControlRequest{CallID: "c-r5-poll", Action: "list"})
-		if lErr != nil || len(listed.Sessions) == 0 || !listed.Sessions[0].Escalated || listed.Sessions[0].ApprovalMode != "session_allow" {
-			t.Fatalf("unexpected listed summary metadata: listed=%+v err=%v", listed, lErr)
+		var autoSummary *ExecSessionSummary
+		for i := range listed.Sessions {
+			if listed.Sessions[i].SessionID == rAuto.SessionID {
+				autoSummary = &listed.Sessions[i]
+				break
+			}
+		}
+		if lErr != nil || autoSummary == nil || !autoSummary.Escalated || autoSummary.ApprovalMode != "session_allow" {
+			t.Fatalf("unexpected listed summary metadata for %s: listed=%+v err=%v", rAuto.SessionID, listed, lErr)
 		}
 	}
 

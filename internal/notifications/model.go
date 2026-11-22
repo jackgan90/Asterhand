@@ -38,19 +38,61 @@ type Card struct {
 	exited    bool
 }
 
+type WorkerOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+type WorkerQuestion struct {
+	ID       string         `json:"id"`
+	Header   string         `json:"header,omitempty"`
+	Question string         `json:"question"`
+	Multi    bool           `json:"multi_select,omitempty"`
+	Options  []WorkerOption `json:"options,omitempty"`
+}
+
+type WorkerInteraction struct {
+	RequestID        string           `json:"request_id"`
+	Kind             string           `json:"kind"` // approval | input
+	WorkerID         string           `json:"worker_id"`
+	WorkerAlias      string           `json:"worker_alias,omitempty"`
+	WorkspaceRoot    string           `json:"workspace_root,omitempty"`
+	HarnessID        string           `json:"harness_id"`
+	TurnID           string           `json:"turn_id"`
+	ToolName         string           `json:"tool_name,omitempty"`
+	Summary          string           `json:"summary"`
+	Command          string           `json:"command,omitempty"`
+	Paths            []string         `json:"paths,omitempty"`
+	Reason           string           `json:"reason,omitempty"`
+	RiskLevel        string           `json:"risk_level,omitempty"`
+	HardRedline      bool             `json:"hard_redline,omitempty"`
+	OutsideWorkspace bool             `json:"outside_workspace,omitempty"`
+	AllowSessionOK   bool             `json:"allow_session_ok,omitempty"`
+	Questions        []WorkerQuestion `json:"questions,omitempty"`
+}
+
+type WorkerActionEvent struct {
+	RequestID string              `json:"request_id"`
+	Decision  string              `json:"decision"`
+	Text      string              `json:"text,omitempty"`
+	Answers   map[string][]string `json:"answers,omitempty"`
+}
+
 type Snapshot struct {
-	Revision uint64 `json:"revision"`
-	Cards    []Card `json:"cards"`
-	Theme    string `json:"theme"`
-	Locale   string `json:"locale"`
+	Revision     uint64              `json:"revision"`
+	Cards        []Card              `json:"cards"`
+	Interactions []WorkerInteraction `json:"interactions,omitempty"`
+	Theme        string              `json:"theme"`
+	Locale       string              `json:"locale"`
 }
 
 type Event struct {
-	Kind       string `json:"kind"`
-	ID         uint64 `json:"id,omitempty"`
-	Paused     bool   `json:"paused,omitempty"`
-	Capacity   int    `json:"capacity,omitempty"`
-	DurationMS int64  `json:"duration_ms,omitempty"`
+	Kind         string             `json:"kind"`
+	ID           uint64             `json:"id,omitempty"`
+	Paused       bool               `json:"paused,omitempty"`
+	Capacity     int                `json:"capacity,omitempty"`
+	DurationMS   int64              `json:"duration_ms,omitempty"`
+	WorkerAction *WorkerActionEvent `json:"worker_action,omitempty"`
 }
 
 // Presenter applies idempotent snapshots and emits acknowledgements/intent.

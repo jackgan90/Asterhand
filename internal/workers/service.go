@@ -19,6 +19,8 @@ type Budgets struct {
 	StallTimeout       time.Duration
 	InterruptGrace     time.Duration
 	IdleRecycleTimeout time.Duration
+	InputCallerGrace   time.Duration
+	InteractionTimeout time.Duration
 }
 
 func DefaultBudgets() Budgets {
@@ -29,6 +31,8 @@ func DefaultBudgets() Budgets {
 		StallTimeout:       10 * time.Minute,
 		InterruptGrace:     10 * time.Second,
 		IdleRecycleTimeout: 10 * time.Minute,
+		InputCallerGrace:   15 * time.Second,
+		InteractionTimeout: 30 * time.Minute,
 	}
 }
 
@@ -51,6 +55,9 @@ type runningTurn struct {
 	cancelCh     chan struct{}
 	cancelOnce   sync.Once
 	wallClock    time.Duration
+	execStarted  time.Time
+	waitingSince time.Time
+	pausedTotal  time.Duration
 	lastEventAt  time.Time
 	streamEvents int64
 	streamBytes  int64
@@ -69,23 +76,26 @@ type residentProc struct {
 }
 
 type Service struct {
+	home      string
 	store     *Store
 	harnesses *harnesses.Service
 	adapters  map[string]Adapter
 	budgets   Budgets
 	now       func() time.Time
 
-	mu          sync.Mutex
-	stopping    bool
-	closed      bool
-	activeTurns map[string]*runningTurn // turnID -> runningTurn
-	workerTurn  map[string]string       // workerID -> active turnID
-	writeLocks  map[string]string       // worktreeKey -> active turnID
-	residents   map[string]*residentProc
-	waiters     map[string][]chan struct{} // turnID -> notification chans
-	wg          sync.WaitGroup
-	reaperStop  chan struct{}
-	reaperOnce  sync.Once
+	mu                    sync.Mutex
+	stopping              bool
+	closed                bool
+	activeTurns           map[string]*runningTurn // turnID -> runningTurn
+	workerTurn            map[string]string       // workerID -> active turnID
+	writeLocks            map[string]string       // worktreeKey -> active turnID
+	residents             map[string]*residentProc
+	waiters               map[string][]chan struct{} // turnID -> notification chans
+	interactions          map[string]*pendingInteraction
+	onInteractionsChanged func([]InteractionView)
+	wg                    sync.WaitGroup
+	reaperStop            chan struct{}
+	reaperOnce            sync.Once
 }
 
 func NewService(home string, hs *harnesses.Service, adapters ...Adapter) (*Service, error) {
@@ -98,17 +108,19 @@ func NewService(home string, hs *harnesses.Service, adapters ...Adapter) (*Servi
 		am[a.HarnessID()] = a
 	}
 	s := &Service{
-		store:       st,
-		harnesses:   hs,
-		adapters:    am,
-		budgets:     DefaultBudgets(),
-		now:         time.Now,
-		activeTurns: map[string]*runningTurn{},
-		workerTurn:  map[string]string{},
-		writeLocks:  map[string]string{},
-		residents:   map[string]*residentProc{},
-		waiters:     map[string][]chan struct{}{},
-		reaperStop:  make(chan struct{}),
+		home:         home,
+		store:        st,
+		harnesses:    hs,
+		adapters:     am,
+		budgets:      DefaultBudgets(),
+		now:          time.Now,
+		activeTurns:  map[string]*runningTurn{},
+		workerTurn:   map[string]string{},
+		writeLocks:   map[string]string{},
+		residents:    map[string]*residentProc{},
+		waiters:      map[string][]chan struct{}{},
+		interactions: map[string]*pendingInteraction{},
+		reaperStop:   make(chan struct{}),
 	}
 	if err := s.markInterruptedOnStartup(); err != nil {
 		_ = st.Close()
@@ -149,6 +161,12 @@ func (s *Service) SetBudgets(b Budgets) {
 	}
 	if b.IdleRecycleTimeout > 0 {
 		s.budgets.IdleRecycleTimeout = b.IdleRecycleTimeout
+	}
+	if b.InputCallerGrace > 0 {
+		s.budgets.InputCallerGrace = b.InputCallerGrace
+	}
+	if b.InteractionTimeout > 0 {
+		s.budgets.InteractionTimeout = b.InteractionTimeout
 	}
 }
 
@@ -262,6 +280,7 @@ type CreateInput struct {
 	WorkspaceRoot   string
 	Alias           string
 	AccessMode      string
+	ApprovalMode    string
 	RoleHint        string
 	Model           string
 	ReasoningEffort string
@@ -309,6 +328,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Worker, error) {
 	if protLevel == harnesses.ProtectionUnsupported {
 		return Worker{}, automation.Fail("unsupported_access_mode", "Requested access_mode is not supported for this harness")
 	}
+	reqApprovalMode, effApprovalMode, err := NormalizeApprovalMode(in.AccessMode, in.ApprovalMode, caps)
+	if err != nil {
+		return Worker{}, err
+	}
 	ws, canonRoot, err := s.harnesses.ResolveWorkspace(in.WorkspaceRoot, in.AccessMode)
 	if err != nil {
 		return Worker{}, err
@@ -340,22 +363,24 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Worker, error) {
 	}
 	now := s.now().UTC()
 	w := Worker{
-		ID:              "wkr_" + model.ID()[:16],
-		WorkspaceID:     ws.ID,
-		WorkspaceRoot:   canonRoot,
-		WorktreeKey:     wtKey,
-		Alias:           alias,
-		HarnessID:       in.HarnessID,
-		AccessMode:      in.AccessMode,
-		ProtectionLevel: protLevel,
-		RoleHint:        strings.TrimSpace(in.RoleHint),
-		Model:           strings.TrimSpace(in.Model),
-		ReasoningEffort: effort,
-		State:           WorkerIdle,
-		SessionEpoch:    1,
-		OperationID:     in.OperationID,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		ID:                    "wkr_" + model.ID()[:16],
+		WorkspaceID:           ws.ID,
+		WorkspaceRoot:         canonRoot,
+		WorktreeKey:           wtKey,
+		Alias:                 alias,
+		HarnessID:             in.HarnessID,
+		AccessMode:            in.AccessMode,
+		ApprovalMode:          reqApprovalMode,
+		EffectiveApprovalMode: effApprovalMode,
+		ProtectionLevel:       protLevel,
+		RoleHint:              strings.TrimSpace(in.RoleHint),
+		Model:                 strings.TrimSpace(in.Model),
+		ReasoningEffort:       effort,
+		State:                 WorkerIdle,
+		SessionEpoch:          1,
+		OperationID:           in.OperationID,
+		CreatedAt:             now,
+		UpdatedAt:             now,
 	}
 	if err := s.store.SaveWorker(w); err != nil {
 		return Worker{}, err
@@ -405,6 +430,9 @@ func (s *Service) GetTurn(turnID, expectedWorkspaceID string) (Turn, error) {
 		return Turn{}, automation.Fail("workspace_mismatch", "Turn does not belong to the expected workspace")
 	}
 	s.populateTurnActivity(&t)
+	if t.State == TurnWaitingApproval || t.State == TurnWaitingInput {
+		t.PendingInteraction = s.pendingForTurn(t.ID)
+	}
 	return t, nil
 }
 

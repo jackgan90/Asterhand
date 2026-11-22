@@ -21,6 +21,8 @@ const WORKER_STATE_KEYS = {
 const TURN_STATE_KEYS = {
   prepared: "web.workers.turn_state_prepared",
   running: "web.workers.turn_state_running",
+  waiting_approval: "web.workers.turn_state_waiting_approval",
+  waiting_input: "web.workers.turn_state_waiting_input",
   completed: "web.workers.turn_state_completed",
   failed: "web.workers.turn_state_failed",
   cancelled: "web.workers.turn_state_cancelled",
@@ -30,6 +32,13 @@ const TURN_STATE_KEYS = {
   blocked_unsupported_approval: "web.workers.turn_state_blocked_unsupported_approval",
   blocked_unsupported_user_input: "web.workers.turn_state_blocked_unsupported_user_input",
 };
+
+function approvalModeLabel(mode) {
+  if (mode === "auto") return t("web.workers.approval_auto");
+  if (mode === "ask_human") return t("web.workers.approval_ask_human");
+  if (mode === "strict_deny") return t("web.workers.approval_strict_deny");
+  return "";
+}
 
 function folderName(rootPath) {
   if (!rootPath) return "";
@@ -60,7 +69,7 @@ function accessLabel(mode) {
 }
 
 function stateTone(state) {
-  if (state === "running" || state === "prepared") return "warn";
+  if (state === "running" || state === "prepared" || state === "waiting_approval" || state === "waiting_input") return "warn";
   if (state === "completed" || state === "idle") return "ok";
   if (state === "reconciliation_required" || state.startsWith("blocked_")) return "warn";
   if (state === "failed" || state === "interrupted" || state.startsWith("cancelled")) return "error";
@@ -81,16 +90,26 @@ function isPinnedToBottom(el) {
   return (el.scrollHeight - el.scrollTop - el.clientHeight) <= 24;
 }
 
-export function workersPanel({api, post, listen, session, notice}) {
+const INTERACTION_SWITCH_GUARD_MS = 400;
+
+export function workersPanel({api, post, listen, session, notice, now = () => Date.now()}) {
   const dialog = $("#coding-workers");
   const openBtn = $("#workers-open");
   const refreshBtn = $("#workers-refresh");
   const includeClosedEl = $("#workers-include-closed");
   const statusEl = $("#workers-status");
+  const interactionsEl = $("#workers-interactions");
   const listEl = $("#workers-list");
   const detailEl = $("#workers-detail");
 
   let workers = [];
+  let interactions = [];
+  let activeInteractionID = "";
+  let interactionCmdExpanded = false;
+  let lastInteractionsSig = null;
+  let interactionGuardUntil = 0;
+  let interactionGuardTimer = null;
+  const interactionDrafts = new Map();
   let selectedWorkerID = "";
   let selectedWorker = null;
   let turns = [];
@@ -101,6 +120,7 @@ export function workersPanel({api, post, listen, session, notice}) {
   let resultPage = null;
   let pollTimer = null;
   let refreshing = false;
+  let pendingRefresh = false;
   let busyAction = false;
   let loadSeq = 0;
 
@@ -134,11 +154,33 @@ export function workersPanel({api, post, listen, session, notice}) {
     else delete statusEl.dataset.tone;
   }
 
+  function clearInteractionGuard() {
+    if (interactionGuardTimer !== null) {
+      clearTimeout(interactionGuardTimer);
+      interactionGuardTimer = null;
+    }
+    interactionGuardUntil = 0;
+  }
+
+  function isInteractionGuarded() {
+    return now() < interactionGuardUntil;
+  }
+
+  function armInteractionGuard() {
+    clearInteractionGuard();
+    interactionGuardUntil = now() + INTERACTION_SWITCH_GUARD_MS;
+    interactionGuardTimer = setTimeout(() => {
+      interactionGuardTimer = null;
+      if (dialog?.open && interactions.length) renderInteractions(true);
+    }, INTERACTION_SWITCH_GUARD_MS);
+  }
+
   function clearPoll() {
     if (pollTimer !== null) {
       clearTimeout(pollTimer);
       pollTimer = null;
     }
+    clearInteractionGuard();
   }
 
   function schedulePoll() {
@@ -147,6 +189,7 @@ export function workersPanel({api, post, listen, session, notice}) {
     const waitingFirstTurn = Boolean(selectedWorker && selectedWorker.state !== "closed" && turns.length === 0);
     const hasActive = (selectedTurn && !TERMINAL_STATES.has(selectedTurn.state))
       || workers.some(w => w.state === "running")
+      || interactions.length > 0
       || waitingFirstTurn;
     const delay = hasActive ? 2000 : 3000;
     pollTimer = setTimeout(() => {
@@ -159,6 +202,244 @@ export function workersPanel({api, post, listen, session, notice}) {
     for (const [id, btn] of listButtons.entries()) {
       if (id === selectedWorkerID) btn.dataset.selected = "true";
       else delete btn.dataset.selected;
+    }
+  }
+
+  function getInteractionDraft(reqID) {
+    if (!interactionDrafts.has(reqID)) interactionDrafts.set(reqID, {text: "", selected: {}});
+    return interactionDrafts.get(reqID);
+  }
+
+  async function decideInteraction(payload) {
+    if (busyAction || isInteractionGuarded()) return;
+    const scope = session();
+    busyAction = true;
+    renderInteractions(true);
+    try {
+      const res = await post("/api/workers/interactions/decide", payload);
+      if (!scope?.active) return;
+      interactions = Array.isArray(res.interactions) ? res.interactions : [];
+      await refresh();
+    } catch (err) {
+      if (!scope?.active) return;
+      notice?.(localizeError(err));
+    } finally {
+      busyAction = false;
+      if (scope?.active) renderInteractions(true);
+    }
+  }
+
+  async function setSessionAutoApprove(workerID, enabled) {
+    const scope = session();
+    busyAction = true;
+    renderDetail(true);
+    try {
+      await post("/api/workers/session-auto-approve", {worker_id: workerID, enabled});
+      if (!scope?.active) return;
+      await refresh();
+    } catch (err) {
+      if (!scope?.active) return;
+      notice?.(localizeError(err));
+    } finally {
+      busyAction = false;
+      if (scope?.active) renderDetail(true);
+    }
+  }
+
+  function renderInteractions(force = false) {
+    if (!interactionsEl) return;
+    const liveIDs = new Set(interactions.map(x => x.request_id));
+    for (const k of interactionDrafts.keys()) {
+      if (!liveIDs.has(k)) interactionDrafts.delete(k);
+    }
+    if (!interactions.length) {
+      interactionsEl.hidden = true;
+      interactionsEl.replaceChildren();
+      activeInteractionID = "";
+      lastInteractionsSig = "";
+      clearInteractionGuard();
+      return;
+    }
+    const prevActiveID = activeInteractionID;
+    const autoSwitched = Boolean(prevActiveID && !liveIDs.has(prevActiveID));
+    if (!liveIDs.has(activeInteractionID)) {
+      activeInteractionID = interactions[0].request_id;
+      interactionCmdExpanded = false;
+    }
+    if (autoSwitched && activeInteractionID && activeInteractionID !== prevActiveID) {
+      armInteractionGuard();
+    }
+    const idx = Math.max(0, interactions.findIndex(x => x.request_id === activeInteractionID));
+    const item = interactions[idx];
+    const actionDisabled = busyAction || isInteractionGuarded();
+    const sig = JSON.stringify({
+      locale: t("common.worker_action.badge_approval"),
+      ids: interactions.map(x => x.request_id),
+      active: item.request_id,
+      expanded: interactionCmdExpanded,
+      busyAction,
+      guarded: isInteractionGuarded(),
+      selected: Object.fromEntries(Object.entries(getInteractionDraft(item.request_id).selected).map(([k, v]) => [k, Array.from(v)])),
+    });
+    if (!force && sig === lastInteractionsSig) return;
+    lastInteractionsSig = sig;
+
+    interactionsEl.hidden = false;
+    interactionsEl.replaceChildren();
+
+    const head = node("div", null, "workers-int-head");
+    const left = node("div", null, "workers-int-head-left");
+    const kindBadge = node("span", t(item.kind === "approval" ? "common.worker_action.badge_approval" : "common.worker_action.badge_input"), "badge");
+    kindBadge.dataset.tone = item.kind === "approval" ? "warn" : "ok";
+    const src = `${item.worker_alias || item.worker_id} · ${item.harness_id}`;
+    left.append(kindBadge, node("strong", src));
+    if (item.workspace_root) left.append(node("span", folderName(item.workspace_root), "worker-meta-line"));
+    head.append(left);
+
+    if (interactions.length > 1) {
+      const approvals = interactions.filter(x => x.kind === "approval").length;
+      const inputs = interactions.length - approvals;
+      const pager = node("div", null, "workers-int-pager");
+      const prev = node("button", "‹", "secondary");
+      prev.type = "button";
+      prev.setAttribute("aria-label", t("common.worker_action.prev"));
+      prev.addEventListener("click", () => {
+        activeInteractionID = interactions[(idx - 1 + interactions.length) % interactions.length].request_id;
+        interactionCmdExpanded = false;
+        renderInteractions(true);
+      });
+      const next = node("button", "›", "secondary");
+      next.type = "button";
+      next.setAttribute("aria-label", t("common.worker_action.next"));
+      next.addEventListener("click", () => {
+        activeInteractionID = interactions[(idx + 1) % interactions.length].request_id;
+        interactionCmdExpanded = false;
+        renderInteractions(true);
+      });
+      pager.append(
+        node("span", t("common.worker_action.queue_breakdown", {approvals, inputs})),
+        prev,
+        node("span", `${idx + 1} / ${interactions.length}`),
+        next,
+      );
+      head.append(pager);
+    }
+    interactionsEl.append(head);
+
+    if (item.kind === "approval") {
+      const meta = node("div", null, "workers-int-actions");
+      if (item.tool_name) meta.append(node("span", item.tool_name, "badge"));
+      const riskKey = item.hard_redline ? "common.worker_action.risk_critical" : (item.outside_workspace ? "common.worker_action.risk_outside" : "common.worker_action.risk_workspace");
+      const riskBadge = node("span", t(riskKey), "badge");
+      if (item.hard_redline) riskBadge.dataset.tone = "error";
+      else if (item.outside_workspace) riskBadge.dataset.tone = "warn";
+      meta.append(riskBadge);
+      interactionsEl.append(meta);
+
+      if (item.summary) interactionsEl.append(node("p", item.summary, "worker-meta-line"));
+      if (item.command) {
+        const pre = node("pre", item.command, interactionCmdExpanded ? "workers-int-cmd expanded" : "workers-int-cmd");
+        interactionsEl.append(pre);
+        if (item.command.length > 140 || item.command.includes("\n")) {
+          const toggle = node("button", t(interactionCmdExpanded ? "common.worker_action.cmd_collapse" : "common.worker_action.cmd_expand"), "secondary");
+          toggle.type = "button";
+          toggle.addEventListener("click", () => { interactionCmdExpanded = !interactionCmdExpanded; renderInteractions(true); });
+          interactionsEl.append(toggle);
+        }
+      }
+      const actions = node("div", null, "workers-int-actions");
+      const bOnce = node("button", t("common.worker_action.allow_once"));
+      bOnce.type = "button";
+      bOnce.disabled = actionDisabled;
+      bOnce.addEventListener("click", () => void decideInteraction({request_id: item.request_id, decision: "allow_once"}));
+      actions.append(bOnce);
+
+      if (item.allow_session_ok && !item.hard_redline) {
+        const bSess = node("button", t("common.worker_action.allow_session"), "secondary");
+        bSess.type = "button";
+        bSess.disabled = actionDisabled;
+        bSess.addEventListener("click", () => void decideInteraction({request_id: item.request_id, decision: "allow_session"}));
+        actions.append(bSess);
+      }
+
+      const bDeny = node("button", t("common.worker_action.deny"), "secondary");
+      bDeny.type = "button";
+      bDeny.disabled = actionDisabled;
+      bDeny.addEventListener("click", () => void decideInteraction({request_id: item.request_id, decision: "deny"}));
+      actions.append(bDeny);
+
+      const bCancel = node("button", t("common.worker_action.cancel_turn"), "danger");
+      bCancel.type = "button";
+      bCancel.disabled = actionDisabled;
+      bCancel.addEventListener("click", () => void decideInteraction({request_id: item.request_id, decision: "cancel_turn"}));
+      actions.append(bCancel);
+      interactionsEl.append(actions);
+    } else {
+      const draft = getInteractionDraft(item.request_id);
+      const qs = Array.isArray(item.questions) && item.questions.length ? item.questions : [{id: "q1", question: item.summary}];
+      for (const q of qs) {
+        interactionsEl.append(node("p", q.question || item.summary || "", "worker-meta-line"));
+        if (Array.isArray(q.options) && q.options.length) {
+          if (!draft.selected[q.id]) draft.selected[q.id] = new Set();
+          const optRow = node("div", null, "workers-int-opts");
+          for (const opt of q.options) {
+            const chip = node("button", opt.description ? `${opt.label} — ${opt.description}` : opt.label, "workers-int-opt");
+            chip.type = "button";
+            chip.setAttribute("aria-pressed", draft.selected[q.id].has(opt.label) ? "true" : "false");
+            chip.disabled = busyAction;
+            chip.addEventListener("click", () => {
+              const sel = draft.selected[q.id];
+              if (q.multi_select) {
+                if (sel.has(opt.label)) sel.delete(opt.label); else sel.add(opt.label);
+              } else {
+                const had = sel.has(opt.label);
+                sel.clear();
+                if (!had) sel.add(opt.label);
+              }
+              renderInteractions(true);
+            });
+            optRow.append(chip);
+          }
+          interactionsEl.append(optRow);
+        }
+      }
+      const textarea = node("textarea", null, "workers-int-input");
+      textarea.placeholder = t("common.worker_action.answer_placeholder");
+      textarea.value = draft.text || "";
+      textarea.disabled = busyAction;
+      let composing = false;
+      textarea.addEventListener("compositionstart", () => { composing = true; });
+      textarea.addEventListener("compositionend", () => { composing = false; draft.text = textarea.value; });
+      textarea.addEventListener("input", () => { draft.text = textarea.value; });
+      const submitAns = () => {
+        const text = (draft.text || "").trim();
+        const answers = {};
+        let hasSel = false;
+        for (const [qID, set] of Object.entries(draft.selected)) {
+          if (set && set.size > 0) { answers[qID] = Array.from(set); hasSel = true; }
+        }
+        if (!text && !hasSel) { textarea.focus(); return; }
+        void decideInteraction({request_id: item.request_id, decision: "answer", text, answers});
+      };
+      textarea.addEventListener("keydown", ev => {
+        if (ev.key === "Enter" && !ev.shiftKey && !composing && !ev.isComposing) {
+          ev.preventDefault();
+          submitAns();
+        }
+      });
+      interactionsEl.append(textarea);
+
+      const actions = node("div", null, "workers-int-actions");
+      const bSend = node("button", t("common.worker_action.send_answer"));
+      bSend.type = "button";
+      bSend.disabled = actionDisabled;
+      bSend.addEventListener("click", submitAns);
+      const bCancel = node("button", t("common.worker_action.cancel_turn"), "danger");
+      bCancel.type = "button";
+      bCancel.disabled = actionDisabled;
+      bCancel.addEventListener("click", () => void decideInteraction({request_id: item.request_id, decision: "cancel_turn"}));
+      actions.append(bSend, bCancel);
+      interactionsEl.append(actions);
     }
   }
 
@@ -242,6 +523,8 @@ export function workersPanel({api, post, listen, session, notice}) {
         alias: selectedWorker.alias,
         state: selectedWorker.state,
         access_mode: selectedWorker.access_mode,
+        effective_approval_mode: selectedWorker.effective_approval_mode,
+        session_auto_approve: Boolean(selectedWorker.session_auto_approve),
         workspace_root: selectedWorker.workspace_root,
         harness_id: selectedWorker.harness_id,
         model: selectedWorker.model,
@@ -308,12 +591,28 @@ export function workersPanel({api, post, listen, session, notice}) {
     const modeBadge = node("span", accessLabel(w.access_mode), "badge");
     if (w.access_mode === "workspace_write") modeBadge.dataset.tone = "warn";
     titleRow.append(modeBadge);
+    if (w.access_mode === "workspace_write") {
+      const apprText = approvalModeLabel(w.effective_approval_mode || w.approval_mode);
+      if (apprText) titleRow.append(node("span", apprText, "badge"));
+      if (w.session_auto_approve) {
+        const sessBadge = node("span", t("web.workers.session_auto_badge"), "badge");
+        sessBadge.dataset.tone = "ok";
+        titleRow.append(sessBadge);
+      }
+    }
     info.append(
       titleRow,
       node("small", w.workspace_root, "harness-path"),
       node("small", [w.harness_id, w.model, w.reasoning_effort].filter(Boolean).join(" · "), "worker-meta-line"),
     );
     const headActions = node("div", null, "actions");
+    if (w.state !== "closed" && w.session_auto_approve) {
+      const revokeAutoBtn = node("button", t("web.workers.revoke_session_auto"), "secondary");
+      revokeAutoBtn.type = "button";
+      revokeAutoBtn.disabled = busyAction;
+      revokeAutoBtn.addEventListener("click", () => void setSessionAutoApprove(w.worker_id, false));
+      headActions.append(revokeAutoBtn);
+    }
     if (w.state !== "closed") {
       const closeBtn = node("button", t("web.workers.close_worker"), "secondary");
       closeBtn.type = "button";
@@ -449,11 +748,14 @@ export function workersPanel({api, post, listen, session, notice}) {
         invalidateDetailCache();
       }
       resultPage = res.result || null;
+      setStatus("");
       renderDetail();
       schedulePoll();
     } catch (err) {
       if (!scope?.active || seq !== loadSeq) return;
+      setStatus("web.workers.load_failed", true);
       notice?.(localizeError(err));
+      schedulePoll();
     }
   }
 
@@ -520,11 +822,16 @@ export function workersPanel({api, post, listen, session, notice}) {
         invalidateDetailCache();
       }
       resultPage = lRes.result || null;
+      setStatus("");
       renderDetail();
       schedulePoll();
     } catch (err) {
       if (!scope?.active || seq !== loadSeq) return;
-      if (!isPoll) notice?.(localizeError(err));
+      if (!isPoll) {
+        setStatus("web.workers.load_failed", true);
+        notice?.(localizeError(err));
+      }
+      schedulePoll();
     }
   }
 
@@ -541,10 +848,12 @@ export function workersPanel({api, post, listen, session, notice}) {
       const res = await api(`/api/workers/list?include_closed=${inc}`);
       if (!scope?.active) return;
       workers = Array.isArray(res.items) ? res.items : [];
+      interactions = Array.isArray(res.interactions) ? res.interactions : [];
       setStatus("");
       const nextWorkerID = workers.some(w => w.worker_id === selectedWorkerID)
         ? selectedWorkerID
         : (workers[0]?.worker_id || "");
+      renderInteractions();
       renderList();
       await selectWorker(nextWorkerID, {isPoll});
     } catch (err) {
@@ -560,11 +869,19 @@ export function workersPanel({api, post, listen, session, notice}) {
         refreshBtn.disabled = false;
         refreshBtn.title = t("web.workers.refresh");
       }
+      if (pendingRefresh && dialog?.open && scope?.active) {
+        pendingRefresh = false;
+        void refresh({isPoll: true});
+      }
     }
   }
 
   async function refreshSelectedTurnAndList() {
-    if (!dialog?.open || refreshing) return;
+    if (!dialog?.open) return;
+    if (refreshing) {
+      pendingRefresh = true;
+      return;
+    }
     await refresh({isPoll: true});
   }
 
@@ -607,8 +924,13 @@ export function workersPanel({api, post, listen, session, notice}) {
   return {
     open,
     stop,
+    refreshIfOpen: refreshSelectedTurnAndList,
     relocalize: () => {
+      lastInteractionsSig = null;
+      lastWorkersSig = null;
+      invalidateDetailCache();
       if (!dialog?.open) return;
+      renderInteractions(true);
       renderList(true);
       renderDetail(true);
     },

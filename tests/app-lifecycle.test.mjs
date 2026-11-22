@@ -6,19 +6,19 @@ import {noticeView} from "../web/ui.mjs";
 
 test("restart leaves exactly one stream and timer; stopped stream callbacks are inert", async () => {
   const clock = clockFixture(), streams = [], updates = [];
-  let reads = 0;
+  let reads = 0, workerReads = 0;
   const life = appLifecycle({clock, client:{stream:() => {
     const source = new EventTarget(); source.close = () => source.closed = true; streams.push(source); return source;
-  }}, initialize:async () => {}, refreshPeers:async () => reads++, refreshTasks:async () => reads++, connection:v => updates.push(v), stopped:() => {}, failed:assert.fail});
+  }}, initialize:async () => {}, refreshPeers:async () => reads++, refreshTasks:async () => reads++, refreshWorkers:async () => workerReads++, connection:v => updates.push(v), stopped:() => {}, failed:assert.fail});
   await life.start();
   const first = streams[0];
   await life.start();
   assert.equal(first.closed,true);
   assert.equal(clock.timers.size,1);
-  first.dispatchEvent(new Event("refresh")); first.onopen(); first.onerror();
-  await tick(); assert.equal(reads,0); assert.deepEqual(updates,[]);
-  streams[1].dispatchEvent(new Event("refresh")); await clock.fire(20000);
-  assert.equal(reads,2);
+  first.dispatchEvent(new Event("refresh")); first.dispatchEvent(new Event("workers")); first.onopen(); first.onerror();
+  await tick(); assert.equal(reads,0); assert.equal(workerReads,0); assert.deepEqual(updates,[]);
+  streams[1].dispatchEvent(new Event("refresh")); streams[1].dispatchEvent(new Event("workers")); await clock.fire(20000);
+  assert.equal(reads,2); assert.equal(workerReads,1);
   life.stop(); assert.equal(streams[1].closed,true); assert.equal(clock.timers.size,0);
 });
 

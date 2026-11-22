@@ -118,7 +118,7 @@ export function mountApp() {
           locale.syncDesktopStatus(rec.status);
         }
       }, () => {});
-      await nodes.refresh();
+      await nodes.refresh({waitPeers: false});
       if (!scope.active) return;
       connection(true);
       $("#version").textContent = `v${nodes.selection().info.version}`;
@@ -151,6 +151,7 @@ export function mountApp() {
       void syncDesktopStream(scope);
       await tasks.refresh(scope);
     },
+    refreshWorkers:async () => { await workers.refreshIfOpen(); },
     connection,
     stopped:() => { editors.stop(); settings.stop(); desktop.stop(); shortcut.stop(); commands.stop(); tools.stop(); workers.stop(); notices.stop(); },
     failed:error => {

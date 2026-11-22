@@ -115,9 +115,9 @@
 
 范围、预算、原生可行性门槛和后续 harness 接入见[能力设计](../assistant/runtime-capabilities.md)；轮内资源调度的设计与测试入口见[工作区工具细粒度并发计划](../development/features/workspace-tool-concurrency/plan.md)。
 
-## 多 Coding Harness 本地中介与协作（Milestone 1—2 与 Milestone 3 适配器已通过用户验收；角色模板与 Milestone 4 规划中）
+## 多 Coding Harness 本地中介与协作（Milestone 1—2 与 Milestone 3 适配器已通过用户验收；当前实施 Milestone 4.1）
 
-以下需求对应[多 Coding Harness 中介计划](../development/features/multi-harness-broker/plan.md)与 [ADR-008](adr/008-multi-harness-broker-and-native-adapters.md)：Milestone 1—2 与 Milestone 3 第 1—2 步（四家自动发现、Antigravity/Codex/Claude 托管接入、`Codex app-server` / `Claude Code stream-json` / `DeepSeek Harness ACP v1` 三家完整只读与受控 `workspace_write` 适配器、工作树 `worktree_busy` 写互斥与快照、`workers_wait_any` 与长程流式心跳）已完成实现、工程验证及本机三路长程用户验收；Milestone 3 第 3 步（角色模板）与 Milestone 4 规划待实施，不改变既有 OpenClaw 任务与持续会话契约。
+以下需求对应[多 Coding Harness 中介计划](../development/features/multi-harness-broker/plan.md)与 [ADR-008](adr/008-multi-harness-broker-and-native-adapters.md)：Milestone 1—2 与 Milestone 3 第 1—2 步已完成实现、工程验证及本机三路长程用户验收；按最新排期将 Milestone 4 调至角色模板之前，当前实施 Milestone 4.1（`approval_mode` 分档、`waiting_approval`/`waiting_input`、`workers_reply`、右下角交互浮窗与 Web 同步入口），随后推进 Milestone 4.2（`isolated_worktree`）与角色模板，不改变既有 OpenClaw 任务与持续会话契约。
 
 | ID | 要求 |
 |---|---|
@@ -129,5 +129,5 @@
 | EXEC-HARNESS-06 | 任意常规本地项目目录免逐项目登记即可协作，由服务端对规范化路径派生稳定 `workspace_id` 并内置拦截盘符根、用户主目录、节点数据目录、系统及常见凭据目录（`artifact_paths` 严格约束在对应项目根内，不宣称 Codex `readOnly` 在 Windows 上构成目录级只读 chroot）；按 `(harness × version × platform × access_mode)` 实测并声明 `os_sandbox_enforced`、`harness_tool_restricted` 或 `unsupported`；`workspace_write` 在 Milestone 2 首次开放并按解析后的工作树根互斥，附带诚实标注外部并发可能性的工作树/Git 快照（涵盖 staged/unstaged/untracked 及非 Git 目录）；关闭全部发起方开关或吊销凭据使旧连接全失效、仅关闭 `collab_caller_enabled` 保留剩余有效工具集并过滤旧协作收据；关闭被控方 B 的 `collab_worker_enabled` 覆盖发前、`turn/start` 待回执（迟到回执不逆转已撤权状态）与运行中三窗口并受控停止 |
 | EXEC-HARNESS-07 | `workers_send` 为纯写接纳立即返回 `turn_id`（接入领域收据恢复，不混合等待参数），等待统一走 `workers_wait`（上限 `30s`，返回实时流式活跃遥测）；强制节点级活跃轮次上限（默认 4）、单轮墙钟时限（默认 30 分钟）与无事件超时（默认 10 分钟，由全量流式 delta/chunk 心跳刷新），超时先原生中断再同步回收 `JobObject`，确认停止后释放锁并淘汰异常终态常驻进程；接入 `App.RequestStop` 原子停机判断并在关库前完成收尾（空闲常驻进程不阻普通退出）；长审查正文与运行日志独立于 8 KiB 收据有界落盘并同步提供分页 `workers_result` 与 `workers_logs`；所有受管子进程以非提权 `OrdinaryToken` + 具名 kill-on-close `JobObject` 运行，支持空闲进程回收与重启对账 |
 | EXEC-HARNESS-08 | 受管启动的 Worker B 优先通过原生参数禁用其加载 `asterhand` MCP，并辅以服务端 `max_delegation_depth = 1` 与屏蔽 `general` 工具集兜底 |
-| EXEC-HARNESS-09 | 高危权限审批（Milestone 4）必须由 Asterhand 直接呈交人类本人确认，严禁暴露给发起方 A 的模型自动批准；审批桥上线前收到原生审批或业务提问时立即有界拒绝、释放轮次与写锁并返回明确状态码 |
+| EXEC-HARNESS-09 | 可写 Worker 支持正交 `approval_mode`（`auto` 默认 / `ask_human` / `strict_deny`；`read_only` 始终自动拒绝提权仅放行业务提问）：支持原生辅助审单的 Harness（Codex `approvalsReviewer="auto_review"`、Claude Code `--permission-mode auto --permission-prompts host`）默认启用官方自动审批，不支持者（DeepSeek Harness）诚实声明 `supports_auto_approval: false` 并回落 `ask_human`；进入宿主审批桥的高危权限请求（`waiting_approval`）必须经 Asterhand 统一硬底线过滤并直接呈交人类本人确认（支持单次允许、会话免审但仍拦硬底线、仅拒单次不杀轮次、中止整轮），严禁暴露给发起方 A 的模型代批或自行开启会话免审；业务提问（`waiting_input`）优先回传发起方 A 经 `workers_reply` 回答，无法决定或超时缓冲后自动转交人类；等待人工审批/提问期间暂停 `StallTimeout` 与执行墙钟计时 |
 | EXEC-HARNESS-10 | 明确同 Windows 用户账户下的诚实信任边界，区分面向合作型 Harness 的托管策略与 OS 账户级隔离 |

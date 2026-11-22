@@ -32,7 +32,8 @@
     "web/index.html",
     "internal/quickinput/assets/index.html",
     "internal/quickinput/assets/command-log.html",
-    "internal/quickinput/assets/notification.html"
+    "internal/quickinput/assets/notification.html",
+    "internal/quickinput/assets/worker-action.html"
   ],
   "excluded_paths": [
     "internal/prompt/",

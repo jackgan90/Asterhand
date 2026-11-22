@@ -105,6 +105,15 @@ func nextStepHint(opName string, response Response) string {
 				return fmt.Sprintf("Turn is still %s (elapsed=%ds, idle=%ds, stream_events=%d). Continue calling workers_wait(turn_id=%q).", state, int(elapsed), int(idle), int64(ev), tid)
 			}
 			return fmt.Sprintf("Turn is still %s. Continue calling workers_wait(turn_id=%q).", state, tid)
+		case "waiting_approval":
+			return fmt.Sprintf("Turn is waiting for human permission approval in Asterhand desktop/Web UI. Caller cannot approve on the user's behalf; do not cancel—inform the user if helpful and continue calling workers_wait(turn_id=%q).", tid)
+		case "waiting_input":
+			if pi, ok := dataMap["pending_interaction"].(map[string]any); ok {
+				if vis, _ := pi["visible_to_human"].(bool); vis {
+					return fmt.Sprintf("Turn is waiting for human input in Asterhand desktop/Web UI (already escalated). Continue calling workers_wait(turn_id=%q).", tid)
+				}
+			}
+			return fmt.Sprintf("Worker asked a business question (see pending_interaction.questions). Answer via workers_reply(turn_id=%q, text=...) or escalate via workers_reply(turn_id=%q, escalate_to_human=true).", tid, tid)
 		case "completed":
 			if trunc, _ := dataMap["truncated"].(bool); trunc {
 				return fmt.Sprintf("Turn completed with truncated preview. Call workers_result(turn_id=%q) with cursor to read the rest.", tid)
@@ -121,9 +130,14 @@ func nextStepHint(opName string, response Response) string {
 		}
 	case "workers_wait_any":
 		if trig, _ := dataMap["triggered_turn_id"].(string); trig != "" {
-			return fmt.Sprintf("Turn %q reached a terminal or reconciliation state. Inspect its preview/result (workers_result) and continue monitoring remaining active turns with workers_wait_any.", trig)
+			return fmt.Sprintf("Turn %q requires attention (completed, waiting_input, or terminal/reconciliation). Inspect its state/preview, call workers_reply if waiting_input or workers_result if truncated, and continue monitoring remaining active turns with workers_wait_any.", trig)
 		}
-		return "All watched turns are still active. Continue calling workers_wait_any with the active turn_ids."
+		return "All watched turns are still active (or waiting on human approval). Continue calling workers_wait_any with the active turn_ids."
+	case "workers_reply":
+		if esc, _ := dataMap["escalated"].(bool); esc {
+			return "Question escalated to the human desktop/Web prompt. Continue calling workers_wait until the human responds."
+		}
+		return "Reply delivered to worker. Continue calling workers_wait until the turn finishes."
 	case "workers_result":
 		if next, _ := dataMap["next_cursor"].(string); next != "" {
 			tid, _ := dataMap["turn_id"].(string)

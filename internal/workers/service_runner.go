@@ -47,11 +47,15 @@ func (s *Service) runTurn(rt *runningTurn, w Worker, t Turn, exe, prompt string)
 	s.mu.Unlock()
 
 	if w.NativeSessionID == "" && handle.NativeSessionID != "" {
+		now := s.now().UTC()
 		w.NativeSessionID = handle.NativeSessionID
 		t.NativeSessionID = handle.NativeSessionID
-		w.UpdatedAt = s.now().UTC()
-		t.UpdatedAt = w.UpdatedAt
-		_ = s.store.SaveWorker(w)
+		w.UpdatedAt = now
+		t.UpdatedAt = now
+		s.updateWorkerState(w.ID, func(cur *Worker) {
+			cur.NativeSessionID = handle.NativeSessionID
+			cur.UpdatedAt = now
+		})
 		_ = s.store.SaveTurn(t)
 	}
 
@@ -92,7 +96,20 @@ func (s *Service) awaitTurnStart(rt *runningTurn, w *Worker, t *Turn, adapter Ad
 			})
 		}
 		switch ev.Kind {
-		case "progress", "commentary", "command", "edit", "mcp", "search", "plan", "tool", "system":
+		case "approval_mode":
+			// Only reflect runtime fallback when worker was created with approval_mode="auto";
+			// never let runtime init overwrite explicit strict_deny or read_only deny_escalation.
+			if mode := strings.TrimSpace(ev.Summary); mode != "" && w.ApprovalMode == ApprovalModeAuto && w.EffectiveApprovalMode != mode {
+				w.EffectiveApprovalMode = mode
+				w.UpdatedAt = now
+				s.updateWorkerState(w.ID, func(cur *Worker) {
+					if cur.ApprovalMode == ApprovalModeAuto {
+						cur.EffectiveApprovalMode = mode
+						cur.UpdatedAt = now
+					}
+				})
+			}
+		case "progress", "commentary", "command", "edit", "mcp", "search", "plan", "tool", "system", "approval_auto":
 			if ev.Summary != "" {
 				t.Progress = ev.Summary
 				t.UpdatedAt = now
@@ -100,6 +117,10 @@ func (s *Service) awaitTurnStart(rt *runningTurn, w *Worker, t *Turn, adapter Ad
 				s.notifyWaiters(t.ID)
 			}
 		}
+	}
+
+	onInteraction := func(ictx context.Context, req InteractionRequest) (InteractionDecision, error) {
+		return s.handleTurnInteraction(ictx, rt, w, t, req)
 	}
 
 	// Window 2: turn/start is in-flight before nativeTurnID returns.
@@ -110,10 +131,13 @@ func (s *Service) awaitTurnStart(rt *runningTurn, w *Worker, t *Turn, adapter Ad
 			ThreadID:            handle.NativeSessionID,
 			WorkspaceRoot:       w.WorkspaceRoot,
 			AccessMode:          w.AccessMode,
+			ApprovalMode:        w.EffectiveApprovalMode,
+			SessionAutoApprove:  w.SessionAutoApprove,
 			Prompt:              prompt,
 			ClientCorrelationID: t.ClientCorrelationID,
 			Model:               t.Model,
 			ReasoningEffort:     t.ReasoningEffort,
+			OnInteraction:       onInteraction,
 		}, onEvent)
 		startCh <- turnStartResult{nativeID: nid, doneCh: dch, err: sErr}
 	}()
@@ -210,10 +234,13 @@ func (s *Service) awaitTurnExecution(rt *runningTurn, w *Worker, t *Turn, adapte
 	now := s.now().UTC()
 	s.mu.Lock()
 	rt.nativeTurnID = sr.nativeID
+	rt.execStarted = now
 	rt.lastEventAt = now
 	s.mu.Unlock()
 	t.NativeTurnID = sr.nativeID
-	t.State = TurnRunning
+	if t.State != TurnWaitingApproval && t.State != TurnWaitingInput {
+		t.State = TurnRunning
+	}
 	t.UpdatedAt = now
 	_ = s.store.SaveTurn(*t)
 	s.notifyWaiters(t.ID)
@@ -222,9 +249,11 @@ func (s *Service) awaitTurnExecution(rt *runningTurn, w *Worker, t *Turn, adapte
 	if wallDur <= 0 {
 		wallDur = s.budgets.WallClockTimeout
 	}
-	wallTimer := time.NewTimer(wallDur)
-	defer wallTimer.Stop()
-	stallTick := time.NewTicker(minDuration(s.budgets.StallTimeout/4+50*time.Millisecond, 1*time.Second))
+	tickInterval := minDuration(minDuration(s.budgets.StallTimeout/4+20*time.Millisecond, wallDur/4+20*time.Millisecond), 1*time.Second)
+	if tickInterval < 20*time.Millisecond {
+		tickInterval = 20 * time.Millisecond
+	}
+	stallTick := time.NewTicker(tickInterval)
 	defer stallTick.Stop()
 
 	for {
@@ -255,16 +284,22 @@ func (s *Service) awaitTurnExecution(rt *runningTurn, w *Worker, t *Turn, adapte
 			}
 			return
 
-		case <-wallTimer.C:
-			_ = adapter.InterruptTurn(context.Background(), handle, sr.nativeID)
-			outcome, _ := s.waitStopOrKill(adapter, handle, sr.doneCh)
-			s.finalizeTurn(rt, w, t, TurnInterrupted, outcome.Items, "wall_clock_timeout", "Turn exceeded wall-clock execution budget")
-			return
-
 		case <-stallTick.C:
+			curNow := s.now().UTC()
 			s.mu.Lock()
-			idleFor := s.now().UTC().Sub(rt.lastEventAt)
+			paused := !rt.waitingSince.IsZero()
+			activeElapsed := curNow.Sub(rt.execStarted) - rt.pausedTotal
+			idleFor := curNow.Sub(rt.lastEventAt)
 			s.mu.Unlock()
+			if paused {
+				continue
+			}
+			if activeElapsed >= wallDur {
+				_ = adapter.InterruptTurn(context.Background(), handle, sr.nativeID)
+				outcome, _ := s.waitStopOrKill(adapter, handle, sr.doneCh)
+				s.finalizeTurn(rt, w, t, TurnInterrupted, outcome.Items, "wall_clock_timeout", "Turn exceeded wall-clock execution budget")
+				return
+			}
 			if idleFor >= s.budgets.StallTimeout {
 				_ = adapter.InterruptTurn(context.Background(), handle, sr.nativeID)
 				outcome, _ := s.waitStopOrKill(adapter, handle, sr.doneCh)
@@ -302,6 +337,7 @@ func (s *Service) finalizeRevoked(rt *runningTurn, w *Worker, t *Turn, reason, n
 	t.AnswerSource = AnswerSourceNone
 	t.ErrorCode = "authorization_revoked"
 	t.ErrorMessage = reason
+	t.PendingInteraction = nil
 	t.AfterVCS = CaptureVCSSnapshot(context.Background(), w.WorkspaceRoot)
 	t.UpdatedAt = now
 	t.FinishedAt = &now
@@ -310,7 +346,11 @@ func (s *Service) finalizeRevoked(rt *runningTurn, w *Worker, t *Turn, reason, n
 	w.State = WorkerIdle
 	w.ActiveTurnID = ""
 	w.UpdatedAt = now
-	_ = s.store.SaveWorker(*w)
+	s.updateWorkerState(w.ID, func(cur *Worker) {
+		cur.State = WorkerIdle
+		cur.ActiveTurnID = ""
+		cur.UpdatedAt = now
+	})
 	s.evictAndCloseResident(w.ID)
 	s.notifyWaiters(t.ID)
 }
@@ -322,6 +362,7 @@ func (s *Service) finalizeTurn(rt *runningTurn, w *Worker, t *Turn, state string
 	}
 	answer, source, avail, partial := SelectFinalAnswer(state, items)
 	t.State = state
+	t.PendingInteraction = nil
 	t.AnswerSource = source
 	t.AnswerAvailable = avail
 	t.PartialOutput = truncateSummary(partial, 4096)
@@ -344,7 +385,11 @@ func (s *Service) finalizeTurn(rt *runningTurn, w *Worker, t *Turn, state string
 	w.State = WorkerIdle
 	w.ActiveTurnID = ""
 	w.UpdatedAt = now
-	_ = s.store.SaveWorker(*w)
+	s.updateWorkerState(w.ID, func(cur *Worker) {
+		cur.State = WorkerIdle
+		cur.ActiveTurnID = ""
+		cur.UpdatedAt = now
+	})
 	if state == TurnCompleted {
 		s.touchResident(w.ID, now)
 	} else {
@@ -366,8 +411,26 @@ func (s *Service) enterReconciliation(w *Worker, t *Turn, errCode, errMsg string
 	w.State = WorkerReconcile
 	w.ActiveTurnID = t.ID
 	w.UpdatedAt = now
-	_ = s.store.SaveWorker(*w)
+	s.updateWorkerState(w.ID, func(cur *Worker) {
+		cur.State = WorkerReconcile
+		cur.ActiveTurnID = t.ID
+		cur.UpdatedAt = now
+	})
 	s.notifyWaiters(t.ID)
+}
+
+// updateWorkerState reloads the latest persisted Worker row before applying
+// narrow lifecycle mutations so concurrent human changes (e.g. revoking
+// session_auto_approve via Web UI) are never clobbered by a stale turn snapshot.
+func (s *Service) updateWorkerState(workerID string, mutate func(*Worker)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur, err := s.store.GetWorker(workerID)
+	if err != nil {
+		return
+	}
+	mutate(&cur)
+	_ = s.store.SaveWorker(cur)
 }
 
 func (s *Service) acquireHandle(ctx context.Context, adapter Adapter, w Worker, exe string) (ThreadHandle, error) {
@@ -405,14 +468,16 @@ func (s *Service) acquireHandle(ctx context.Context, adapter Adapter, w Worker, 
 	}
 
 	h, err := adapter.OpenThread(ctx, ThreadOpenSpec{
-		WorkerID:        w.ID,
-		Executable:      exe,
-		WorkspaceRoot:   w.WorkspaceRoot,
-		AccessMode:      w.AccessMode,
-		Model:           w.Model,
-		ReasoningEffort: w.ReasoningEffort,
-		RoleHint:        w.RoleHint,
-		NativeSessionID: w.NativeSessionID,
+		WorkerID:           w.ID,
+		Executable:         exe,
+		WorkspaceRoot:      w.WorkspaceRoot,
+		AccessMode:         w.AccessMode,
+		ApprovalMode:       w.EffectiveApprovalMode,
+		SessionAutoApprove: w.SessionAutoApprove,
+		Model:              w.Model,
+		ReasoningEffort:    w.ReasoningEffort,
+		RoleHint:           w.RoleHint,
+		NativeSessionID:    w.NativeSessionID,
 	})
 	if err != nil {
 		return ThreadHandle{}, err

@@ -347,3 +347,68 @@ test("already-open empty Workers panel automatically discovers newly created wor
     globalThis.clearTimeout = origClearTimeout;
   }
 });
+
+test("Workers panel preserves polling after transient selectWorker error and supports refreshIfOpen", async () => {
+  const byId = installFakeDOM();
+  const {workersPanel} = await import("../web/workers-panel.mjs");
+
+  const scheduled = [];
+  const origSetTimeout = globalThis.setTimeout;
+  const origClearTimeout = globalThis.clearTimeout;
+  globalThis.setTimeout = (fn, ms) => {
+    const token = {fn, ms, cleared: false};
+    scheduled.push(token);
+    return token;
+  };
+  globalThis.clearTimeout = (token) => {
+    if (token && typeof token === "object") token.cleared = true;
+  };
+
+  try {
+    const w1 = {worker_id: "w1", alias: "alpha", harness_id: "codex", access_mode: "workspace_write", state: "idle", session_auto_approve: false, workspace_root: "F:\\proj"};
+    let failGet = false;
+    let getCalls = 0;
+    const api = async (url) => {
+      if (url.startsWith("/api/workers/list")) return {items: [w1], interactions: []};
+      if (url.includes("worker_id=w1")) {
+        getCalls++;
+        if (failGet) throw new Error("transient network glitch");
+        return {worker: w1, turns: []};
+      }
+      throw new Error("unexpected url " + url);
+    };
+
+    const panel = workersPanel({
+      api,
+      post: async () => ({}),
+      listen: (t, e, cb) => t.addEventListener(e, cb),
+      session: () => ({active: true}),
+      notice: () => {},
+    });
+
+    await panel.open();
+    assert.equal(getCalls, 1);
+
+    // Simulate a transient poll error on /api/workers/get -> poll MUST still be rescheduled!
+    failGet = true;
+    const poll1 = scheduled.findLast(s => !s.cleared);
+    assert.ok(poll1);
+    poll1.fn();
+    await new Promise(r => origSetTimeout(r, 20));
+    assert.equal(getCalls, 2);
+
+    const pollAfterErr = scheduled.findLast(s => !s.cleared);
+    assert.ok(pollAfterErr && pollAfterErr !== poll1, "expected schedulePoll() to recover after selectWorker error");
+
+    // Server updates session_auto_approve and SSE fires refreshIfOpen() -> detail immediately reflects badge.
+    failGet = false;
+    w1.session_auto_approve = true;
+    await panel.refreshIfOpen();
+    assert.equal(getCalls, 3);
+    assert.match(byId.get("workers-detail").textContent, /免审|auto-approve/i);
+    panel.stop();
+  } finally {
+    globalThis.setTimeout = origSetTimeout;
+    globalThis.clearTimeout = origClearTimeout;
+  }
+});

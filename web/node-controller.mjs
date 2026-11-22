@@ -90,12 +90,22 @@ export function nodeController({api, post, session, guarded, notice, actions, li
     updateProject();
   }
 
-  async function refreshPeers() {
+  async function refreshPeers({waitPeers = true} = {}) {
     const scope = session(), generation = ++refreshGeneration;
-    const nextInfo = await api("/api/info"), nextPeers = await api("/api/peers");
+    const nextInfo = await api("/api/info");
     if (!scope?.active || generation !== refreshGeneration) return;
-    info = nextInfo; peers = nextPeers;
+    info = nextInfo;
     paint();
+    const peerTask = api("/api/peers").then(nextPeers => {
+      if (!scope?.active || generation !== refreshGeneration) return;
+      peers = nextPeers;
+      paint();
+    });
+    if (waitPeers) {
+      await peerTask;
+    } else {
+      void peerTask.catch(() => {});
+    }
   }
   function updateProject() {
     if (!info) return;

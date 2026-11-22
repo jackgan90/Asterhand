@@ -22,6 +22,8 @@ const (
 const (
 	TurnPrepared         = "prepared"
 	TurnRunning          = "running"
+	TurnWaitingApproval  = "waiting_approval"
+	TurnWaitingInput     = "waiting_input"
 	TurnReconcile        = "reconciliation_required"
 	TurnCompleted        = "completed"
 	TurnInterrupted      = "interrupted"
@@ -30,6 +32,26 @@ const (
 	TurnFailed           = "failed"
 	TurnBlockedApproval  = "blocked_unsupported_approval"
 	TurnBlockedUserInput = "blocked_unsupported_user_input"
+)
+
+const (
+	ApprovalModeAuto           = "auto"
+	ApprovalModeAskHuman       = "ask_human"
+	ApprovalModeStrictDeny     = "strict_deny"
+	ApprovalModeDenyEscalation = "deny_escalation"
+)
+
+const (
+	InteractionApproval = "approval"
+	InteractionInput    = "input"
+)
+
+const (
+	DecisionAllowOnce    = "allow_once"
+	DecisionAllowSession = "allow_session"
+	DecisionDeny         = "deny"
+	DecisionCancelTurn   = "cancel_turn"
+	DecisionAnswer       = "answer"
 )
 
 const (
@@ -49,47 +71,110 @@ func IsTurnTerminal(state string) bool {
 }
 
 type Worker struct {
-	ID              string     `json:"worker_id"`
-	WorkspaceID     string     `json:"workspace_id"`
-	WorkspaceRoot   string     `json:"workspace_root"`
-	WorktreeKey     string     `json:"worktree_key"`
-	Alias           string     `json:"alias,omitempty"`
-	HarnessID       string     `json:"harness_id"`
-	AccessMode      string     `json:"access_mode"`
-	ProtectionLevel string     `json:"protection_level"`
-	RoleHint        string     `json:"role_hint,omitempty"`
-	Model           string     `json:"model,omitempty"`
-	ReasoningEffort string     `json:"reasoning_effort,omitempty"`
-	State           string     `json:"state"`
-	SessionEpoch    int        `json:"session_epoch"`
-	NativeSessionID string     `json:"native_session_id,omitempty"`
-	ActiveTurnID    string     `json:"active_turn_id,omitempty"`
-	OperationID     string     `json:"operation_id,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
-	ClosedAt        *time.Time `json:"closed_at,omitempty"`
-	Warnings        []string   `json:"warnings,omitempty"`
+	ID                    string     `json:"worker_id"`
+	WorkspaceID           string     `json:"workspace_id"`
+	WorkspaceRoot         string     `json:"workspace_root"`
+	WorktreeKey           string     `json:"worktree_key"`
+	Alias                 string     `json:"alias,omitempty"`
+	HarnessID             string     `json:"harness_id"`
+	AccessMode            string     `json:"access_mode"`
+	ApprovalMode          string     `json:"approval_mode,omitempty"`
+	EffectiveApprovalMode string     `json:"effective_approval_mode,omitempty"`
+	SessionAutoApprove    bool       `json:"session_auto_approve,omitempty"`
+	ProtectionLevel       string     `json:"protection_level"`
+	RoleHint              string     `json:"role_hint,omitempty"`
+	Model                 string     `json:"model,omitempty"`
+	ReasoningEffort       string     `json:"reasoning_effort,omitempty"`
+	State                 string     `json:"state"`
+	SessionEpoch          int        `json:"session_epoch"`
+	NativeSessionID       string     `json:"native_session_id,omitempty"`
+	ActiveTurnID          string     `json:"active_turn_id,omitempty"`
+	OperationID           string     `json:"operation_id,omitempty"`
+	CreatedAt             time.Time  `json:"created_at"`
+	UpdatedAt             time.Time  `json:"updated_at"`
+	ClosedAt              *time.Time `json:"closed_at,omitempty"`
+	Warnings              []string   `json:"warnings,omitempty"`
 }
 
+type InteractionOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+type InteractionQuestion struct {
+	ID       string              `json:"id"`
+	Header   string              `json:"header,omitempty"`
+	Question string              `json:"question"`
+	Multi    bool                `json:"multi_select,omitempty"`
+	IsOther  bool                `json:"is_other,omitempty"`
+	IsSecret bool                `json:"is_secret,omitempty"`
+	Options  []InteractionOption `json:"options,omitempty"`
+}
+
+type InteractionView struct {
+	RequestID        string                `json:"request_id"`
+	Kind             string                `json:"kind"` // approval | input
+	WorkerID         string                `json:"worker_id"`
+	WorkerAlias      string                `json:"worker_alias,omitempty"`
+	WorkspaceID      string                `json:"workspace_id"`
+	WorkspaceRoot    string                `json:"workspace_root,omitempty"`
+	HarnessID        string                `json:"harness_id"`
+	TurnID           string                `json:"turn_id"`
+	ToolName         string                `json:"tool_name,omitempty"`
+	Summary          string                `json:"summary"`
+	Command          string                `json:"command,omitempty"`
+	Paths            []string              `json:"paths,omitempty"`
+	Reason           string                `json:"reason,omitempty"`
+	RiskLevel        string                `json:"risk_level,omitempty"` // low | medium | high | critical
+	HardRedline      bool                  `json:"hard_redline,omitempty"`
+	OutsideWorkspace bool                  `json:"outside_workspace,omitempty"`
+	AllowSessionOK   bool                  `json:"allow_session_ok,omitempty"`
+	Questions        []InteractionQuestion `json:"questions,omitempty"`
+	VisibleToHuman   bool                  `json:"visible_to_human"`
+	CreatedAt        time.Time             `json:"created_at"`
+}
+
+type InteractionRequest struct {
+	Kind          string
+	ToolName      string
+	Summary       string
+	Command       string
+	Paths         []string
+	Reason        string
+	NativeOptions []string
+	Questions     []InteractionQuestion
+}
+
+type InteractionDecision struct {
+	Decision string              `json:"decision"` // allow_once | allow_session | deny | cancel_turn | answer
+	Message  string              `json:"message,omitempty"`
+	Answers  map[string][]string `json:"answers,omitempty"`
+	Text     string              `json:"text,omitempty"`
+	Actor    string              `json:"actor,omitempty"` // human | caller | policy | timeout
+}
+
+type InteractionHandler func(ctx context.Context, req InteractionRequest) (InteractionDecision, error)
+
 type WaitAnyItem struct {
-	TurnID          string       `json:"turn_id"`
-	WorkerID        string       `json:"worker_id"`
-	WorkspaceID     string       `json:"workspace_id"`
-	HarnessID       string       `json:"harness_id"`
-	State           string       `json:"state"`
-	Progress        string       `json:"progress,omitempty"`
-	AnswerAvailable bool         `json:"answer_available"`
-	AnswerSource    string       `json:"answer_source,omitempty"`
-	AnswerPreview   string       `json:"answer_preview,omitempty"`
-	Truncated       bool         `json:"truncated,omitempty"`
-	ResultBytes     int          `json:"result_bytes"`
-	ElapsedSeconds  int          `json:"elapsed_seconds,omitempty"`
-	IdleSeconds     int          `json:"idle_seconds,omitempty"`
-	StreamEvents    int64        `json:"stream_events,omitempty"`
-	StreamBytes     int64        `json:"stream_bytes,omitempty"`
-	ErrorCode       string       `json:"error_code,omitempty"`
-	ErrorMessage    string       `json:"error_message,omitempty"`
-	AfterVCS        *VCSSnapshot `json:"after_vcs,omitempty"`
+	TurnID             string           `json:"turn_id"`
+	WorkerID           string           `json:"worker_id"`
+	WorkspaceID        string           `json:"workspace_id"`
+	HarnessID          string           `json:"harness_id"`
+	State              string           `json:"state"`
+	Progress           string           `json:"progress,omitempty"`
+	AnswerAvailable    bool             `json:"answer_available"`
+	AnswerSource       string           `json:"answer_source,omitempty"`
+	AnswerPreview      string           `json:"answer_preview,omitempty"`
+	Truncated          bool             `json:"truncated,omitempty"`
+	ResultBytes        int              `json:"result_bytes"`
+	ElapsedSeconds     int              `json:"elapsed_seconds,omitempty"`
+	IdleSeconds        int              `json:"idle_seconds,omitempty"`
+	StreamEvents       int64            `json:"stream_events,omitempty"`
+	StreamBytes        int64            `json:"stream_bytes,omitempty"`
+	ErrorCode          string           `json:"error_code,omitempty"`
+	ErrorMessage       string           `json:"error_message,omitempty"`
+	AfterVCS           *VCSSnapshot     `json:"after_vcs,omitempty"`
+	PendingInteraction *InteractionView `json:"pending_interaction,omitempty"`
 }
 
 type VCSSnapshot struct {
@@ -135,10 +220,11 @@ type Turn struct {
 	StartedAt           time.Time    `json:"started_at"`
 	UpdatedAt           time.Time    `json:"updated_at"`
 	FinishedAt          *time.Time   `json:"finished_at,omitempty"`
-	ElapsedSeconds      int          `json:"elapsed_seconds,omitempty"`
-	IdleSeconds         int          `json:"idle_seconds,omitempty"`
-	StreamEvents        int64        `json:"stream_events,omitempty"`
-	StreamBytes         int64        `json:"stream_bytes,omitempty"`
+	ElapsedSeconds     int              `json:"elapsed_seconds,omitempty"`
+	IdleSeconds        int              `json:"idle_seconds,omitempty"`
+	StreamEvents       int64            `json:"stream_events,omitempty"`
+	StreamBytes        int64            `json:"stream_bytes,omitempty"`
+	PendingInteraction *InteractionView `json:"pending_interaction,omitempty"`
 }
 
 type LogEntry struct {
@@ -182,24 +268,29 @@ type TurnOutcome struct {
 }
 
 type ThreadOpenSpec struct {
-	WorkerID        string
-	Executable      string
-	WorkspaceRoot   string
-	AccessMode      string
-	Model           string
-	ReasoningEffort string
-	RoleHint        string
-	NativeSessionID string
+	WorkerID           string
+	Executable         string
+	WorkspaceRoot      string
+	AccessMode         string
+	ApprovalMode       string
+	SessionAutoApprove bool
+	Model              string
+	ReasoningEffort    string
+	RoleHint           string
+	NativeSessionID    string
 }
 
 type TurnStartSpec struct {
 	ThreadID            string
 	WorkspaceRoot       string
 	AccessMode          string
+	ApprovalMode        string
+	SessionAutoApprove  bool
 	Prompt              string
 	ClientCorrelationID string
 	Model               string
 	ReasoningEffort     string
+	OnInteraction       InteractionHandler
 }
 
 type ThreadHandle struct {

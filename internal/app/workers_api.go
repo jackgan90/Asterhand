@@ -30,6 +30,7 @@ func (a *App) workersAPI(w http.ResponseWriter, r *http.Request) {
 		send(w, 200, map[string]any{
 			"items":        items,
 			"active_turns": a.Workers.ActiveTurnsSnapshot(),
+			"interactions": a.Workers.ListHumanInteractions(),
 		})
 	case "/api/workers/get":
 		if r.Method != http.MethodGet {
@@ -104,6 +105,7 @@ func (a *App) workersAPI(w http.ResponseWriter, r *http.Request) {
 				a.fail(w, r, 400, err)
 				return
 			}
+			a.notifyWorkers()
 			send(w, 200, map[string]any{"turn": turn, "active_turns": a.Workers.ActiveTurnsSnapshot()})
 		case "reconcile":
 			turn, err := a.Workers.ReconcileTurn(r.Context(), in.TurnID)
@@ -111,6 +113,7 @@ func (a *App) workersAPI(w http.ResponseWriter, r *http.Request) {
 				a.fail(w, r, 400, err)
 				return
 			}
+			a.notifyWorkers()
 			send(w, 200, map[string]any{"turn": turn, "active_turns": a.Workers.ActiveTurnsSnapshot()})
 		case "resolve":
 			if strings.TrimSpace(in.Reason) == "" {
@@ -121,6 +124,7 @@ func (a *App) workersAPI(w http.ResponseWriter, r *http.Request) {
 				a.fail(w, r, 400, err)
 				return
 			}
+			a.notifyWorkers()
 			send(w, 200, map[string]any{"turn": turn, "active_turns": a.Workers.ActiveTurnsSnapshot()})
 		case "close":
 			wk, err := a.Workers.CloseWorker(r.Context(), in.WorkerID, "")
@@ -128,10 +132,69 @@ func (a *App) workersAPI(w http.ResponseWriter, r *http.Request) {
 				a.fail(w, r, 400, err)
 				return
 			}
+			a.notifyWorkers()
 			send(w, 200, map[string]any{"worker": wk, "active_turns": a.Workers.ActiveTurnsSnapshot()})
 		default:
 			a.fail(w, r, 400, automation.Fail("invalid_parameters", "action must be cancel, reconcile, resolve, or close"))
 		}
+	case "/api/workers/interactions":
+		if r.Method != http.MethodGet {
+			w.WriteHeader(405)
+			return
+		}
+		send(w, 200, map[string]any{
+			"items": a.Workers.ListHumanInteractions(),
+		})
+	case "/api/workers/interactions/decide":
+		if r.Method != http.MethodPost {
+			w.WriteHeader(405)
+			return
+		}
+		var in struct {
+			RequestID string              `json:"request_id"`
+			Decision  string              `json:"decision"`
+			Message   string              `json:"message,omitempty"`
+			Text      string              `json:"text,omitempty"`
+			Answers   map[string][]string `json:"answers,omitempty"`
+		}
+		if err := read(w, r, &in); err != nil {
+			a.fail(w, r, 400, err)
+			return
+		}
+		view, err := a.Workers.DecideInteractionHuman(in.RequestID, workers.InteractionDecision{
+			Decision: in.Decision,
+			Message:  in.Message,
+			Text:     in.Text,
+			Answers:  in.Answers,
+		})
+		if err != nil {
+			a.fail(w, r, 400, err)
+			return
+		}
+		send(w, 200, map[string]any{
+			"resolved":     view,
+			"interactions": a.Workers.ListHumanInteractions(),
+		})
+	case "/api/workers/session-auto-approve":
+		if r.Method != http.MethodPost {
+			w.WriteHeader(405)
+			return
+		}
+		var in struct {
+			WorkerID string `json:"worker_id"`
+			Enabled  bool   `json:"enabled"`
+		}
+		if err := read(w, r, &in); err != nil {
+			a.fail(w, r, 400, err)
+			return
+		}
+		wk, err := a.Workers.SetSessionAutoApproveHuman(in.WorkerID, in.Enabled)
+		if err != nil {
+			a.fail(w, r, 400, err)
+			return
+		}
+		a.notifyWorkers()
+		send(w, 200, map[string]any{"worker": wk})
 	default:
 		http.NotFound(w, r)
 	}

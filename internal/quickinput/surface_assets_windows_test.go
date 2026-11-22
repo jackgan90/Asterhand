@@ -40,7 +40,7 @@ func TestInputModuleClosureIsEmbeddedAndAllowed(t *testing.T) {
 		closureFiles["shared/"+name] = &fstest.MapFile{Data: shared}
 		aliases["../../../web/"+name] = "shared/" + name
 	}
-	for _, entry := range []string{"index.html", "command-log.html", "notification.html"} {
+	for _, entry := range []string{"index.html", "command-log.html", "notification.html", "worker-action.html"} {
 		for _, module := range webmodules.ClosureWithAliases(t, closureFiles, entry, aliases) {
 			uri := surfaceOrigin + "/quick-input/" + module
 			if strings.HasPrefix(module, "shared/") {

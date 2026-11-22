@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title data-i18n="brand.worker_action_window_title"></title>
+  <link rel="stylesheet" href="input.css">
+  <link rel="stylesheet" href="worker-action.css">
+</head>
+<body>
+  <main id="action-root" role="dialog" aria-live="polite">
+    <div id="action-collapsed" class="action-collapsed" hidden>
+      <span class="action-dot" aria-hidden="true"></span>
+      <span id="action-collapsed-text" class="action-collapsed-text"></span>
+      <button id="action-expand-btn" type="button" class="act-btn act-btn-primary" data-i18n="common.worker_action.expand"></button>
+    </div>
+    <div id="action-card" class="action-card">
+      <div class="action-head">
+        <div class="action-head-left">
+          <span id="action-kind-badge" class="action-badge"></span>
+          <span id="action-source" class="action-source"></span>
+        </div>
+        <div class="action-head-right">
+          <div id="action-pager" class="action-pager" hidden>
+            <button id="action-prev" type="button" class="act-icon-btn" data-i18n-aria-label="common.worker_action.prev" data-i18n-title="common.worker_action.prev"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M10 3L5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            <span id="action-counter" class="action-counter"></span>
+            <button id="action-next" type="button" class="act-icon-btn" data-i18n-aria-label="common.worker_action.next" data-i18n-title="common.worker_action.next"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M6 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          </div>
+          <button id="action-collapse-btn" type="button" class="act-icon-btn" data-i18n-aria-label="common.worker_action.collapse" data-i18n-title="common.worker_action.collapse"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3 8h10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
+        </div>
+      </div>
+      <div id="action-queue-summary" class="action-queue-summary" hidden></div>
+
+      <section id="action-approval-body" class="action-body" hidden>
+        <div class="action-meta-row">
+          <span id="action-tool-pill" class="meta-pill"></span>
+          <span id="action-risk-pill" class="meta-pill"></span>
+          <span id="action-project" class="action-project"></span>
+        </div>
+        <p id="action-summary" class="action-summary"></p>
+        <div id="action-cmd-wrap" class="action-cmd-wrap" hidden>
+          <pre id="action-cmd" class="action-cmd"></pre>
+          <button id="action-cmd-toggle" type="button" class="act-link-btn" hidden></button>
+        </div>
+        <div id="action-paths" class="action-paths" hidden></div>
+        <p id="action-reason" class="action-reason" hidden></p>
+        <div class="action-buttons">
+          <button id="btn-allow-once" type="button" class="act-btn act-btn-primary" data-i18n="common.worker_action.allow_once"></button>
+          <button id="btn-allow-session" type="button" class="act-btn act-btn-accent" data-i18n="common.worker_action.allow_session"></button>
+          <button id="btn-deny" type="button" class="act-btn act-btn-ghost" data-i18n="common.worker_action.deny"></button>
+          <button id="btn-cancel-approval" type="button" class="act-btn act-btn-danger" data-i18n="common.worker_action.cancel_turn"></button>
+        </div>
+      </section>
+
+      <section id="action-input-body" class="action-body" hidden>
+        <div class="action-meta-row">
+          <span id="action-input-project" class="action-project"></span>
+        </div>
+        <div id="action-questions" class="action-questions"></div>
+        <textarea id="action-answer-input" class="action-textarea" rows="2" data-i18n-placeholder="common.worker_action.answer_placeholder"></textarea>
+        <div class="action-buttons">
+          <button id="btn-send-answer" type="button" class="act-btn act-btn-primary" data-i18n="common.worker_action.send_answer"></button>
+          <button id="btn-cancel-input" type="button" class="act-btn act-btn-danger" data-i18n="common.worker_action.cancel_turn"></button>
+        </div>
+      </section>
+    </div>
+  </main>
+  <script type="module" src="worker-action.mjs"></script>
+</body>
+</html>

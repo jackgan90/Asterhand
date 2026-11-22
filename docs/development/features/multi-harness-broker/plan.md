@@ -7,9 +7,9 @@
   1. 允许用户继续留在习惯的原生 Coding Harness（如 Antigravity）中完成日常开发，直接通过自然对话把子任务（如审 Plan、审 Code、跨模型实现与复核）派发给本机其他已安装的 Coding Harness（Codex、Claude Code、DeepSeek Harness），并将审查结论可靠回传至发起方原对话继续推进；
   2. 为被调方提供**绑定授权工作区的稳定逻辑身份**（例如同项目内的 `codex-reviewer` 先审 Plan、再审 Code），在不强制跨 Harness 共享私有聊天库的前提下保持跨轮上下文连续；
   3. 由 Asterhand 统一发现本机已安装的 Coding Harness、托管其 MCP 注册/反注册与对账，并按**三项正交开关**控制每个 Harness 的工具暴露程度和参与角色，实现“最小必要工具暴露、升级不断连、一键启用/禁用即时生效”。
-- **状态及实施授权范围**：
-  - **当前状态**：`Milestone 1—2 与 Milestone 3 第 1—2 步（协议预检、ClaudeAdapter + DeepSeekAdapter 适配器及长程多路编排加固）已完成实现、工程验证及本机三路长程用户验收；Milestone 3 第 3 步（Worker 角色模板）与 Milestone 4 保持规划态，待后续独立授权后进入实现`。
-  - **授权边界**：Milestone 1—2 已本地提交；当前完成 Milestone 3 第 1—2 步及验收加固的代码、测试、文档同步与本地提交（未推送、未发布）；第 3 步（角色模板）、Milestone 4、推送和 Release 发布各自独立授权。
+- **状态与范围**：
+  - **当前状态**：`Milestone 1—2、Milestone 3 第 1—2 步与 Milestone 4.1（审批模式分档、人机审批桥、业务提问流转、右下角统一交互浮窗与 Web 同步入口）已完成实现、工程验证及本机用户验收；后续按序推进 Milestone 4.2（isolated_worktree）与后置的 Milestone 3 第 3 步（Worker 角色模板）`。
+  - **阶段边界**：Milestone 4.2 与后置角色模板在对应设计确认后分别实施与验收。
   - **预检与验证文档**：[协议预检记录](preflight.md)、[验证说明](validation.md)。
 - **关联 Rxx / Cxx / 领域需求 ID**：
   - 原始与收敛需求：`R10`、`R19`、`R20`、`R26`、`R27`、`R28`；扩展原 `C06`（见 [ADR-002](../../../overview/adr/002-mvp-scope.md) 后置范围的新立项增量）；
@@ -207,14 +207,37 @@
   - 按同一 `HarnessAdapter` 契约接入 `ClaudeAdapter`（`claude -p --verbose --input-format stream-json --output-format stream-json --include-partial-messages --strict-mcp-config`，不传 `--restricted` 保留用户登录态，预绑定 `--session-id` + 发过首轮后统一走 `--resume`，`stream_event` 心跳 + `content_block_start`/`tool_result` 实时刷新 `progress`，`workspace_write` 经 `--allowed-tools` 放行常用工作区检查/测试命令，Windows 诚实声明 `harness_tool_restricted`）与 `DeepSeekAdapter`（`dsh --profile acp` 标准 Agent Client Protocol v1 stdio JSON-RPC，`DSH_PERMISSION_MODE` + `mcpServers: []` 防递归，实时匹配 `configOptions`、工具前旁白冲刷为 `commentary`、非零 `pwsh` 退出码标为 `(exit N)`、Windows 只读 DACL 预检预警 `warnings`）；
   - 共享层长程编排加固：`workers_wait_any` 多轮次批量监听、`workers_send` 可选 `wall_clock_seconds`（30..3600s，默认 1800s，静默默认 600s）、`workers_logs(tail=true)` 尾部查询、`worktree_busy` 写锁冲突码与占锁主体提示、`caller_credential_active` + `has_native_file_tools` / `reasoning_efforts` 能力画像、`workers_wait` 实时流式遥测与非成功终态 `after_vcs.changed_files` 提示、`Kill()` 同步等进程退出、异常终态淘汰脏常驻进程与前置启动失败不误锁 `reconciliation_required`；
   - `internal/harnesses` 开启 `claude-code` 与 `deepseek-harness` 的 `worker_managed = true`（`deepseek-harness` 因桌面版无独立 MCP CLI 继续诚实保持 `caller_managed = false`），同步中文化 Web 界面（「编程智能体 / 协作者 / 编程协作者」）。
-- **第 3 步（规划待实施）**：
-  - Web 新增常用 Worker 角色模板配置（预设别名、默认 Harness、默认访问档位、角色提示词），与对话即时创建共存。
+### Milestone 4（前置实施，拆为 M4.1 + M4.2）：审批模式分档、人机审批桥、业务提问流转、交互浮窗与 Git Worktree 隔离
 
-### Milestone 4：人机高危审批、业务提问流转与 Git Worktree 并行写隔离
-- **实现范围**：
-  - 打通 `waiting_approval`（复用 Asterhand 桌面通知与原位人工确认卡片，严禁由 A 代批）与 `waiting_input`（先回传 A，可经 `workers.reply` 回答或升级人类）；
-  - 支持 `isolated_worktree` 访问模式（自动创建/回收独立 Git worktree 分支并返回 diff 摘要）；
-  - 跨设备 Tailscale Worker 委派另行立项评估安全边界。
+为尽快补齐“委派 → 自动/人工审批 → 提问澄清 → 完成回传”的完整任务闭环，Milestone 4 调至原 Milestone 3 第 3 步（Worker 角色模板）之前分两段交付：
+
+#### M4.1：审批模式分档（`approval_mode`）+ 人机审批桥 + 业务提问流转 + 右下角统一交互浮窗 & Web 同步入口（已完成实现、工程验证与本机用户验收）
+- **`access_mode` × `approval_mode` 正交分档**：
+  - `workers_create` 新增可选参数 `approval_mode`（仅对可写模式生效；`read_only` 始终自动拒绝提权审批，仅放行业务提问）：
+    - **`auto`（默认值）**：对支持原生辅助模型自动审单的 Harness 默认启用其官方自动审批（Codex：`approvalPolicy="on-request"` + `approvalsReviewer="auto_review"`，并将 `item/autoApprovalReview` / `guardianWarning` 审计事件写入 `workers_logs`；Claude Code：`--permission-mode auto --permission-prompt-tool stdio`，从 `system(init).permissionMode` 实测核对生效态）；对不支持原生自动审单的 Harness（DeepSeek Harness）自动回落为 `effective_approval_mode: "ask_human"`，并在 `harnesses_list/get` 能力画像中如实声明 `supports_auto_approval: false`；
+    - **`ask_human`**：显式跳过内置模型审单，统一走 Asterhand 硬底线引擎 + 人类右下角浮窗 / Web 裁决（Codex 显式传 `approvalsReviewer="user"` 防 Guardian 静默代批；Claude 传 `default + --permission-prompt-tool stdio` 并仅预放行只读工具 `Read,Glob,Grep` 与只读 `git` 查询；DeepSeek 走 `session/request_permission` 并结合缓存 `tool_call` 参数做风险研判），并支持人类授予 Worker 级 **“本会话免审（仍拦高危）”**（`session_auto_approve`，仅人类可开启/撤销且在批准时同步持久化；Codex 切为 `danger-full-access + untrusted + approvalsReviewer="user"` 经 Asterhand Go 硬底线过滤后静默放行，Claude/DeepSeek 在 Go 适配层过硬底线后静默放行）；
+    - **`strict_deny`**：保留 M3 无人值守行为，遇到宿主审批请求立即拒绝不挂起等待（且不受原生 init 模式回传覆盖）。
+- **状态机、超时账本与硬底线引擎**：
+  - 新增非终态 `waiting_approval` 与 `waiting_input` 及统一挂起交互队列（`PendingInteraction`，按 `request_id` 幂等仲裁）；
+  - 进入等待态期间**暂停 `StallTimeout` 与执行墙钟计时**，改用独立等待超时（默认审批 30 分钟，超时安全拒绝收敛），避免离开电脑误杀长任务；
+  - 统一硬底线拦截：盘符根、系统目录、用户主目录、Asterhand 数据目录、凭据目录（`.ssh`/`.aws`/`.gemini`/`.claude`/`.codex`/`.dsh`）、破坏性系统命令与工作区外递归强删，命中时禁止“本会话免审”或直接硬拒；
+  - 区分 4 种人类审批决策：`allow_once`、`allow_session`（拦截硬底线）、`deny`（**仅拒本次调用，不杀整轮**）、`cancel_turn`（中止整轮）。
+- **主控 Agent 协同（`workers_reply` + `workers_wait` / `workers_wait_any`）**：
+  - 新增公共协作操作 `workers_reply`（CLI + MCP + 覆盖清单）：A 收到 `waiting_input` 后可直接回答业务问题，或设 `escalate_to_human: true` 立即转交人类；若 A 在缓冲窗（默认 15s）内未响应，自动弹出桌面浮窗与 Web 入口请人类接管（Codex 异步提问经 `turn/steer` 无缝回传，Claude 走 `AskUserQuestion`）；
+  - `workers_wait` / `workers_wait_any` 遇 `waiting_input` 立即返回结构化问题与预设选项；遇 `waiting_approval` 在 MCP 文本与结构化 `next_step` 字段中明确告知 A“正在等待人类审批，你无权代批，请等待且勿取消”，多路监听时其他 Worker 不受阻；
+  - 人工审批接口（`/api/workers/interactions`、`/api/workers/interactions/decide`、`/api/workers/session-auto-approve`）按 `AUTO-19`/`AUTO-20` 保留为人类专用，严禁暴露给 A 的 MCP。
+- **右下角单一「待处理交互浮窗」与 Web「编程协作者」同步入口**：
+  - 右下角单一交互浮窗（不平铺多窗）：固定顶栏（类型徽章 + Worker/项目来源 + `< 1/N >` 队列切换 + 分类计数 + 折叠为右下角角标，审批排在提问前，绝不自动隐藏）+ 双专用内容模板（审批展开完整命令 + 提问选项按钮/自由文本与中文 IME 输入）；高度变化（展开/收起/长命令折叠/切卡）采用两阶段隐身显影同步原生窗口尺寸以消除闪跳，队列自动补位时施加 400ms 跨项防双击透传保护；
+  - 复用 `d6e4b7b` 已验证的 Windows Z 序晋升套路（隐藏态重置 `HWND_BOTTOM` → `SetWindowPos(HWND_TOPMOST | SWP_NOACTIVATE | SWP_SHOWWINDOW)` → `IsWindowVisible && WS_EX_TOPMOST` 校验）；弹出绝不抢键盘焦点，点击窗口内部可正常获焦打字；
+  - 交互浮窗固定锚定右下角最底端，`local command` 临时完成通知按交互浮窗当前高度动态上移 `height + 12px`，互不遮挡、不抖动；
+  - Web「编程协作者」面板顶部同步「待处理请求」队列条与 Worker 卡片 `effective_approval_mode` / 撤销「本会话免审」操作，经 `/api/stream` 的 `workers` 事件与桌面浮窗实时消除同步（单次请求失败不中断轮询链，并同样具备 400ms 跨项防误触保护）；主页面首屏先完成 `/api/info` 并在后台并发探活 `/api/peers`，避免离线对端阻塞连接状态。
+
+#### M4.2：Git Worktree 并行写隔离（`isolated_worktree` 访问模式，M4.1 验收后推进）
+- 支持 `isolated_worktree` 访问模式（校验 Git 仓库、自动创建独立 worktree 目录与分支、按各自 worktree 根加写锁实现同仓库多 Worker 并行写、返回分支与 diff 摘要、不自动 merge/push，提供显式清理回收机制与依赖目录说明）。
+- 跨设备 Tailscale Worker 委派另行立项评估安全边界。
+
+#### 后置（原 Milestone 3 第 3 步）：Worker 角色模板
+- 在 M4 完成后，于 Web 新增常用 Worker 角色模板配置（预设别名、默认 Harness、默认访问/审批档位、角色提示词），与对话即时创建共存。
 
 ---
 

@@ -12,6 +12,16 @@ import (
 	"github.com/jackgan90/Asterhand/internal/harnesses"
 )
 
+func shouldWakeCaller(t Turn) bool {
+	if IsTurnTerminal(t.State) || t.State == TurnReconcile {
+		return true
+	}
+	if t.State == TurnWaitingInput {
+		return t.PendingInteraction != nil && !t.PendingInteraction.VisibleToHuman
+	}
+	return false
+}
+
 func (s *Service) Wait(ctx context.Context, turnID, expectedWorkspaceID string, waitDur time.Duration) (Turn, string, bool, error) {
 	if waitDur <= 0 || waitDur > automation.MaxWait {
 		waitDur = automation.MaxWait
@@ -20,7 +30,7 @@ func (s *Service) Wait(ctx context.Context, turnID, expectedWorkspaceID string, 
 	if err != nil {
 		return Turn{}, "", false, err
 	}
-	if IsTurnTerminal(t.State) || t.State == TurnReconcile {
+	if shouldWakeCaller(t) {
 		preview, trunc := s.readPreview(t)
 		return t, preview, trunc, nil
 	}
@@ -31,7 +41,7 @@ func (s *Service) Wait(ctx context.Context, turnID, expectedWorkspaceID string, 
 	if err != nil {
 		return Turn{}, "", false, err
 	}
-	if IsTurnTerminal(t.State) || t.State == TurnReconcile {
+	if shouldWakeCaller(t) {
 		preview, trunc := s.readPreview(t)
 		return t, preview, trunc, nil
 	}
@@ -53,7 +63,7 @@ func (s *Service) Wait(ctx context.Context, turnID, expectedWorkspaceID string, 
 			if err != nil {
 				return Turn{}, "", false, err
 			}
-			if IsTurnTerminal(t.State) || t.State == TurnReconcile {
+			if shouldWakeCaller(t) {
 				preview, trunc := s.readPreview(t)
 				return t, preview, trunc, nil
 			}
@@ -87,29 +97,30 @@ func (s *Service) buildWaitAnyItems(turnIDs []string, expectedWorkspaceID string
 		if err != nil {
 			return nil, "", err
 		}
-		if triggered == "" && (IsTurnTerminal(t.State) || t.State == TurnReconcile) {
+		if triggered == "" && shouldWakeCaller(t) {
 			triggered = t.ID
 		}
 		preview, trunc := s.readPreviewCapped(t, 4<<10)
 		items = append(items, WaitAnyItem{
-			TurnID:          t.ID,
-			WorkerID:        t.WorkerID,
-			WorkspaceID:     t.WorkspaceID,
-			HarnessID:       t.HarnessID,
-			State:           t.State,
-			Progress:        t.Progress,
-			AnswerAvailable: t.AnswerAvailable,
-			AnswerSource:    t.AnswerSource,
-			AnswerPreview:   preview,
-			Truncated:       trunc,
-			ResultBytes:     t.ResultBytes,
-			ElapsedSeconds:  t.ElapsedSeconds,
-			IdleSeconds:     t.IdleSeconds,
-			StreamEvents:    t.StreamEvents,
-			StreamBytes:     t.StreamBytes,
-			ErrorCode:       t.ErrorCode,
-			ErrorMessage:    t.ErrorMessage,
-			AfterVCS:        t.AfterVCS,
+			TurnID:             t.ID,
+			WorkerID:           t.WorkerID,
+			WorkspaceID:        t.WorkspaceID,
+			HarnessID:          t.HarnessID,
+			State:              t.State,
+			Progress:           t.Progress,
+			AnswerAvailable:    t.AnswerAvailable,
+			AnswerSource:       t.AnswerSource,
+			AnswerPreview:      preview,
+			Truncated:          trunc,
+			ResultBytes:        t.ResultBytes,
+			ElapsedSeconds:     t.ElapsedSeconds,
+			IdleSeconds:        t.IdleSeconds,
+			StreamEvents:       t.StreamEvents,
+			StreamBytes:        t.StreamBytes,
+			ErrorCode:          t.ErrorCode,
+			ErrorMessage:       t.ErrorMessage,
+			AfterVCS:           t.AfterVCS,
+			PendingInteraction: t.PendingInteraction,
 		})
 	}
 	return items, triggered, nil
@@ -194,7 +205,7 @@ func (s *Service) WaitAny(ctx context.Context, turnIDs []string, expectedWorkspa
 			if gErr != nil {
 				return nil, "", gErr
 			}
-			if IsTurnTerminal(t.State) || t.State == TurnReconcile {
+			if shouldWakeCaller(t) {
 				return s.buildWaitAnyItems(ids, expectedWorkspaceID)
 			}
 		}

@@ -59,3 +59,39 @@ func TestPeerChecksAllowSlowAuthenticatedConnections(t *testing.T) {
 		}
 	})
 }
+
+func TestPeersAPIProbesMultiplePeersConcurrently(t *testing.T) {
+	a := newNode(t, &fakeExecutor{})
+	mkSlowPeer := func() {
+		b := newNode(t, &fakeExecutor{})
+		slow := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/info" {
+				time.Sleep(1100 * time.Millisecond)
+			}
+			b.app.remote(w, r)
+		}))
+		slow.TLS = &tls.Config{Certificates: []tls.Certificate{b.app.Peers.TLS}, MinVersion: tls.VersionTLS13}
+		slow.StartTLS()
+		t.Cleanup(slow.Close)
+		c := b.cfg.Get()
+		c.Endpoint = slow.URL
+		if err := b.cfg.Save(c); err != nil {
+			t.Fatal(err)
+		}
+		pairNodes(t, a, b)
+	}
+	mkSlowPeer()
+	mkSlowPeer()
+
+	start := time.Now()
+	w := httptest.NewRecorder()
+	a.app.peersAPI(w, httptest.NewRequest(http.MethodGet, "/api/peers", nil))
+	elapsed := time.Since(start)
+	var rows []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil || len(rows) != 2 {
+		t.Fatalf("expected 2 peers, got %s err=%v", w.Body.String(), err)
+	}
+	if elapsed >= 2000*time.Millisecond {
+		t.Fatalf("expected concurrent peer probes (<2s for two 1.1s peers), took %v", elapsed)
+	}
+}

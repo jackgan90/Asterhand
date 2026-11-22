@@ -30,6 +30,8 @@ type notificationDesktop struct {
 	mu              sync.Mutex
 	peer            *hostPeer
 	surfaces        [notifications.MaxVisible]*nativeSurface
+	action          *nativeSurface
+	actionHeight    int32
 	ids             [notifications.MaxVisible]uint64
 	heights         map[uint64]int32
 	hover           [notifications.MaxVisible]bool
@@ -57,9 +59,15 @@ func serveNotificationHost(input io.Reader, output io.Writer, initial hostipc.Me
 		d.surfaces[i] = s
 		go s.run()
 	}
+	act := newWindowSurface(initial.Home, nil, d.peer.fail, nil, nil)
+	act.theme, act.locale = initial.Theme, initial.Locale
+	act.workerAction = &workerActionSurface{desktop: d}
+	d.action = act
+	go act.run()
 	deadline := time.NewTimer(14 * time.Second)
 	defer deadline.Stop()
-	for _, s := range d.surfaces {
+	allSurfaces := append(append([]*nativeSurface(nil), d.surfaces[:]...), d.action)
+	for _, s := range allSurfaces {
 		select {
 		case err := <-s.ready:
 			if err != nil {
@@ -99,10 +107,16 @@ func (d *notificationDesktop) close() {
 			_ = s.dispatch(context.Background(), s.beginClose)
 		}
 	}
+	if d.action != nil {
+		_ = d.action.dispatch(context.Background(), d.action.beginClose)
+	}
 	for _, s := range d.surfaces {
 		if s != nil {
 			_ = s.Close()
 		}
+	}
+	if d.action != nil {
+		_ = d.action.Close()
 	}
 }
 func (d *notificationDesktop) emit(e notifications.Event) {
@@ -111,15 +125,31 @@ func (d *notificationDesktop) emit(e notifications.Event) {
 	}
 }
 
+func (d *notificationDesktop) actionMeasured(height int32) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.actionHeight == height {
+		return true
+	}
+	d.actionHeight = height
+	d.renderLocked()
+	return false
+}
+
 func (d *notificationDesktop) apply(snapshot notifications.Snapshot) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if snapshot.Revision <= d.snapshot.Revision {
 		return
 	}
-	if len(d.snapshot.Cards) == 0 && len(snapshot.Cards) > 0 {
+	wasEmpty := len(d.snapshot.Cards) == 0 && len(d.snapshot.Interactions) == 0
+	nowActive := len(snapshot.Cards) > 0 || len(snapshot.Interactions) > 0
+	if wasEmpty && nowActive {
 		d.monitor = foregroundMonitor()
 		d.updateEnvironmentLocked()
+	}
+	if len(snapshot.Interactions) == 0 {
+		d.actionHeight = 0
 	}
 	d.snapshot = snapshot
 	d.renderLocked()
@@ -156,7 +186,31 @@ func (d *notificationDesktop) renderLocked() {
 			_ = d.surfaces[i].dispatch(context.Background(), func() { d.surfaces[i].hideNotification() })
 		}
 	}
-	placements := notificationStackBounds(monitor.work, monitor.dpi, d.snapshot.Cards, d.capacity, d.heights)
+	baseBelow := int32(0)
+	if len(d.snapshot.Interactions) > 0 && !d.paused {
+		ah := d.actionHeight
+		if ah == 0 {
+			ah = workerActionInitialHeight
+		}
+		baseBelow = ah + workerActionGap
+	}
+	if d.action != nil {
+		ah := d.actionHeight
+		if ah == 0 {
+			ah = workerActionInitialHeight
+		}
+		ab := workerActionBounds(monitor.work, monitor.dpi, ah)
+		items := append([]notifications.WorkerInteraction(nil), d.snapshot.Interactions...)
+		paused, theme, locale, dpi := d.paused, d.snapshot.Theme, d.snapshot.Locale, monitor.dpi
+		if err := d.action.dispatch(context.Background(), func() {
+			d.action.theme, d.action.locale = theme, locale
+			d.action.workerAction.dpi = dpi
+			d.action.applyWorkerActions(items, ab, paused)
+		}); err != nil {
+			d.peer.fail(err)
+		}
+	}
+	placements := notificationStackBoundsWithBase(monitor.work, monitor.dpi, d.snapshot.Cards, d.capacity, d.heights, baseBelow)
 	for index, card := range d.snapshot.Cards {
 		slot := -1
 		for i, id := range d.ids {

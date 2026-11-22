@@ -51,6 +51,7 @@ type nativeWindowClass struct {
 type nativeSurface struct {
 	log          *logSurface
 	notification *notificationSurface
+	workerAction *workerActionSurface
 
 	hwnd                          atomic.Uintptr
 	ready                         chan error
@@ -189,7 +190,7 @@ func (s *nativeSurface) initializeWebView() error {
 		}
 	}
 	profile := filepath.Join(s.home, "quick-input-profile")
-	if s.notification != nil {
+	if s.notification != nil || s.workerAction != nil {
 		profile = filepath.Join(s.home, "notification-profile")
 	}
 	if s.log != nil {
@@ -222,6 +223,12 @@ func (s *nativeSurface) createWindow() error {
 	if s.notification != nil {
 		extendedStyle = 0x08000000 | 0x00000080 | 0x00080000 | wsExTopmost // NOACTIVATE | TOOLWINDOW | LAYERED | TOPMOST
 		windowStyle = 0x80000000
+	} else if s.workerAction != nil {
+		// Interactive popup: topmost & toolwindow & layered, without permanent
+		// WS_EX_NOACTIVATE so clicking the text box allows keyboard/IME input.
+		// Reveal still uses SWP_NOACTIVATE so appearing never steals focus.
+		extendedStyle = 0x00000080 | 0x00080000 | wsExTopmost // TOOLWINDOW | LAYERED | TOPMOST
+		windowStyle = 0x80000000
 	}
 	if s.log != nil {
 		windowStyle = 0x00cf0000
@@ -232,7 +239,7 @@ func (s *nativeSurface) createWindow() error {
 	}
 	s.hwnd.Store(hwnd)
 	s.applyWindowFrame()
-	if s.notification != nil {
+	if s.notification != nil || s.workerAction != nil {
 		uiDLL.NewProc("SetLayeredWindowAttributes").Call(hwnd, 0, 0, 2)
 	} else if s.log == nil {
 		s.positionForShow()

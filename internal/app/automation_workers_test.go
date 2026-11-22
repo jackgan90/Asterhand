@@ -566,4 +566,10 @@ func TestM2HarnessesDiscoveryOpsAndWorkspaceWritePolicy(t *testing.T) {
 	if rBadWC := testAutomationCall(a, tok, "workers_send", opWC, workerSendInput{WorkerID: "wkr_x", Prompt: "hi", WallClockSeconds: automation.Int(15)}); rBadWC.Error == nil || rBadWC.Error.Code != "invalid_parameters" {
 		t.Fatalf("expected invalid_parameters for wall_clock_seconds=15, got %+v", rBadWC.Error)
 	}
+
+	// 7. Structured next_step helper on waiting_approval instructs caller not to cancel.
+	waitStep := workerWaitNextStep(workers.Turn{ID: "turn_wait_1", State: workers.TurnWaitingApproval}, false)
+	if !strings.Contains(waitStep, "do not cancel") || !strings.Contains(waitStep, "turn_wait_1") {
+		t.Fatalf("expected waiting_approval next_step to advise not cancelling and include turn_id, got %q", waitStep)
+	}
 }

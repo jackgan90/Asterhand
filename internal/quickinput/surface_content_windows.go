@@ -11,7 +11,7 @@ import (
 )
 
 func (s *nativeSurface) configureContent() error {
-	if s.notification != nil {
+	if s.notification != nil || s.workerAction != nil {
 		// Match the page's transparent corners before navigation. Controller2
 		// inherits slots 0-25; slot 27 takes COREWEBVIEW2_COLOR by value (all zero
 		// means fully transparent), as declared by SDK 1.0.2792.45.
@@ -146,6 +146,8 @@ func (s *nativeSurface) receiveMessage(_ uintptr, args *comRef) uintptr {
 	if err == nil && len(message) <= 128*1024 {
 		if s.notification != nil {
 			s.notificationBridgeMessage(message)
+		} else if s.workerAction != nil {
+			s.workerActionBridgeMessage(message)
 		} else if s.log != nil {
 			s.logBridgeMessage(message)
 		} else {

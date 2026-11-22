@@ -45,6 +45,9 @@ func (s *nativeSurface) pageURL() string {
 	if s.notification != nil {
 		return surfaceOrigin + "/quick-input/notification.html"
 	}
+	if s.workerAction != nil {
+		return surfaceOrigin + "/quick-input/worker-action.html"
+	}
 	if s.log != nil {
 		return surfaceOrigin + "/quick-input/command-log.html"
 	}
@@ -53,6 +56,9 @@ func (s *nativeSurface) pageURL() string {
 func (s *nativeSurface) titleKey() string {
 	if s.notification != nil {
 		return "brand.notification_window_title"
+	}
+	if s.workerAction != nil {
+		return "brand.worker_action_window_title"
 	}
 	if s.log != nil {
 		return "brand.log_window_title"

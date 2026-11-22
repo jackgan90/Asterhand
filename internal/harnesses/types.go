@@ -21,61 +21,66 @@ const (
 )
 
 type Capabilities struct {
-	SupportsCaller      bool     `json:"supports_caller"`
-	SupportsWorker      bool     `json:"supports_worker"`
-	CallerManaged       bool     `json:"caller_managed"`
-	WorkerManaged       bool     `json:"worker_managed"`
-	ReadOnlyLevel       string   `json:"read_only_level"`
-	WorkspaceWriteLevel string   `json:"workspace_write_level"`
-	HasNativeFileTools  bool     `json:"has_native_file_tools,omitempty"`
-	ReasoningEfforts    []string `json:"reasoning_efforts,omitempty"`
-	WorkerNoticeKey     string   `json:"worker_notice_key,omitempty"`
+	SupportsCaller       bool     `json:"supports_caller"`
+	SupportsWorker       bool     `json:"supports_worker"`
+	CallerManaged        bool     `json:"caller_managed"`
+	WorkerManaged        bool     `json:"worker_managed"`
+	ReadOnlyLevel        string   `json:"read_only_level"`
+	WorkspaceWriteLevel  string   `json:"workspace_write_level"`
+	HasNativeFileTools   bool     `json:"has_native_file_tools,omitempty"`
+	SupportsAutoApproval bool     `json:"supports_auto_approval"`
+	ReasoningEfforts     []string `json:"reasoning_efforts,omitempty"`
+	WorkerNoticeKey      string   `json:"worker_notice_key,omitempty"`
 }
 
 func StaticCapabilities(harnessID string) (Capabilities, bool) {
 	switch harnessID {
 	case HarnessAntigravity:
 		return Capabilities{
-			SupportsCaller:      true,
-			SupportsWorker:      false,
-			CallerManaged:       true,
-			WorkerManaged:       false,
-			ReadOnlyLevel:       ProtectionUnsupported,
-			WorkspaceWriteLevel: ProtectionUnsupported,
-			WorkerNoticeKey:     "harnesses.notice.antigravity_caller_only",
+			SupportsCaller:       true,
+			SupportsWorker:       false,
+			CallerManaged:        true,
+			WorkerManaged:        false,
+			ReadOnlyLevel:        ProtectionUnsupported,
+			WorkspaceWriteLevel:  ProtectionUnsupported,
+			SupportsAutoApproval: false,
+			WorkerNoticeKey:      "harnesses.notice.antigravity_caller_only",
 		}, true
 	case HarnessCodex:
 		return Capabilities{
-			SupportsCaller:      true,
-			SupportsWorker:      true,
-			CallerManaged:       true,
-			WorkerManaged:       true,
-			ReadOnlyLevel:       ProtectionOSSandbox,
-			WorkspaceWriteLevel: ProtectionOSSandbox,
-			HasNativeFileTools:  true,
-			ReasoningEfforts:    []string{"low", "medium", "high", "xhigh"},
+			SupportsCaller:       true,
+			SupportsWorker:       true,
+			CallerManaged:        true,
+			WorkerManaged:        true,
+			ReadOnlyLevel:        ProtectionOSSandbox,
+			WorkspaceWriteLevel:  ProtectionOSSandbox,
+			HasNativeFileTools:   true,
+			SupportsAutoApproval: true,
+			ReasoningEfforts:     []string{"low", "medium", "high", "xhigh"},
 		}, true
 	case HarnessClaudeCode:
 		return Capabilities{
-			SupportsCaller:      true,
-			SupportsWorker:      true,
-			CallerManaged:       true,
-			WorkerManaged:       true,
-			ReadOnlyLevel:       ProtectionHarnessRestrict,
-			WorkspaceWriteLevel: ProtectionHarnessRestrict,
-			HasNativeFileTools:  true,
-			ReasoningEfforts:    []string{"low", "medium", "high", "xhigh", "max"},
+			SupportsCaller:       true,
+			SupportsWorker:       true,
+			CallerManaged:        true,
+			WorkerManaged:        true,
+			ReadOnlyLevel:        ProtectionHarnessRestrict,
+			WorkspaceWriteLevel:  ProtectionHarnessRestrict,
+			HasNativeFileTools:   true,
+			SupportsAutoApproval: true,
+			ReasoningEfforts:     []string{"low", "medium", "high", "xhigh", "max"},
 		}, true
 	case HarnessDeepSeek:
 		return Capabilities{
-			SupportsCaller:      true,
-			SupportsWorker:      true,
-			CallerManaged:       false,
-			WorkerManaged:       true,
-			ReadOnlyLevel:       ProtectionHarnessRestrict,
-			WorkspaceWriteLevel: ProtectionHarnessRestrict,
-			HasNativeFileTools:  true,
-			ReasoningEfforts:    []string{"off", "low", "high", "max"},
+			SupportsCaller:       true,
+			SupportsWorker:       true,
+			CallerManaged:        false,
+			WorkerManaged:        true,
+			ReadOnlyLevel:        ProtectionHarnessRestrict,
+			WorkspaceWriteLevel:  ProtectionHarnessRestrict,
+			HasNativeFileTools:   true,
+			SupportsAutoApproval: false,
+			ReasoningEfforts:     []string{"off", "low", "high", "max"},
 		}, true
 	default:
 		return Capabilities{}, false

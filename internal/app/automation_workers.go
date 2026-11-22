@@ -15,6 +15,7 @@ type workerCreateInput struct {
 	WorkspaceRoot   string `json:"workspace_root" description:"Absolute path to the local project directory"`
 	Alias           string `json:"alias,omitempty" description:"Optional stable worker alias unique within the project (e.g. \"codex-reviewer\")"`
 	AccessMode      string `json:"access_mode,omitempty" enum:"read_only,workspace_write" description:"Worker access mode: \"read_only\" (default) or \"workspace_write\" (requires enabling workspace write for the target harness in Asterhand settings)"`
+	ApprovalMode    string `json:"approval_mode,omitempty" enum:"auto,ask_human,strict_deny" description:"Approval policy for writable workers: \"auto\" (default: uses harness native auto-approve when supported, falls back to ask_human otherwise), \"ask_human\" (routes escalations to Asterhand human popup/Web), or \"strict_deny\""`
 	RoleHint        string `json:"role_hint,omitempty" description:"Optional role instructions passed to the worker (e.g. reviewer persona)"`
 	Model           string `json:"model,omitempty" description:"Optional default model name for this worker"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty" description:"Optional default reasoning effort / thinking level (e.g. off, low, medium, high, xhigh, max)"`
@@ -87,26 +88,41 @@ type workerResolveInput struct {
 	Reason string `json:"reason" description:"Audit reason for manually closing the unresolved turn"`
 }
 
+type workerReplyInput struct {
+	TurnID          string              `json:"turn_id" description:"Turn identifier currently in waiting_input state"`
+	WorkspaceID     string              `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
+	Text            string              `json:"text,omitempty" description:"Plain-text answer to the worker's business question (omit if using answers map or escalate_to_human)"`
+	Answers         map[string][]string `json:"answers,omitempty" description:"Optional structured map of question_id to selected answer strings"`
+	EscalateToHuman bool                `json:"escalate_to_human,omitempty" description:"Set true when caller cannot decide and wants to escalate the question immediately to the human desktop/Web prompt"`
+}
+
+type workerReplyView struct {
+	Turn      workers.Turn `json:"turn"`
+	Escalated bool         `json:"escalated,omitempty"`
+}
+
 type workerGetView struct {
 	Worker workers.Worker `json:"worker"`
 	Turns  []workers.Turn `json:"turns"`
 }
 
 type workerWaitView struct {
-	Turn            workers.Turn `json:"turn"`
-	WorkerID        string       `json:"worker_id"`
-	TurnID          string       `json:"turn_id"`
-	State           string       `json:"state"`
-	AnswerAvailable bool         `json:"answer_available"`
-	AnswerSource    string       `json:"answer_source,omitempty"`
-	Answer          string       `json:"answer,omitempty"`
-	PartialOutput   string       `json:"partial_output,omitempty"`
-	Truncated       bool         `json:"truncated,omitempty"`
-	ResultBytes     int          `json:"result_bytes"`
-	ElapsedSeconds  int          `json:"elapsed_seconds,omitempty"`
-	IdleSeconds     int          `json:"idle_seconds,omitempty"`
-	StreamEvents    int64        `json:"stream_events,omitempty"`
-	StreamBytes     int64        `json:"stream_bytes,omitempty"`
+	Turn               workers.Turn             `json:"turn"`
+	WorkerID           string                   `json:"worker_id"`
+	TurnID             string                   `json:"turn_id"`
+	State              string                   `json:"state"`
+	AnswerAvailable    bool                     `json:"answer_available"`
+	AnswerSource       string                   `json:"answer_source,omitempty"`
+	Answer             string                   `json:"answer,omitempty"`
+	PartialOutput      string                   `json:"partial_output,omitempty"`
+	Truncated          bool                     `json:"truncated,omitempty"`
+	ResultBytes        int                      `json:"result_bytes"`
+	ElapsedSeconds     int                      `json:"elapsed_seconds,omitempty"`
+	IdleSeconds        int                      `json:"idle_seconds,omitempty"`
+	StreamEvents       int64                    `json:"stream_events,omitempty"`
+	StreamBytes        int64                    `json:"stream_bytes,omitempty"`
+	PendingInteraction *workers.InteractionView `json:"pending_interaction,omitempty"`
+	NextStep           string                   `json:"next_step,omitempty"`
 }
 
 type workerWaitAnyView struct {
@@ -155,6 +171,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 				WorkspaceRoot:   v.WorkspaceRoot,
 				Alias:           v.Alias,
 				AccessMode:      v.AccessMode,
+				ApprovalMode:    v.ApprovalMode,
 				RoleHint:        v.RoleHint,
 				Model:           v.Model,
 				ReasoningEffort: v.ReasoningEffort,
@@ -165,7 +182,14 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			return automation.Outcome{
 				Accepted: true,
 				Data:     w,
-				Summary:  map[string]any{"worker_id": w.ID, "workspace_id": w.WorkspaceID, "alias": w.Alias, "state": w.State},
+				Summary: map[string]any{
+					"worker_id":               w.ID,
+					"workspace_id":            w.WorkspaceID,
+					"alias":                   w.Alias,
+					"state":                   w.State,
+					"approval_mode":           w.ApprovalMode,
+					"effective_approval_mode": w.EffectiveApprovalMode,
+				},
 			}, nil
 		})
 
@@ -271,20 +295,22 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 				return automation.Outcome{}, err
 			}
 			return automation.Outcome{Data: workerWaitView{
-				Turn:            t,
-				WorkerID:        t.WorkerID,
-				TurnID:          t.ID,
-				State:           t.State,
-				AnswerAvailable: t.AnswerAvailable,
-				AnswerSource:    t.AnswerSource,
-				Answer:          preview,
-				PartialOutput:   t.PartialOutput,
-				Truncated:       trunc,
-				ResultBytes:     t.ResultBytes,
-				ElapsedSeconds:  t.ElapsedSeconds,
-				IdleSeconds:     t.IdleSeconds,
-				StreamEvents:    t.StreamEvents,
-				StreamBytes:     t.StreamBytes,
+				Turn:               t,
+				WorkerID:           t.WorkerID,
+				TurnID:             t.ID,
+				State:              t.State,
+				AnswerAvailable:    t.AnswerAvailable,
+				AnswerSource:       t.AnswerSource,
+				Answer:             preview,
+				PartialOutput:      t.PartialOutput,
+				Truncated:          trunc,
+				ResultBytes:        t.ResultBytes,
+				ElapsedSeconds:     t.ElapsedSeconds,
+				IdleSeconds:        t.IdleSeconds,
+				StreamEvents:       t.StreamEvents,
+				StreamBytes:        t.StreamBytes,
+				PendingInteraction: t.PendingInteraction,
+				NextStep:           workerWaitNextStep(t, trunc),
 			}}, nil
 		})
 
@@ -437,6 +463,37 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 		})
 
 	automation.Register(r, automation.Definition{
+		Name:        "workers_reply",
+		Description: "Answer a worker turn's waiting_input business question or escalate it to the human UI (cannot be used to approve waiting_approval permission prompts)",
+		Role:        "execute",
+		Toolset:     automation.ToolsetCollab,
+		Write:       true,
+		Control:     true,
+	}, func(v workerReplyInput) string { return v.TurnID },
+		func(p automation.Principal, v workerReplyInput) error { return scopeWorkers(p, v.TurnID) },
+		func(ctx context.Context, call automation.Call, v workerReplyInput) (automation.Outcome, error) {
+			if a.Workers == nil {
+				return automation.Outcome{}, automation.Fail("unavailable", "Workers service is unavailable")
+			}
+			t, escalated, err := a.Workers.ReplyTurn(workers.ReplyInput{
+				OperationID:     call.Identity.ID,
+				TurnID:          v.TurnID,
+				WorkspaceID:     v.WorkspaceID,
+				Text:            v.Text,
+				Answers:         v.Answers,
+				EscalateToHuman: v.EscalateToHuman,
+			})
+			if err != nil {
+				return automation.Outcome{}, err
+			}
+			return automation.Outcome{
+				Accepted: true,
+				Data:     workerReplyView{Turn: t, Escalated: escalated},
+				Summary:  map[string]any{"worker_id": t.WorkerID, "turn_id": t.ID, "state": t.State, "escalated": escalated},
+			}, nil
+		})
+
+	automation.Register(r, automation.Definition{
 		Name:        "workers_resolve",
 		Description: "Explicitly resolve a reconciliation_required turn with an audit reason without faking success",
 		Role:        "execute",
@@ -461,6 +518,37 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 		})
 }
 
+func workerWaitNextStep(t workers.Turn, truncated bool) string {
+	switch t.State {
+	case workers.TurnRunning, workers.TurnPrepared:
+		if t.StreamEvents > 0 {
+			return fmt.Sprintf("Turn is still %s (elapsed=%ds, idle=%ds, stream_events=%d). Continue calling workers_wait(turn_id=%q).", t.State, t.ElapsedSeconds, t.IdleSeconds, t.StreamEvents, t.ID)
+		}
+		return fmt.Sprintf("Turn is still %s. Continue calling workers_wait(turn_id=%q).", t.State, t.ID)
+	case workers.TurnWaitingApproval:
+		return fmt.Sprintf("Turn is waiting for human permission approval in Asterhand desktop/Web UI. Caller cannot approve on the user's behalf; do not cancel—inform the user if helpful and continue calling workers_wait(turn_id=%q).", t.ID)
+	case workers.TurnWaitingInput:
+		if t.PendingInteraction != nil && t.PendingInteraction.VisibleToHuman {
+			return fmt.Sprintf("Turn is waiting for human input in Asterhand desktop/Web UI (already escalated). Continue calling workers_wait(turn_id=%q).", t.ID)
+		}
+		return fmt.Sprintf("Worker asked a business question (see pending_interaction.questions). Answer via workers_reply(turn_id=%q, text=...) or escalate via workers_reply(turn_id=%q, escalate_to_human=true).", t.ID, t.ID)
+	case workers.TurnCompleted:
+		if truncated {
+			return fmt.Sprintf("Turn completed with truncated preview. Call workers_result(turn_id=%q) with cursor to read the rest.", t.ID)
+		}
+		if !t.AnswerAvailable {
+			return fmt.Sprintf("Turn completed without a candidate final answer; inspect workers_logs(turn_id=%q).", t.ID)
+		}
+	case workers.TurnBlockedApproval, workers.TurnBlockedUserInput:
+		return "Worker requested an unsupported interactive approval or user question and stopped cleanly; report the reason to the user."
+	case workers.TurnInterrupted, workers.TurnCancelled, workers.TurnCancelledRevoked, workers.TurnFailed:
+		return fmt.Sprintf("Turn ended with non-success state %q; inspect workers_logs(turn_id=%q).", t.State, t.ID)
+	case workers.TurnReconcile:
+		return fmt.Sprintf("Turn requires reconciliation before continuing; do not resend automatically. Inspect workers_get or workers_logs(turn_id=%q).", t.ID)
+	}
+	return ""
+}
+
 func describeWorkerAutomationResults(r *automation.Registry) {
 	r.DescribeData("workers_create", automation.Schema[workers.Worker]())
 	r.DescribeData("workers_list", resultObject("", "", "", map[string]any{"items": arrayOf(automation.Schema[workers.Worker]())}))
@@ -468,6 +556,7 @@ func describeWorkerAutomationResults(r *automation.Registry) {
 	r.DescribeData("workers_send", automation.Schema[workers.Turn]())
 	r.DescribeData("workers_wait", automation.Schema[workerWaitView]())
 	r.DescribeData("workers_wait_any", automation.Schema[workerWaitAnyView]())
+	r.DescribeData("workers_reply", automation.Schema[workerReplyView]())
 	r.DescribeData("workers_result", automation.Schema[workers.ResultPage]())
 	r.DescribeData("workers_logs", automation.Schema[workerLogsView]())
 	r.DescribeData("workers_cancel", automation.Schema[workers.Turn]())

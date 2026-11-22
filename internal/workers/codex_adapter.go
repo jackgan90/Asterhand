@@ -40,14 +40,18 @@ type rpcReply struct {
 }
 
 type codexActiveTurn struct {
-	turnID      string
-	items       []NativeItem
-	deltas      map[string]*strings.Builder
-	onEvent     func(AdapterEvent)
-	done        chan TurnOutcome
-	doneOnce    sync.Once
-	blockedCode string
-	blockedMsg  string
+	turnID           string
+	items            []NativeItem
+	deltas           map[string]*strings.Builder
+	handledQuestions map[string]bool
+	onEvent          func(AdapterEvent)
+	onInteraction    InteractionHandler
+	turnCtx          context.Context
+	turnCancel       context.CancelFunc
+	done             chan TurnOutcome
+	doneOnce         sync.Once
+	blockedCode      string
+	blockedMsg       string
 }
 
 func (a *CodexAdapter) OpenThread(ctx context.Context, spec ThreadOpenSpec) (ThreadHandle, error) {
@@ -84,18 +88,16 @@ func (a *CodexAdapter) OpenThread(ctx context.Context, spec ThreadOpenSpec) (Thr
 		return ThreadHandle{}, fmt.Errorf("codex initialized notify failed: %w", err)
 	}
 
-	sandbox := "read-only"
-	if spec.AccessMode == harnesses.AccessWorkspaceWrite {
-		sandbox = "workspace-write"
-	}
+	sandbox, _, approvalPolicy, reviewer := codexTurnPolicies(spec.AccessMode, spec.ApprovalMode, spec.SessionAutoApprove, spec.WorkspaceRoot)
 
 	var threadID string
 	if spec.NativeSessionID != "" {
 		params := map[string]any{
-			"threadId":       spec.NativeSessionID,
-			"cwd":            spec.WorkspaceRoot,
-			"sandbox":        sandbox,
-			"approvalPolicy": "never",
+			"threadId":          spec.NativeSessionID,
+			"cwd":               spec.WorkspaceRoot,
+			"sandbox":           sandbox,
+			"approvalPolicy":    approvalPolicy,
+			"approvalsReviewer": reviewer,
 		}
 		if spec.Model != "" {
 			params["model"] = spec.Model
@@ -117,9 +119,10 @@ func (a *CodexAdapter) OpenThread(ctx context.Context, spec ThreadOpenSpec) (Thr
 		threadID = res.Thread.ID
 	} else {
 		params := map[string]any{
-			"cwd":            spec.WorkspaceRoot,
-			"sandbox":        sandbox,
-			"approvalPolicy": "never",
+			"cwd":               spec.WorkspaceRoot,
+			"sandbox":           sandbox,
+			"approvalPolicy":    approvalPolicy,
+			"approvalsReviewer": reviewer,
 		}
 		if spec.Model != "" {
 			params["model"] = spec.Model
@@ -156,30 +159,30 @@ func (a *CodexAdapter) StartTurn(ctx context.Context, handle ThreadHandle, spec 
 	if !ok || sess == nil {
 		return "", nil, errors.New("invalid codex handle")
 	}
+	turnCtx, turnCancel := context.WithCancel(context.Background())
 	at := &codexActiveTurn{
-		deltas:  map[string]*strings.Builder{},
-		onEvent: onEvent,
-		done:    make(chan TurnOutcome, 1),
+		deltas:        map[string]*strings.Builder{},
+		onEvent:       onEvent,
+		onInteraction: spec.OnInteraction,
+		turnCtx:       turnCtx,
+		turnCancel:    turnCancel,
+		done:          make(chan TurnOutcome, 1),
 	}
 	sess.mu.Lock()
 	if sess.closed {
 		sess.mu.Unlock()
+		turnCancel()
 		return "", nil, errors.New("codex session closed")
 	}
 	sess.active = at
 	sess.mu.Unlock()
 
-	sandboxPolicy := map[string]any{"type": "readOnly", "networkAccess": false}
-	if spec.AccessMode == harnesses.AccessWorkspaceWrite {
-		sandboxPolicy = map[string]any{
-			"type":          "workspaceWrite",
-			"writableRoots": []string{spec.WorkspaceRoot},
-		}
-	}
+	_, sandboxPolicy, approvalPolicy, reviewer := codexTurnPolicies(spec.AccessMode, spec.ApprovalMode, spec.SessionAutoApprove, spec.WorkspaceRoot)
 	params := map[string]any{
 		"threadId":            handle.NativeSessionID,
 		"cwd":                 spec.WorkspaceRoot,
-		"approvalPolicy":      "never",
+		"approvalPolicy":      approvalPolicy,
+		"approvalsReviewer":   reviewer,
 		"sandboxPolicy":       sandboxPolicy,
 		"clientUserMessageId": spec.ClientCorrelationID,
 		"input": []map[string]any{
@@ -433,9 +436,9 @@ func (s *codexSession) handleMessage(raw []byte) {
 		return
 	}
 
-	// Server -> Client request (approvals / user input): M1 bounded immediate rejection.
+	// Server -> Client request (approvals / user input).
 	if env.ID != nil && env.Method != "" {
-		s.handleServerRequest(*env.ID, env.Method)
+		s.handleServerRequest(*env.ID, env.Method, env.Params)
 		return
 	}
 
@@ -445,7 +448,60 @@ func (s *codexSession) handleMessage(raw []byte) {
 	}
 }
 
-func (s *codexSession) handleServerRequest(rawID json.RawMessage, method string) {
+func (s *codexSession) handleServerRequest(rawID json.RawMessage, method string, params json.RawMessage) {
+	s.mu.Lock()
+	active := s.active
+	var handler InteractionHandler
+	var turnCtx context.Context
+	if active != nil {
+		handler = active.onInteraction
+		turnCtx = active.turnCtx
+	}
+	s.mu.Unlock()
+
+	if handler != nil && active != nil {
+		req := parseCodexInteractionRequest(method, params)
+		if turnCtx == nil {
+			turnCtx = context.Background()
+		}
+		go func() {
+			dec, err := handler(turnCtx, req)
+			if err != nil {
+				dec = InteractionDecision{Decision: DecisionCancelTurn, Message: err.Error()}
+			}
+			res, rpcErr, shouldInterrupt := buildCodexInteractionReply(method, params, req, dec)
+			if rpcErr != nil {
+				reply, _ := json.Marshal(map[string]any{"id": rawID, "error": rpcErr})
+				_ = s.writeLine(reply)
+			} else {
+				reply, _ := json.Marshal(map[string]any{"id": rawID, "result": res})
+				_ = s.writeLine(reply)
+			}
+			if shouldInterrupt {
+				s.mu.Lock()
+				tid := ""
+				if s.active == active {
+					if dec.Actor == "policy" {
+						if req.Kind == InteractionInput {
+							s.active.blockedCode = TurnBlockedUserInput
+						} else {
+							s.active.blockedCode = TurnBlockedApproval
+						}
+						s.active.blockedMsg = firstNonEmptyStr(dec.Message, "Blocked interactive request")
+					}
+					tid = s.active.turnID
+				}
+				s.mu.Unlock()
+				if tid != "" {
+					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+					defer cancel()
+					_, _ = s.request(ctx, "turn/interrupt", map[string]any{"threadId": s.threadID, "turnId": tid})
+				}
+			}
+		}()
+		return
+	}
+
 	isApproval := strings.Contains(method, "Approval") || strings.Contains(method, "requestApproval")
 	code := TurnBlockedUserInput
 	msg := "Unsupported interactive user input requested by worker: " + method
@@ -489,6 +545,51 @@ func (s *codexSession) handleServerRequest(rawID json.RawMessage, method string)
 
 func (s *codexSession) handleNotification(method string, params json.RawMessage) {
 	switch method {
+	case "guardianWarning":
+		var p struct {
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(params, &p) == nil && strings.TrimSpace(p.Message) != "" {
+			s.mu.Lock()
+			at := s.active
+			if at != nil && at.onEvent != nil {
+				at.onEvent(AdapterEvent{Kind: "approval_auto", Summary: truncateSummary(p.Message, 240)})
+			}
+			s.mu.Unlock()
+		}
+
+	case "item/autoApprovalReview/started":
+		s.mu.Lock()
+		at := s.active
+		if at != nil && at.onEvent != nil {
+			at.onEvent(AdapterEvent{Kind: "approval_auto", Summary: "Codex Guardian reviewing approval request..."})
+		}
+		s.mu.Unlock()
+
+	case "item/autoApprovalReview/completed":
+		var p struct {
+			Review struct {
+				Status    string `json:"status"`
+				RiskLevel string `json:"riskLevel"`
+				Rationale string `json:"rationale"`
+			} `json:"review"`
+		}
+		if json.Unmarshal(params, &p) == nil {
+			msg := fmt.Sprintf("Codex Guardian review %s", firstNonEmptyStr(p.Review.Status, "completed"))
+			if p.Review.RiskLevel != "" {
+				msg += " (risk: " + p.Review.RiskLevel + ")"
+			}
+			if strings.TrimSpace(p.Review.Rationale) != "" {
+				msg += ": " + truncateSummary(p.Review.Rationale, 160)
+			}
+			s.mu.Lock()
+			at := s.active
+			if at != nil && at.onEvent != nil {
+				at.onEvent(AdapterEvent{Kind: "approval_auto", Summary: msg})
+			}
+			s.mu.Unlock()
+		}
+
 	case "item/agentMessage/delta":
 		var p struct {
 			TurnID string `json:"turnId"`
@@ -530,11 +631,16 @@ func (s *codexSession) handleNotification(method string, params json.RawMessage)
 		if json.Unmarshal(params, &p) != nil {
 			return
 		}
+		isAsyncQuestion := p.Item.Type == "agentMessage" && len(p.Item.Questions) > 0
+		phase := p.Item.Phase
+		if isAsyncQuestion {
+			phase = "commentary"
+		}
 		it := NativeItem{
 			ItemID:   p.Item.ID,
 			Type:     p.Item.Type,
 			ClientID: p.Item.ClientID,
-			Phase:    p.Item.Phase,
+			Phase:    phase,
 			Text:     p.Item.Text,
 		}
 		s.mu.Lock()
@@ -548,6 +654,9 @@ func (s *codexSession) handleNotification(method string, params json.RawMessage)
 			}
 		}
 		s.mu.Unlock()
+		if isAsyncQuestion && at != nil {
+			handleCodexAsyncQuestions(s, at, p.Item)
+		}
 
 	case "turn/completed":
 		var p struct {
@@ -606,6 +715,9 @@ func (s *codexSession) finishActiveLocked(at *codexActiveTurn, outcome TurnOutco
 		s.active = nil
 	}
 	at.doneOnce.Do(func() {
+		if at.turnCancel != nil {
+			at.turnCancel()
+		}
 		at.done <- outcome
 		close(at.done)
 	})
@@ -638,11 +750,13 @@ type codexItemNotification struct {
 }
 
 type codexThreadItem struct {
-	ID             string `json:"id"`
-	Type           string `json:"type"`
-	ClientID       string `json:"clientId"`
-	Phase          string `json:"phase"`
-	Text           string `json:"text"`
+	ID             string               `json:"id"`
+	Type           string               `json:"type"`
+	ClientID       string               `json:"clientId"`
+	Phase          string               `json:"phase"`
+	Delivery       string               `json:"delivery"`
+	Questions      []codexAsyncQuestion `json:"questions"`
+	Text           string               `json:"text"`
 	Command        string `json:"command"`
 	Status         string `json:"status"`
 	ExitCode       *int   `json:"exitCode"`

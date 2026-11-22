@@ -74,6 +74,7 @@ type App struct {
 	peerSync        chan struct{}
 	refreshMu       sync.Mutex
 	refreshCh       chan struct{}
+	workersCh       chan struct{}
 	requests        requestGate
 	stopping        bool
 	closeOnce       sync.Once
@@ -101,7 +102,7 @@ func New(c *config.Manager, x executor.Executor) (*App, error) {
 		}
 		x = &executor.Selected{Config: c}
 	}
-	a := &App{Config: c, Store: s, Peers: p, sessions: map[string]session{}, probeTokens: map[string]bool{}, probeStatus: "not_run", peerSync: make(chan struct{}, 1), refreshCh: make(chan struct{})}
+	a := &App{Config: c, Store: s, Peers: p, sessions: map[string]session{}, probeTokens: map[string]bool{}, probeStatus: "not_run", peerSync: make(chan struct{}, 1), refreshCh: make(chan struct{}), workersCh: make(chan struct{})}
 	a.Engine = tasks.New(s, c, x)
 	a.Engine.SubmitRemote = a.submit
 	tokenPath := filepath.Join(c.Home, "web-login.token")
@@ -149,6 +150,7 @@ func New(c *config.Manager, x executor.Executor) (*App, error) {
 		return nil, err
 	} else {
 		a.Workers = ws
+		a.wireWorkerNotifications()
 	}
 	a.desktopRequests = make(chan struct{}, 8)
 	if err = a.prepareAutomation(); err != nil {
@@ -281,6 +283,25 @@ func (a *App) refreshDone() <-chan struct{} {
 		a.refreshCh = make(chan struct{})
 	}
 	ch := a.refreshCh
+	a.refreshMu.Unlock()
+	return ch
+}
+
+func (a *App) notifyWorkers() {
+	a.refreshMu.Lock()
+	if a.workersCh != nil {
+		close(a.workersCh)
+	}
+	a.workersCh = make(chan struct{})
+	a.refreshMu.Unlock()
+}
+
+func (a *App) workersDone() <-chan struct{} {
+	a.refreshMu.Lock()
+	if a.workersCh == nil {
+		a.workersCh = make(chan struct{})
+	}
+	ch := a.workersCh
 	a.refreshMu.Unlock()
 	return ch
 }

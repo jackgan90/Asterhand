@@ -94,18 +94,24 @@ type claudeControlReply struct {
 }
 
 type claudeActiveTurn struct {
-	turnID      string
-	items       []NativeItem
-	onEvent     func(AdapterEvent)
-	done        chan TurnOutcome
-	doneOnce    sync.Once
-	interrupted bool
-	blockedCode string
-	blockedMsg  string
+	turnID        string
+	items         []NativeItem
+	onEvent       func(AdapterEvent)
+	onInteraction InteractionHandler
+	turnCtx       context.Context
+	turnCancel    context.CancelFunc
+	done          chan TurnOutcome
+	doneOnce      sync.Once
+	interrupted   bool
+	blockedCode   string
+	blockedMsg    string
 }
 
 func (t *claudeActiveTurn) finish(out TurnOutcome) {
 	t.doneOnce.Do(func() {
+		if t.turnCancel != nil {
+			t.turnCancel()
+		}
 		t.done <- out
 		close(t.done)
 	})
@@ -139,13 +145,9 @@ func (a *ClaudeAdapter) OpenThread(ctx context.Context, spec ThreadOpenSpec) (Th
 	}, nil
 }
 
-var claudeWorkspaceWriteAllowedTools = strings.Join([]string{
-	"Read", "Glob", "Grep", "Edit", "Write",
+var claudeAskHumanAllowedTools = strings.Join([]string{
+	"Read", "Glob", "Grep",
 	"Bash(git status*)", "Bash(git diff*)", "Bash(git log*)",
-	"Bash(node *)", "Bash(npm test*)", "Bash(npm run *)", "Bash(npx *)",
-	"Bash(go test*)", "Bash(go vet*)", "Bash(go build*)",
-	"Bash(python *)", "Bash(python3 *)", "Bash(py *)", "Bash(pytest*)",
-	"Bash(cargo test*)", "Bash(cargo check*)",
 }, ",")
 
 func buildClaudeArgs(spec ThreadOpenSpec, sessionID string, resume bool, modelName, effort string) []string {
@@ -160,17 +162,26 @@ func buildClaudeArgs(spec ThreadOpenSpec, sessionID string, resume bool, modelNa
 		"--mcp-config", `{"mcpServers":{}}`,
 	}
 	if spec.AccessMode == harnesses.AccessWorkspaceWrite {
-		args = append(args,
-			"--tools", "Read,Glob,Grep,Edit,Write,Bash",
-			"--allowed-tools", claudeWorkspaceWriteAllowedTools,
-			"--permission-mode", "acceptEdits",
-			"--permission-prompts", "host",
-		)
+		if spec.ApprovalMode == "" || spec.ApprovalMode == ApprovalModeAuto {
+			args = append(args,
+				"--tools", "Read,Glob,Grep,Edit,Write,Bash,AskUserQuestion",
+				"--permission-mode", "auto",
+				"--permission-prompt-tool", "stdio",
+			)
+		} else {
+			args = append(args,
+				"--tools", "Read,Glob,Grep,Edit,Write,Bash,AskUserQuestion",
+				"--allowed-tools", claudeAskHumanAllowedTools,
+				"--permission-mode", "acceptEdits",
+				"--permission-prompt-tool", "stdio",
+			)
+		}
 	} else {
 		args = append(args,
-			"--tools", "Read,Glob,Grep",
-			"--permission-mode", "dontAsk",
-			"--permission-prompts", "none",
+			"--tools", "Read,Glob,Grep,AskUserQuestion",
+			"--allowed-tools", "Read,Glob,Grep",
+			"--permission-mode", "default",
+			"--permission-prompt-tool", "stdio",
 		)
 	}
 	if strings.TrimSpace(modelName) != "" {
@@ -269,14 +280,19 @@ func (a *ClaudeAdapter) StartTurn(ctx context.Context, handle ThreadHandle, spec
 	if turnID == "" {
 		turnID = "clturn_" + model.ID()[:12]
 	}
+	turnCtx, turnCancel := context.WithCancel(context.Background())
 	active := &claudeActiveTurn{
-		turnID:  turnID,
-		onEvent: onEvent,
-		done:    make(chan TurnOutcome, 1),
+		turnID:        turnID,
+		onEvent:       onEvent,
+		onInteraction: spec.OnInteraction,
+		turnCtx:       turnCtx,
+		turnCancel:    turnCancel,
+		done:          make(chan TurnOutcome, 1),
 	}
 	sess.mu.Lock()
 	if sess.closed || sess.proc == nil {
 		sess.mu.Unlock()
+		turnCancel()
 		return "", nil, fmt.Errorf("%w: claude session closed", ErrPreStartFailed)
 	}
 	sess.active = active
@@ -479,17 +495,18 @@ func (s *claudeSession) onProcessExit(proc workerProcess, readErr error) {
 
 func (s *claudeSession) handleLine(line string) {
 	var env struct {
-		Type      string          `json:"type"`
-		Subtype   string          `json:"subtype"`
-		RequestID string          `json:"request_id"`
-		SessionID string          `json:"session_id"`
-		Model     string          `json:"model"`
-		IsError   bool            `json:"is_error"`
-		Result    string          `json:"result"`
-		Errors    []string        `json:"errors"`
-		Request   json.RawMessage `json:"request"`
-		Response  json.RawMessage `json:"response"`
-		Message   json.RawMessage `json:"message"`
+		Type           string          `json:"type"`
+		Subtype        string          `json:"subtype"`
+		RequestID      string          `json:"request_id"`
+		SessionID      string          `json:"session_id"`
+		Model          string          `json:"model"`
+		PermissionMode string          `json:"permissionMode"`
+		IsError        bool            `json:"is_error"`
+		Result         string          `json:"result"`
+		Errors         []string        `json:"errors"`
+		Request        json.RawMessage `json:"request"`
+		Response       json.RawMessage `json:"response"`
+		Message        json.RawMessage `json:"message"`
 	}
 	if err := json.Unmarshal([]byte(line), &env); err != nil {
 		return
@@ -506,6 +523,9 @@ func (s *claudeSession) handleLine(line string) {
 				summary = "Claude session initialized (" + env.Model + ")"
 			}
 			s.emit(AdapterEvent{Kind: "system", Summary: summary})
+			if mapped := mapClaudePermissionMode(env.PermissionMode); mapped != "" {
+				s.emit(AdapterEvent{Kind: "approval_mode", Summary: mapped})
+			}
 		}
 	case "stream_event":
 		s.emit(AdapterEvent{Kind: "delta", Bytes: len(line)})
@@ -545,6 +565,19 @@ func (s *claudeSession) handleControlResponse(raw json.RawMessage) {
 	}
 }
 
+func mapClaudePermissionMode(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "auto":
+		return ApprovalModeAuto
+	case "acceptEdits", "default", "manual":
+		return ApprovalModeAskHuman
+	case "dontAsk":
+		return ApprovalModeDenyEscalation
+	default:
+		return ""
+	}
+}
+
 func (s *claudeSession) handleControlRequest(reqID string, raw json.RawMessage) {
 	var req struct {
 		Subtype  string          `json:"subtype"`
@@ -563,6 +596,61 @@ func (s *claudeSession) handleControlRequest(reqID string, raw json.RawMessage) 
 		})
 		return
 	}
+
+	s.mu.Lock()
+	active := s.active
+	var handler InteractionHandler
+	var turnCtx context.Context
+	if active != nil {
+		handler = active.onInteraction
+		turnCtx = active.turnCtx
+	}
+	s.mu.Unlock()
+
+	if handler != nil && active != nil {
+		ireq := parseClaudeInteractionRequest(req.ToolName, req.Input)
+		if turnCtx == nil {
+			turnCtx = context.Background()
+		}
+		go func() {
+			dec, err := handler(turnCtx, ireq)
+			if err != nil {
+				dec = InteractionDecision{Decision: DecisionCancelTurn, Message: err.Error()}
+			}
+			respPayload, shouldInterrupt := buildClaudeInteractionReply(req.ToolName, req.Input, ireq, dec)
+			if shouldInterrupt {
+				s.mu.Lock()
+				if s.active == active {
+					if dec.Actor == "policy" {
+						if ireq.Kind == InteractionInput {
+							s.active.blockedCode = TurnBlockedUserInput
+						} else {
+							s.active.blockedCode = TurnBlockedApproval
+						}
+						s.active.blockedMsg = firstNonEmptyStr(dec.Message, "Blocked interactive request")
+					} else {
+						s.active.interrupted = true
+					}
+				}
+				s.mu.Unlock()
+			}
+			_ = s.writeJSON(map[string]any{
+				"type": "control_response",
+				"response": map[string]any{
+					"subtype":    "success",
+					"request_id": reqID,
+					"response":   respPayload,
+				},
+			})
+			if shouldInterrupt {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				_ = s.sendControl(ctx, map[string]any{"subtype": "interrupt"})
+			}
+		}()
+		return
+	}
+
 	blockedCode := TurnBlockedApproval
 	_, toolDesc := summarizeClaudeToolUse(req.ToolName, req.Input)
 	blockedMsg := fmt.Sprintf("Claude Code requested interactive approval for %s, which is not supported in this milestone", firstNonEmpty(toolDesc, req.ToolName, "tool"))

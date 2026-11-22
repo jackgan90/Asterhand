@@ -57,7 +57,11 @@ type deepseekActiveTurn struct {
 	needParagraphBreak bool
 	toolTitles         map[string]string
 	toolKinds          map[string]string
+	toolRawInputs      map[string]json.RawMessage
 	onEvent            func(AdapterEvent)
+	onInteraction      InteractionHandler
+	turnCtx            context.Context
+	turnCancel         context.CancelFunc
 	done               chan TurnOutcome
 	doneOnce           sync.Once
 	interrupted        bool
@@ -67,6 +71,9 @@ type deepseekActiveTurn struct {
 
 func (t *deepseekActiveTurn) finish(out TurnOutcome) {
 	t.doneOnce.Do(func() {
+		if t.turnCancel != nil {
+			t.turnCancel()
+		}
 		t.done <- out
 		close(t.done)
 	})
@@ -338,16 +345,22 @@ func (a *DeepSeekAdapter) StartTurn(ctx context.Context, handle ThreadHandle, sp
 	if turnID == "" {
 		turnID = "dshturn_" + model.ID()[:12]
 	}
+	turnCtx, turnCancel := context.WithCancel(context.Background())
 	active := &deepseekActiveTurn{
-		turnID:     turnID,
-		toolTitles: map[string]string{},
-		toolKinds:  map[string]string{},
-		onEvent:    onEvent,
-		done:       make(chan TurnOutcome, 1),
+		turnID:        turnID,
+		toolTitles:    map[string]string{},
+		toolKinds:     map[string]string{},
+		toolRawInputs: map[string]json.RawMessage{},
+		onEvent:       onEvent,
+		onInteraction: spec.OnInteraction,
+		turnCtx:       turnCtx,
+		turnCancel:    turnCancel,
+		done:          make(chan TurnOutcome, 1),
 	}
 	sess.mu.Lock()
 	if sess.closed || sess.proc == nil {
 		sess.mu.Unlock()
+		turnCancel()
 		return "", nil, errors.New("deepseek session closed")
 	}
 	sess.active = active
@@ -672,11 +685,7 @@ func (s *deepseekSession) handleServerRequest(rawID json.RawMessage, method stri
 	var idVal any
 	_ = json.Unmarshal(rawID, &idVal)
 	if method != "session/request_permission" {
-		_ = s.writeJSON(map[string]any{
-			"jsonrpc": "2.0",
-			"id":      idVal,
-			"error":   map[string]any{"code": -32601, "message": "unsupported client request"},
-		})
+		_ = s.writeJSON(map[string]any{"jsonrpc": "2.0", "id": idVal, "error": map[string]any{"code": -32601, "message": "unsupported client request"}})
 		return
 	}
 	var req struct {
@@ -686,33 +695,33 @@ func (s *deepseekSession) handleServerRequest(rawID json.RawMessage, method stri
 		} `json:"toolCall"`
 	}
 	_ = json.Unmarshal(params, &req)
-	blockedMsg := "DeepSeek Harness requested interactive permission approval, which is not supported in this milestone"
 	s.mu.Lock()
-	active := s.active
-	sid := s.sessionID
-	detail := firstNonEmpty(req.ToolCall.Title, "")
-	if detail == "" && active != nil && req.ToolCall.ToolCallID != "" {
-		detail = active.toolTitles[req.ToolCall.ToolCallID]
+	active, sid := s.active, s.sessionID
+	detail := req.ToolCall.Title
+	var fallbackRaw json.RawMessage
+	var fallbackKind string
+	if active != nil && req.ToolCall.ToolCallID != "" {
+		if detail == "" {
+			detail = active.toolTitles[req.ToolCall.ToolCallID]
+		}
+		fallbackRaw = active.toolRawInputs[req.ToolCall.ToolCallID]
+		fallbackKind = active.toolKinds[req.ToolCall.ToolCallID]
 	}
-	if detail != "" {
-		blockedMsg = fmt.Sprintf("DeepSeek Harness requested interactive permission approval (%s), which is not supported in this milestone", truncateSummary(detail, 120))
-	}
-	if active != nil && active.blockedCode == "" {
-		active.blockedCode = TurnBlockedApproval
-		active.blockedMsg = blockedMsg
+	var handler InteractionHandler
+	var turnCtx context.Context
+	if active != nil {
+		handler, turnCtx = active.onInteraction, active.turnCtx
 	}
 	s.mu.Unlock()
-	if active != nil && active.onEvent != nil {
-		active.onEvent(AdapterEvent{Kind: "system", Summary: blockedMsg})
+	if handler != nil && active != nil {
+		ireq, allowOpts, rejectOpts := parseDeepSeekPermissionRequest(params, fallbackRaw, detail, fallbackKind)
+		if turnCtx == nil {
+			turnCtx = context.Background()
+		}
+		go resolveDeepSeekPermission(s, idVal, sid, active, handler, turnCtx, ireq, allowOpts, rejectOpts)
+		return
 	}
-	_ = s.writeJSON(map[string]any{
-		"jsonrpc": "2.0",
-		"id":      idVal,
-		"result":  map[string]any{"outcome": map[string]any{"outcome": "cancelled"}},
-	})
-	if sid != "" {
-		go func() { _ = s.notify("session/cancel", map[string]any{"sessionId": sid}) }()
-	}
+	rejectDeepSeekLegacyPermission(s, idVal, sid, active, detail)
 }
 
 func (s *deepseekSession) handleSessionUpdate(raw json.RawMessage) {
@@ -789,6 +798,9 @@ func (s *deepseekSession) handleSessionUpdate(raw json.RawMessage) {
 		if u.ToolCallID != "" {
 			active.toolTitles[u.ToolCallID] = label
 			active.toolKinds[u.ToolCallID] = kind
+			if len(u.RawInput) > 0 {
+				active.toolRawInputs[u.ToolCallID] = append(json.RawMessage(nil), u.RawInput...)
+			}
 		}
 		onEvent := active.onEvent
 		s.mu.Unlock()

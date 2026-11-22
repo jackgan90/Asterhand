@@ -124,6 +124,9 @@ func (s *nativeSurface) windowEvent(hwnd uintptr, message uint32, wParam, lParam
 	if s.notification != nil {
 		return s.notificationWindowEvent(hwnd, message, wParam, lParam)
 	}
+	if s.workerAction != nil {
+		return s.workerActionWindowEvent(hwnd, message, wParam, lParam)
+	}
 	if s.log != nil {
 		return s.logWindowEvent(hwnd, message, wParam, lParam)
 	}

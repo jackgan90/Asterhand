@@ -80,9 +80,10 @@ func TestClaudeAdapterBuildArgsAndAntiRecursion(t *testing.T) {
 	for _, want := range []string{
 		"--include-partial-messages",
 		`--mcp-config {"mcpServers":{}}`,
-		"--tools Read,Glob,Grep",
-		"--permission-mode dontAsk",
-		"--permission-prompts none",
+		"--tools Read,Glob,Grep,AskUserQuestion",
+		"--allowed-tools Read,Glob,Grep",
+		"--permission-mode default",
+		"--permission-prompt-tool stdio",
 		"--model claude-sonnet",
 		"--effort low",
 		"--append-system-prompt Be concise",
@@ -92,29 +93,52 @@ func TestClaudeAdapterBuildArgsAndAntiRecursion(t *testing.T) {
 			t.Fatalf("expected %q in args: %s", want, joined)
 		}
 	}
-	if strings.Contains(joined, "--allowed-tools") {
-		t.Fatalf("read_only must not pass --allowed-tools: %s", joined)
-	}
 
-	ww := buildClaudeArgs(ThreadOpenSpec{
+	wwAuto := buildClaudeArgs(ThreadOpenSpec{
 		AccessMode: harnesses.AccessWorkspaceWrite,
 	}, "22222222-2222-4222-8222-222222222222", true, "", "")
-	joinedWW := strings.Join(ww, " ")
+	joinedAuto := strings.Join(wwAuto, " ")
 	for _, want := range []string{
 		"--include-partial-messages",
-		"--tools Read,Glob,Grep,Edit,Write,Bash",
-		"--allowed-tools",
-		"Bash(node *)",
-		"Bash(go test*)",
-		"Bash(python *)",
-		"Bash(python3 *)",
-		"Bash(py *)",
-		"--permission-mode acceptEdits",
-		"--permission-prompts host",
+		"--tools Read,Glob,Grep,Edit,Write,Bash,AskUserQuestion",
+		"--permission-mode auto",
+		"--permission-prompt-tool stdio",
 		"--resume 22222222-2222-4222-8222-222222222222",
 	} {
-		if !strings.Contains(joinedWW, want) {
-			t.Fatalf("expected %q in workspace_write args: %s", want, joinedWW)
+		if !strings.Contains(joinedAuto, want) {
+			t.Fatalf("expected %q in default auto workspace_write args: %s", want, joinedAuto)
+		}
+	}
+	if strings.Contains(joinedAuto, "--allowed-tools") {
+		t.Fatalf("auto mode must not restrict tools with --allowed-tools: %s", joinedAuto)
+	}
+
+	wwAsk := buildClaudeArgs(ThreadOpenSpec{
+		AccessMode:   harnesses.AccessWorkspaceWrite,
+		ApprovalMode: ApprovalModeAskHuman,
+	}, "22222222-2222-4222-8222-222222222222", true, "", "")
+	joinedAsk := strings.Join(wwAsk, " ")
+	for _, want := range []string{
+		"--include-partial-messages",
+		"--tools Read,Glob,Grep,Edit,Write,Bash,AskUserQuestion",
+		"--allowed-tools Read,Glob,Grep,Bash(git status*),Bash(git diff*),Bash(git log*)",
+		"--permission-mode acceptEdits",
+		"--permission-prompt-tool stdio",
+		"--resume 22222222-2222-4222-8222-222222222222",
+	} {
+		if !strings.Contains(joinedAsk, want) {
+			t.Fatalf("expected %q in ask_human workspace_write args: %s", want, joinedAsk)
+		}
+	}
+	allowedIdx := strings.Index(joinedAsk, "--allowed-tools ")
+	permIdx := strings.Index(joinedAsk, " --permission-mode")
+	if allowedIdx < 0 || permIdx <= allowedIdx {
+		t.Fatalf("missing --allowed-tools segment in ask_human args: %s", joinedAsk)
+	}
+	allowedSeg := joinedAsk[allowedIdx:permIdx]
+	for _, forbid := range []string{"Bash(python *)", "Write", "Edit", "Bash(node *)"} {
+		if strings.Contains(allowedSeg, forbid) {
+			t.Fatalf("ask_human --allowed-tools must not pre-approve %q: %s", forbid, allowedSeg)
 		}
 	}
 }

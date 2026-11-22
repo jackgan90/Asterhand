@@ -12,6 +12,8 @@ import (
 type Service struct {
 	mu                   sync.Mutex
 	queue                Queue
+	interactions         []WorkerInteraction
+	onWorkerAction       func(WorkerActionEvent)
 	theme, locale, state string
 	presenter            Presenter
 	wake                 chan struct{}
@@ -59,6 +61,20 @@ func (s *Service) Update(theme, locale string) {
 	s.queue.revision++
 	s.mu.Unlock()
 	s.signal()
+}
+func (s *Service) SetWorkerInteractions(items []WorkerInteraction) {
+	s.mu.Lock()
+	if !s.closed && s.presenter != nil {
+		s.interactions = slices.Clone(items)
+		s.queue.revision++
+	}
+	s.mu.Unlock()
+	s.signal()
+}
+func (s *Service) SetWorkerActionHandler(fn func(WorkerActionEvent)) {
+	s.mu.Lock()
+	s.onWorkerAction = fn
+	s.mu.Unlock()
 }
 func (s *Service) Status() Status {
 	s.mu.Lock()
@@ -117,9 +133,16 @@ func (s *Service) run() {
 	for {
 		s.mu.Lock()
 		s.queue.Advance(time.Now())
-		snapshot := Snapshot{Revision: s.queue.revision, Cards: slices.Clone(s.queue.active), Theme: s.theme, Locale: s.locale}
+		snapshot := Snapshot{
+			Revision:     s.queue.revision,
+			Cards:        slices.Clone(s.queue.active),
+			Interactions: slices.Clone(s.interactions),
+			Theme:        s.theme,
+			Locale:       s.locale,
+		}
 		work := len(s.queue.active)+len(s.queue.pending) > 0
-		apply := s.presenter != nil && failures < 5 && snapshot.Revision != sent && (work || sent != 0) && time.Now().After(retry)
+		hasInteractions := len(s.interactions) > 0
+		apply := s.presenter != nil && failures < 5 && snapshot.Revision != sent && (work || hasInteractions || sent != 0) && time.Now().After(retry)
 		s.mu.Unlock()
 		if apply {
 			ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)
@@ -173,6 +196,14 @@ func (s *Service) run() {
 						s.queue.ActionDone(card.ID, "err.quickinput.surface_busy_retry")
 					}
 				}
+			} else if event.Kind == "worker_action" && event.WorkerAction != nil {
+				handler := s.onWorkerAction
+				act := *event.WorkerAction
+				s.mu.Unlock()
+				if handler != nil {
+					go handler(act)
+				}
+				continue
 			} else {
 				if event.Kind == "entered" {
 					failures = 0

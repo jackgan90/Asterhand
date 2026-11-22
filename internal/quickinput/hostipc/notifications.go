@@ -12,7 +12,7 @@ const NotificationFrame Kind = "notification_frame"
 const NotificationEvent Kind = "notification_event"
 
 func validNotifications(s *notifications.Snapshot) bool {
-	if s == nil || s.Revision == 0 || len(s.Cards) > notifications.MaxVisible || !validTheme(s.Theme) || !i18n.ValidLocale(s.Locale) {
+	if s == nil || s.Revision == 0 || len(s.Cards) > notifications.MaxVisible || len(s.Interactions) > 32 || !validTheme(s.Theme) || !i18n.ValidLocale(s.Locale) {
 		return false
 	}
 	ids := map[uint64]bool{}
@@ -30,6 +30,11 @@ func validNotifications(s *notifications.Snapshot) bool {
 			return false
 		}
 	}
+	for _, it := range s.Interactions {
+		if it.RequestID == "" || len(it.RequestID) > 64 || (it.Kind != "approval" && it.Kind != "input") || len(it.Summary) > 1024 || len(it.Command) > 16384 {
+			return false
+		}
+	}
 	return true
 }
 
@@ -44,6 +49,8 @@ func validNotificationEvent(e *notifications.Event) bool {
 		return e.ID == 0 && e.Capacity == 0 && e.DurationMS == 0
 	case "entered", "exited", "dismiss", "activate":
 		return e.ID != 0 && !e.Paused && e.Capacity == 0 && e.DurationMS == 0
+	case "worker_action":
+		return e.WorkerAction != nil && e.WorkerAction.RequestID != "" && len(e.WorkerAction.RequestID) <= 64 && len(e.WorkerAction.Decision) <= 32 && len(e.WorkerAction.Text) <= MaxTextBytes
 	}
 	return false
 }

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackgan90/Asterhand/internal/automation"
@@ -404,10 +405,18 @@ func (a *App) peersAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reqLocale := a.requestLocale(r)
-	result := []map[string]any{}
-	for _, p := range peers {
+	result := make([]map[string]any, len(peers))
+	var wg sync.WaitGroup
+	for idx, p := range peers {
+		idx, p := idx, p
 		row := map[string]any{"id": p.ID, "name": p.Name, "endpoint": p.Endpoint, "revoked": p.Revoked, "online": false}
-		if !p.Revoked {
+		result[idx] = row
+		if p.Revoked {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 			var cached struct {
 				Info    map[string]any `json:"info"`
 				Checked string         `json:"checked"`
@@ -437,9 +446,9 @@ func (a *App) peersAPI(w http.ResponseWriter, r *http.Request) {
 					row["error_args"] = args
 				}
 			}
-		}
-		result = append(result, row)
+		}()
 	}
+	wg.Wait()
 	send(w, 200, result)
 }
 func (a *App) jobsAPI(w http.ResponseWriter, r *http.Request) {
@@ -491,6 +500,7 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 	pages := a.Editors.Commands(editorCtx, "web", r.URL.Query().Get("editor_page"))
 	for {
 		refresh := a.refreshDone()
+		workersCh := a.workersDone()
 		http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Second))
 		if _, err := fmt.Fprintf(w, "event: refresh\ndata: %s\n\n", model.Now()); err != nil {
 			return
@@ -503,6 +513,13 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 				return
 			case <-refresh:
 				break waitRefresh
+			case <-workersCh:
+				workersCh = a.workersDone()
+				http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Second))
+				if _, err := fmt.Fprintf(w, "event: workers\ndata: %s\n\n", model.Now()); err != nil {
+					return
+				}
+				flusher.Flush()
 			case <-tick.C:
 				break waitRefresh
 			case msg, ok := <-pages:

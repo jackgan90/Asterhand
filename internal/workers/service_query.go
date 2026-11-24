@@ -22,28 +22,57 @@ func shouldWakeCaller(t Turn) bool {
 	return false
 }
 
+func shouldWakeCallerWithOpts(t Turn, opts WaitOptions) bool {
+	if shouldWakeCaller(t) {
+		return true
+	}
+	if opts.WakeOnCommentary && t.State == TurnRunning && t.LatestCommentarySeq > opts.AfterCommentarySeq {
+		return true
+	}
+	return false
+}
+
 func (s *Service) Wait(ctx context.Context, turnID, expectedWorkspaceID string, waitDur time.Duration) (Turn, string, bool, error) {
+	t, preview, trunc, _, err := s.WaitWithOptions(ctx, turnID, expectedWorkspaceID, WaitOptions{WaitDuration: waitDur})
+	return t, preview, trunc, err
+}
+
+func (s *Service) WaitWithOptions(ctx context.Context, turnID, expectedWorkspaceID string, opts WaitOptions) (Turn, string, bool, []CommentaryEntry, error) {
+	waitDur := opts.WaitDuration
 	if waitDur <= 0 || waitDur > automation.MaxWait {
 		waitDur = automation.MaxWait
 	}
+	finish := func(t Turn) (Turn, string, bool, []CommentaryEntry, error) {
+		if t.State == TurnWaitingInput && t.PendingInteraction != nil && !t.PendingInteraction.VisibleToHuman {
+			s.markInputObservedByCaller(t.ID)
+			if refreshed, gErr := s.GetTurn(t.ID, expectedWorkspaceID); gErr == nil {
+				t = refreshed
+			}
+		}
+		preview, trunc := s.readPreview(t)
+		comments, latestSeq := s.selectCommentaries(t.ID, opts.AfterCommentarySeq, 2)
+		if latestSeq > t.LatestCommentarySeq {
+			t.LatestCommentarySeq = latestSeq
+		}
+		return t, preview, trunc, comments, nil
+	}
+
 	t, err := s.GetTurn(turnID, expectedWorkspaceID)
 	if err != nil {
-		return Turn{}, "", false, err
+		return Turn{}, "", false, nil, err
 	}
-	if shouldWakeCaller(t) {
-		preview, trunc := s.readPreview(t)
-		return t, preview, trunc, nil
+	if shouldWakeCallerWithOpts(t, opts) {
+		return finish(t)
 	}
 	ch := s.subscribeWaiter(turnID)
 	defer s.unsubscribeWaiter(turnID, ch)
 
 	t, err = s.GetTurn(turnID, expectedWorkspaceID)
 	if err != nil {
-		return Turn{}, "", false, err
+		return Turn{}, "", false, nil, err
 	}
-	if shouldWakeCaller(t) {
-		preview, trunc := s.readPreview(t)
-		return t, preview, trunc, nil
+	if shouldWakeCallerWithOpts(t, opts) {
+		return finish(t)
 	}
 
 	timer := time.NewTimer(waitDur)
@@ -52,20 +81,17 @@ func (s *Service) Wait(ctx context.Context, turnID, expectedWorkspaceID string, 
 		select {
 		case <-ctx.Done():
 			t, _ = s.GetTurn(turnID, expectedWorkspaceID)
-			preview, trunc := s.readPreview(t)
-			return t, preview, trunc, nil
+			return finish(t)
 		case <-timer.C:
 			t, _ = s.GetTurn(turnID, expectedWorkspaceID)
-			preview, trunc := s.readPreview(t)
-			return t, preview, trunc, nil
+			return finish(t)
 		case <-ch:
 			t, err = s.GetTurn(turnID, expectedWorkspaceID)
 			if err != nil {
-				return Turn{}, "", false, err
+				return Turn{}, "", false, nil, err
 			}
-			if shouldWakeCaller(t) {
-				preview, trunc := s.readPreview(t)
-				return t, preview, trunc, nil
+			if shouldWakeCallerWithOpts(t, opts) {
+				return finish(t)
 			}
 		}
 	}
@@ -100,27 +126,39 @@ func (s *Service) buildWaitAnyItems(turnIDs []string, expectedWorkspaceID string
 		if triggered == "" && shouldWakeCaller(t) {
 			triggered = t.ID
 		}
+		if t.State == TurnWaitingInput && t.PendingInteraction != nil && !t.PendingInteraction.VisibleToHuman {
+			s.markInputObservedByCaller(t.ID)
+			if refreshed, gErr := s.GetTurn(t.ID, expectedWorkspaceID); gErr == nil {
+				t = refreshed
+			}
+		}
 		preview, trunc := s.readPreviewCapped(t, 4<<10)
+		comments, latestSeq := s.selectCommentaries(t.ID, 0, 2)
+		if latestSeq > t.LatestCommentarySeq {
+			t.LatestCommentarySeq = latestSeq
+		}
 		items = append(items, WaitAnyItem{
-			TurnID:             t.ID,
-			WorkerID:           t.WorkerID,
-			WorkspaceID:        t.WorkspaceID,
-			HarnessID:          t.HarnessID,
-			State:              t.State,
-			Progress:           t.Progress,
-			AnswerAvailable:    t.AnswerAvailable,
-			AnswerSource:       t.AnswerSource,
-			AnswerPreview:      preview,
-			Truncated:          trunc,
-			ResultBytes:        t.ResultBytes,
-			ElapsedSeconds:     t.ElapsedSeconds,
-			IdleSeconds:        t.IdleSeconds,
-			StreamEvents:       t.StreamEvents,
-			StreamBytes:        t.StreamBytes,
-			ErrorCode:          t.ErrorCode,
-			ErrorMessage:       t.ErrorMessage,
-			AfterVCS:           t.AfterVCS,
-			PendingInteraction: t.PendingInteraction,
+			TurnID:              t.ID,
+			WorkerID:            t.WorkerID,
+			WorkspaceID:         t.WorkspaceID,
+			HarnessID:           t.HarnessID,
+			State:               t.State,
+			Progress:            t.Progress,
+			AnswerAvailable:     t.AnswerAvailable,
+			AnswerSource:        t.AnswerSource,
+			AnswerPreview:       preview,
+			Truncated:           trunc,
+			ResultBytes:         t.ResultBytes,
+			ElapsedSeconds:      t.ElapsedSeconds,
+			IdleSeconds:         t.IdleSeconds,
+			StreamEvents:        t.StreamEvents,
+			StreamBytes:         t.StreamBytes,
+			ErrorCode:           t.ErrorCode,
+			ErrorMessage:        t.ErrorMessage,
+			AfterVCS:            t.AfterVCS,
+			PendingInteraction:  t.PendingInteraction,
+			LatestCommentarySeq: t.LatestCommentarySeq,
+			Commentaries:        comments,
 		})
 	}
 	return items, triggered, nil
@@ -584,4 +622,84 @@ func (s *Service) notifyWaiters(turnID string) {
 		default:
 		}
 	}
+}
+
+// SteerTurn injects mid-turn guidance into an actively running turn when the
+// underlying harness adapter implements SteerAdapter (e.g. Codex turn/steer,
+// Claude Code stream-json stdin). Never silently cancels or restarts turns on
+// harnesses without native steering support.
+func (s *Service) SteerTurn(ctx context.Context, in SteerInput) (Turn, error) {
+	turnID := strings.TrimSpace(in.TurnID)
+	if turnID == "" {
+		return Turn{}, automation.Fail("invalid_parameters", "turn_id is required")
+	}
+	text := strings.TrimSpace(in.Text)
+	if text == "" {
+		return Turn{}, automation.Fail("invalid_parameters", "text is required")
+	}
+	if len(text) > maxSteerBytes {
+		return Turn{}, automation.Fail("invalid_parameters", fmt.Sprintf("text exceeds %d bytes limit", maxSteerBytes))
+	}
+
+	t, err := s.GetTurn(turnID, in.WorkspaceID)
+	if err != nil {
+		return Turn{}, err
+	}
+	switch t.State {
+	case TurnWaitingApproval:
+		return Turn{}, automation.Fail("turn_not_running", "Turn is waiting for human permission approval; wait for approval to finish before steering")
+	case TurnWaitingInput:
+		return Turn{}, automation.Fail("turn_not_running", "Turn is waiting for input; use workers_reply instead of workers_steer")
+	case TurnRunning:
+	default:
+		return Turn{}, automation.Fail("turn_not_running", fmt.Sprintf("Turn is in %s state; wait or use workers_send to start a new turn instead", t.State))
+	}
+
+	s.mu.Lock()
+	rt, ok := s.activeTurns[turnID]
+	var adapter Adapter
+	var handle ThreadHandle
+	var nativeTurnID string
+	if ok && rt != nil && rt.handle != nil {
+		adapter = s.adapters[rt.harnessID]
+		handle = *rt.handle
+		nativeTurnID = rt.nativeTurnID
+	}
+	s.mu.Unlock()
+
+	if !ok || rt == nil || adapter == nil || nativeTurnID == "" {
+		return Turn{}, automation.Fail("turn_not_running", "Turn is not actively executing yet; wait briefly and retry")
+	}
+	steerer, ok := adapter.(SteerAdapter)
+	if !ok {
+		return Turn{}, automation.Fail("unsupported_steer", fmt.Sprintf("Harness %s does not support mid-turn steering; wait for this turn to finish (or cancel it) and call workers_send", t.HarnessID))
+	}
+
+	steerCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := steerer.SteerTurn(steerCtx, handle, nativeTurnID, text); err != nil {
+		return Turn{}, automation.Fail("steer_failed", fmt.Sprintf("Failed to steer running turn: %v", err))
+	}
+
+	now := s.now().UTC()
+	s.mu.Lock()
+	if cur, exists := s.activeTurns[turnID]; exists {
+		cur.lastEventAt = now
+	}
+	s.mu.Unlock()
+
+	_, _ = s.store.AppendLog(turnID, LogEntry{
+		Timestamp: now,
+		Kind:      "steer",
+		Summary:   truncateSummary("Steer: "+text, 500),
+	})
+	if latest, gErr := s.store.GetTurn(turnID); gErr == nil && latest.State == TurnRunning {
+		latest.Progress = "Steer delivered: " + truncateSummary(text, 120)
+		latest.UpdatedAt = now
+		_ = s.store.SaveTurn(latest)
+		t = latest
+	}
+	s.populateTurnActivity(&t)
+	s.notifyWaiters(turnID)
+	return t, nil
 }

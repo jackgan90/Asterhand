@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackgan90/Asterhand/internal/automation"
+	"github.com/jackgan90/Asterhand/internal/harnesses"
 	"github.com/jackgan90/Asterhand/internal/workers"
 )
 
@@ -47,9 +48,11 @@ type workerSendInput struct {
 }
 
 type workerWaitInput struct {
-	TurnID      string                 `json:"turn_id" description:"Turn identifier returned by workers_send"`
-	WorkspaceID string                 `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
-	WaitSeconds automation.OptionalInt `json:"wait_seconds,omitempty,omitzero" description:"Seconds to wait for progress or completion (1..30, default 30)"`
+	TurnID             string                 `json:"turn_id" description:"Turn identifier returned by workers_send"`
+	WorkspaceID        string                 `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
+	WaitSeconds        automation.OptionalInt `json:"wait_seconds,omitempty,omitzero" description:"Seconds to wait for progress or completion (1..30, default 30)"`
+	AfterCommentarySeq int64                  `json:"after_commentary_seq,omitempty" description:"Return only mid-turn commentary entries with seq greater than this value (pass previous latest_commentary_seq for incremental updates)"`
+	WakeOnCommentary   bool                   `json:"wake_on_commentary,omitempty" description:"When true, return immediately whenever the worker emits a new user-facing commentary update instead of waiting until wait_seconds expires"`
 }
 
 type workerWaitAnyInput struct {
@@ -88,17 +91,34 @@ type workerResolveInput struct {
 	Reason string `json:"reason" description:"Audit reason for manually closing the unresolved turn"`
 }
 
+type workerSteerInput struct {
+	TurnID      string `json:"turn_id" description:"Currently running turn_id returned by workers_send"`
+	WorkspaceID string `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
+	Text        string `json:"text" description:"Mid-turn steering guidance or correction to inject into the running turn"`
+}
+
+type workerSteerView struct {
+	Turn         workers.Turn `json:"turn"`
+	Steered      bool         `json:"steered"`
+	DeliveryMode string       `json:"delivery_mode,omitempty"`
+	NextStep     string       `json:"next_step,omitempty"`
+}
+
 type workerReplyInput struct {
-	TurnID          string              `json:"turn_id" description:"Turn identifier currently in waiting_input state"`
-	WorkspaceID     string              `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
-	Text            string              `json:"text,omitempty" description:"Plain-text answer to the worker's business question (omit if using answers map or escalate_to_human)"`
-	Answers         map[string][]string `json:"answers,omitempty" description:"Optional structured map of question_id to selected answer strings"`
-	EscalateToHuman bool                `json:"escalate_to_human,omitempty" description:"Set true when caller cannot decide and wants to escalate the question immediately to the human desktop/Web prompt"`
+	TurnID          string                 `json:"turn_id" description:"Turn identifier currently in waiting_input state"`
+	WorkspaceID     string                 `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
+	Text            string                 `json:"text,omitempty" description:"Plain-text answer to the worker's business question (omit if using answers, defer_seconds, or escalate_to_human)"`
+	Answers         map[string][]string    `json:"answers,omitempty" description:"Optional structured map of question_id to selected answer strings"`
+	EscalateToHuman bool                   `json:"escalate_to_human,omitempty" description:"Set true when caller cannot decide and wants to escalate the question immediately to the human desktop/Web prompt"`
+	DeferSeconds    automation.OptionalInt `json:"defer_seconds,omitempty,omitzero" description:"Defer automatic escalation to human UI by 30..300 seconds while caller verifies code or runs checks (repeatable; cannot combine with text/answers/escalate_to_human)"`
+	Note            string                 `json:"note,omitempty" description:"Optional verification summary or decision context attached when deferring or escalating to the human UI"`
 }
 
 type workerReplyView struct {
-	Turn      workers.Turn `json:"turn"`
-	Escalated bool         `json:"escalated,omitempty"`
+	Turn       workers.Turn `json:"turn"`
+	Escalated  bool         `json:"escalated,omitempty"`
+	Deferred   bool         `json:"deferred,omitempty"`
+	EscalateAt *time.Time   `json:"escalate_at,omitempty"`
 }
 
 type workerGetView struct {
@@ -107,22 +127,24 @@ type workerGetView struct {
 }
 
 type workerWaitView struct {
-	Turn               workers.Turn             `json:"turn"`
-	WorkerID           string                   `json:"worker_id"`
-	TurnID             string                   `json:"turn_id"`
-	State              string                   `json:"state"`
-	AnswerAvailable    bool                     `json:"answer_available"`
-	AnswerSource       string                   `json:"answer_source,omitempty"`
-	Answer             string                   `json:"answer,omitempty"`
-	PartialOutput      string                   `json:"partial_output,omitempty"`
-	Truncated          bool                     `json:"truncated,omitempty"`
-	ResultBytes        int                      `json:"result_bytes"`
-	ElapsedSeconds     int                      `json:"elapsed_seconds,omitempty"`
-	IdleSeconds        int                      `json:"idle_seconds,omitempty"`
-	StreamEvents       int64                    `json:"stream_events,omitempty"`
-	StreamBytes        int64                    `json:"stream_bytes,omitempty"`
-	PendingInteraction *workers.InteractionView `json:"pending_interaction,omitempty"`
-	NextStep           string                   `json:"next_step,omitempty"`
+	Turn                workers.Turn              `json:"turn"`
+	WorkerID            string                    `json:"worker_id"`
+	TurnID              string                    `json:"turn_id"`
+	State               string                    `json:"state"`
+	AnswerAvailable     bool                      `json:"answer_available"`
+	AnswerSource        string                    `json:"answer_source,omitempty"`
+	Answer              string                    `json:"answer,omitempty"`
+	PartialOutput       string                    `json:"partial_output,omitempty"`
+	Truncated           bool                      `json:"truncated,omitempty"`
+	ResultBytes         int                       `json:"result_bytes"`
+	ElapsedSeconds      int                       `json:"elapsed_seconds,omitempty"`
+	IdleSeconds         int                       `json:"idle_seconds,omitempty"`
+	StreamEvents        int64                     `json:"stream_events,omitempty"`
+	StreamBytes         int64                     `json:"stream_bytes,omitempty"`
+	LatestCommentarySeq int64                     `json:"latest_commentary_seq,omitempty"`
+	Commentaries        []workers.CommentaryEntry `json:"commentaries,omitempty"`
+	PendingInteraction  *workers.InteractionView  `json:"pending_interaction,omitempty"`
+	NextStep            string                    `json:"next_step,omitempty"`
 }
 
 type workerWaitAnyView struct {
@@ -289,28 +311,37 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			if err != nil {
 				return automation.Outcome{}, err
 			}
+			if v.AfterCommentarySeq < 0 {
+				return automation.Outcome{}, automation.Fail("invalid_parameters", "after_commentary_seq must be non-negative")
+			}
 			dur := time.Duration(waitSec) * time.Second
-			t, preview, trunc, err := a.Workers.Wait(ctx, v.TurnID, v.WorkspaceID, dur)
+			t, preview, trunc, commentaries, err := a.Workers.WaitWithOptions(ctx, v.TurnID, v.WorkspaceID, workers.WaitOptions{
+				WaitDuration:       dur,
+				AfterCommentarySeq: v.AfterCommentarySeq,
+				WakeOnCommentary:   v.WakeOnCommentary,
+			})
 			if err != nil {
 				return automation.Outcome{}, err
 			}
 			return automation.Outcome{Data: workerWaitView{
-				Turn:               t,
-				WorkerID:           t.WorkerID,
-				TurnID:             t.ID,
-				State:              t.State,
-				AnswerAvailable:    t.AnswerAvailable,
-				AnswerSource:       t.AnswerSource,
-				Answer:             preview,
-				PartialOutput:      t.PartialOutput,
-				Truncated:          trunc,
-				ResultBytes:        t.ResultBytes,
-				ElapsedSeconds:     t.ElapsedSeconds,
-				IdleSeconds:        t.IdleSeconds,
-				StreamEvents:       t.StreamEvents,
-				StreamBytes:        t.StreamBytes,
-				PendingInteraction: t.PendingInteraction,
-				NextStep:           workerWaitNextStep(t, trunc),
+				Turn:                t,
+				WorkerID:            t.WorkerID,
+				TurnID:              t.ID,
+				State:               t.State,
+				AnswerAvailable:     t.AnswerAvailable,
+				AnswerSource:        t.AnswerSource,
+				Answer:              preview,
+				PartialOutput:       t.PartialOutput,
+				Truncated:           trunc,
+				ResultBytes:         t.ResultBytes,
+				ElapsedSeconds:      t.ElapsedSeconds,
+				IdleSeconds:         t.IdleSeconds,
+				StreamEvents:        t.StreamEvents,
+				StreamBytes:         t.StreamBytes,
+				LatestCommentarySeq: t.LatestCommentarySeq,
+				Commentaries:        commentaries,
+				PendingInteraction:  t.PendingInteraction,
+				NextStep:            workerWaitNextStep(t, trunc, len(commentaries)),
 			}}, nil
 		})
 
@@ -463,8 +494,43 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 		})
 
 	automation.Register(r, automation.Definition{
+		Name:        "workers_steer",
+		Description: "Inject mid-turn guidance or corrections into an actively running worker turn for harnesses with supports_steer=true (Codex turn/steer RPC; Claude Code stream-json stdin applied at the next tool boundary); never cancels or restarts turns on unsupported harnesses",
+		Role:        "execute",
+		Toolset:     automation.ToolsetCollab,
+		Write:       true,
+		Control:     true,
+	}, func(v workerSteerInput) string { return v.TurnID },
+		func(p automation.Principal, v workerSteerInput) error { return scopeWorkers(p, v.TurnID) },
+		func(ctx context.Context, call automation.Call, v workerSteerInput) (automation.Outcome, error) {
+			if a.Workers == nil {
+				return automation.Outcome{}, automation.Fail("unavailable", "Workers service is unavailable")
+			}
+			t, err := a.Workers.SteerTurn(ctx, workers.SteerInput{
+				TurnID:      v.TurnID,
+				WorkspaceID: v.WorkspaceID,
+				Text:        v.Text,
+			})
+			if err != nil {
+				return automation.Outcome{}, err
+			}
+			a.notifyWorkers()
+			deliveryMode := "rpc"
+			nextStep := fmt.Sprintf("Steering message injected into running turn. Continue calling workers_wait(turn_id=%q) to observe worker progress and response.", t.ID)
+			if t.HarnessID == harnesses.HarnessClaudeCode {
+				deliveryMode = "tool_boundary"
+				nextStep = fmt.Sprintf("Steering message queued on Claude stream-json stdin (takes effect at the next tool boundary; if Claude has already entered final text generation with no remaining tool calls, check the final answer and follow up with workers_send if needed). Continue calling workers_wait(turn_id=%q).", t.ID)
+			}
+			return automation.Outcome{
+				Accepted: true,
+				Data:     workerSteerView{Turn: t, Steered: true, DeliveryMode: deliveryMode, NextStep: nextStep},
+				Summary:  map[string]any{"worker_id": t.WorkerID, "turn_id": t.ID, "state": t.State, "steered": true, "delivery_mode": deliveryMode},
+			}, nil
+		})
+
+	automation.Register(r, automation.Definition{
 		Name:        "workers_reply",
-		Description: "Answer a worker turn's waiting_input business question or escalate it to the human UI (cannot be used to approve waiting_approval permission prompts)",
+		Description: "Answer a worker turn's waiting_input business question, defer human escalation (defer_seconds=30..300) while verifying code, or escalate to human UI with an optional verification note (cannot approve waiting_approval)",
 		Role:        "execute",
 		Toolset:     automation.ToolsetCollab,
 		Write:       true,
@@ -475,6 +541,10 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			if a.Workers == nil {
 				return automation.Outcome{}, automation.Fail("unavailable", "Workers service is unavailable")
 			}
+			deferSec, err := optionalIntRange(v.DeferSeconds, "defer_seconds", 0, workers.MinDeferSeconds, workers.MaxDeferSeconds)
+			if err != nil {
+				return automation.Outcome{}, err
+			}
 			t, escalated, err := a.Workers.ReplyTurn(workers.ReplyInput{
 				OperationID:     call.Identity.ID,
 				TurnID:          v.TurnID,
@@ -482,14 +552,21 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 				Text:            v.Text,
 				Answers:         v.Answers,
 				EscalateToHuman: v.EscalateToHuman,
+				DeferSeconds:    deferSec,
+				Note:            v.Note,
 			})
 			if err != nil {
 				return automation.Outcome{}, err
 			}
+			deferred := deferSec > 0
+			var escAt *time.Time
+			if t.PendingInteraction != nil {
+				escAt = t.PendingInteraction.EscalateAt
+			}
 			return automation.Outcome{
 				Accepted: true,
-				Data:     workerReplyView{Turn: t, Escalated: escalated},
-				Summary:  map[string]any{"worker_id": t.WorkerID, "turn_id": t.ID, "state": t.State, "escalated": escalated},
+				Data:     workerReplyView{Turn: t, Escalated: escalated, Deferred: deferred, EscalateAt: escAt},
+				Summary:  map[string]any{"worker_id": t.WorkerID, "turn_id": t.ID, "state": t.State, "escalated": escalated, "deferred": deferred},
 			}, nil
 		})
 
@@ -518,9 +595,12 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 		})
 }
 
-func workerWaitNextStep(t workers.Turn, truncated bool) string {
+func workerWaitNextStep(t workers.Turn, truncated bool, newCommentaries int) string {
 	switch t.State {
 	case workers.TurnRunning, workers.TurnPrepared:
+		if newCommentaries > 0 {
+			return fmt.Sprintf("Turn is still %s with %d commentary update(s) (latest_commentary_seq=%d). Review commentaries, optionally call workers_steer(turn_id=%q, text=...) if supported, and continue calling workers_wait(turn_id=%q, after_commentary_seq=%d).", t.State, newCommentaries, t.LatestCommentarySeq, t.ID, t.ID, t.LatestCommentarySeq)
+		}
 		if t.StreamEvents > 0 {
 			return fmt.Sprintf("Turn is still %s (elapsed=%ds, idle=%ds, stream_events=%d). Continue calling workers_wait(turn_id=%q).", t.State, t.ElapsedSeconds, t.IdleSeconds, t.StreamEvents, t.ID)
 		}
@@ -531,7 +611,7 @@ func workerWaitNextStep(t workers.Turn, truncated bool) string {
 		if t.PendingInteraction != nil && t.PendingInteraction.VisibleToHuman {
 			return fmt.Sprintf("Turn is waiting for human input in Asterhand desktop/Web UI (already escalated). Continue calling workers_wait(turn_id=%q).", t.ID)
 		}
-		return fmt.Sprintf("Worker asked a business question (see pending_interaction.questions). Answer via workers_reply(turn_id=%q, text=...) or escalate via workers_reply(turn_id=%q, escalate_to_human=true).", t.ID, t.ID)
+		return fmt.Sprintf("Worker asked a business question (see pending_interaction.questions). Answer via workers_reply(turn_id=%q, text=...), defer escalation while verifying via workers_reply(turn_id=%q, defer_seconds=120), or escalate via workers_reply(turn_id=%q, escalate_to_human=true, note=...).", t.ID, t.ID, t.ID)
 	case workers.TurnCompleted:
 		if truncated {
 			return fmt.Sprintf("Turn completed with truncated preview. Call workers_result(turn_id=%q) with cursor to read the rest.", t.ID)
@@ -556,6 +636,7 @@ func describeWorkerAutomationResults(r *automation.Registry) {
 	r.DescribeData("workers_send", automation.Schema[workers.Turn]())
 	r.DescribeData("workers_wait", automation.Schema[workerWaitView]())
 	r.DescribeData("workers_wait_any", automation.Schema[workerWaitAnyView]())
+	r.DescribeData("workers_steer", automation.Schema[workerSteerView]())
 	r.DescribeData("workers_reply", automation.Schema[workerReplyView]())
 	r.DescribeData("workers_result", automation.Schema[workers.ResultPage]())
 	r.DescribeData("workers_logs", automation.Schema[workerLogsView]())

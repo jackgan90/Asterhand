@@ -57,6 +57,7 @@ func (a *App) wireWorkerNotifications() {
 				HardRedline:      v.HardRedline,
 				OutsideWorkspace: v.OutsideWorkspace,
 				AllowSessionOK:   v.AllowSessionOK,
+				EscalationNote:   v.EscalationNote,
 				Questions:        qs,
 			})
 		}

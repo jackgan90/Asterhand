@@ -621,3 +621,73 @@ func TestClaudeAdapterStreamEventHeartbeatAndResumeAfterInterrupt(t *testing.T) 
 		t.Fatalf("respawn after interrupted turn must use --resume (not --session-id): %s", joined2)
 	}
 }
+
+func TestClaudeAdapterSteerMidTurn(t *testing.T) {
+	var mu sync.Mutex
+	var userMsgs []string
+	adapter := &ClaudeAdapter{
+		spawn: func(exe string, args []string, workdir string, env []string) (workerProcess, error) {
+			fp := newPipeFakeProc()
+			go func() {
+				defer fp.finish()
+				sc := bufio.NewScanner(fp.inR)
+				for sc.Scan() {
+					var m map[string]any
+					_ = json.Unmarshal([]byte(sc.Text()), &m)
+					switch m["type"] {
+					case "control_request":
+						reqID, _ := m["request_id"].(string)
+						_, _ = io.WriteString(fp.outW, `{"type":"control_response","response":{"subtype":"success","request_id":"`+reqID+`"}}`+"\n")
+					case "user":
+						msg, _ := m["message"].(map[string]any)
+						content, _ := msg["content"].(string)
+						mu.Lock()
+						userMsgs = append(userMsgs, content)
+						n := len(userMsgs)
+						mu.Unlock()
+						if n == 1 {
+							_, _ = io.WriteString(fp.outW, `{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"Working on step 1"}]}}`+"\n")
+						} else {
+							_, _ = io.WriteString(fp.outW, `{"type":"result","subtype":"success","is_error":false,"result":"STEERED:`+content+`"}`+"\n")
+						}
+					}
+				}
+			}()
+			return fp, nil
+		},
+	}
+
+	h, err := adapter.OpenThread(context.Background(), ThreadOpenSpec{
+		WorkerID: "w_cl_steer", Executable: "claude", WorkspaceRoot: t.TempDir(), AccessMode: harnesses.AccessReadOnly,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.CloseThread(h)
+
+	gotComment := make(chan struct{}, 1)
+	nid, doneCh, err := adapter.StartTurn(context.Background(), h, TurnStartSpec{Prompt: "start review"}, func(ev AdapterEvent) {
+		if ev.Kind == "commentary" {
+			select {
+			case gotComment <- struct{}{}:
+			default:
+			}
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-gotComment:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for Claude commentary")
+	}
+	if err := adapter.SteerTurn(context.Background(), h, nid, "check auth.go too"); err != nil {
+		t.Fatalf("Claude SteerTurn failed: %v", err)
+	}
+	out := <-doneCh
+	ans, _, _, _ := SelectFinalAnswer(out.State, out.Items)
+	if out.State != TurnCompleted || ans != "STEERED:check auth.go too" {
+		t.Fatalf("expected STEERED:check auth.go too, got state=%s ans=%q", out.State, ans)
+	}
+}

@@ -567,9 +567,43 @@ func TestM2HarnessesDiscoveryOpsAndWorkspaceWritePolicy(t *testing.T) {
 		t.Fatalf("expected invalid_parameters for wall_clock_seconds=15, got %+v", rBadWC.Error)
 	}
 
-	// 7. Structured next_step helper on waiting_approval instructs caller not to cancel.
-	waitStep := workerWaitNextStep(workers.Turn{ID: "turn_wait_1", State: workers.TurnWaitingApproval}, false)
+	// 7. Structured next_step helper on waiting_approval instructs caller not to cancel,
+	//    and waiting_input advertises defer_seconds + note escalation.
+	waitStep := workerWaitNextStep(workers.Turn{ID: "turn_wait_1", State: workers.TurnWaitingApproval}, false, 0)
 	if !strings.Contains(waitStep, "do not cancel") || !strings.Contains(waitStep, "turn_wait_1") {
 		t.Fatalf("expected waiting_approval next_step to advise not cancelling and include turn_id, got %q", waitStep)
+	}
+	inStep := workerWaitNextStep(workers.Turn{ID: "turn_wait_2", State: workers.TurnWaitingInput}, false, 0)
+	if !strings.Contains(inStep, "defer_seconds") || !strings.Contains(inStep, "note=") {
+		t.Fatalf("expected waiting_input next_step to mention defer_seconds and note, got %q", inStep)
+	}
+
+	// 8. workers_reply defer_seconds range validation & workers_wait negative after_commentary_seq rejected.
+	for _, badDef := range []int{10, 301} {
+		opRep := testAutomationCall(a, tok, "operations_new_id", "", map[string]any{"operation": "workers_reply"}).Data.(map[string]string)["operation_id"]
+		rr := testAutomationCall(a, tok, "workers_reply", opRep, workerReplyInput{TurnID: "turn_missing", DeferSeconds: automation.Int(badDef)})
+		if rr.Error == nil || rr.Error.Code != "invalid_parameters" || !strings.Contains(rr.Error.Message, "between 30 and 300") {
+			t.Fatalf("expected range invalid_parameters for defer_seconds=%d, got %+v", badDef, rr.Error)
+		}
+	}
+	if rNeg := testAutomationCall(a, tok, "workers_wait", "", workerWaitInput{TurnID: "turn_missing", AfterCommentarySeq: -1}); rNeg.Error == nil || rNeg.Error.Code != "invalid_parameters" {
+		t.Fatalf("expected invalid_parameters for negative after_commentary_seq, got %+v", rNeg.Error)
+	}
+	opSteer := testAutomationCall(a, tok, "operations_new_id", "", map[string]any{"operation": "workers_steer"}).Data.(map[string]string)["operation_id"]
+	if rSteer := testAutomationCall(a, tok, "workers_steer", opSteer, workerSteerInput{TurnID: "turn_missing", Text: ""}); rSteer.Error == nil || rSteer.Error.Code != "invalid_parameters" {
+		t.Fatalf("expected invalid_parameters for empty workers_steer text, got %+v", rSteer.Error)
+	}
+
+	// 9. harnesses_list advertises supports_steer accurately (codex/claude=true, deepseek/antigravity=false).
+	hl := testAutomationCall(a, tok, "harnesses_list", "", automation.Empty{})
+	if hl.Error != nil {
+		t.Fatalf("harnesses_list failed: %+v", hl.Error)
+	}
+	hlView := hl.Data.(harnessesListView)
+	for _, hView := range hlView.Items {
+		wantSteer := hView.ID == harnesses.HarnessCodex || hView.ID == harnesses.HarnessClaudeCode
+		if hView.Capabilities.SupportsSteer != wantSteer {
+			t.Fatalf("harness %s supports_steer=%v, want %v", hView.ID, hView.Capabilities.SupportsSteer, wantSteer)
+		}
 	}
 }

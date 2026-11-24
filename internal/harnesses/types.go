@@ -29,6 +29,7 @@ type Capabilities struct {
 	WorkspaceWriteLevel  string   `json:"workspace_write_level"`
 	HasNativeFileTools   bool     `json:"has_native_file_tools,omitempty"`
 	SupportsAutoApproval bool     `json:"supports_auto_approval"`
+	SupportsSteer        bool     `json:"supports_steer"`
 	ReasoningEfforts     []string `json:"reasoning_efforts,omitempty"`
 	WorkerNoticeKey      string   `json:"worker_notice_key,omitempty"`
 }
@@ -44,6 +45,7 @@ func StaticCapabilities(harnessID string) (Capabilities, bool) {
 			ReadOnlyLevel:        ProtectionUnsupported,
 			WorkspaceWriteLevel:  ProtectionUnsupported,
 			SupportsAutoApproval: false,
+			SupportsSteer:        false,
 			WorkerNoticeKey:      "harnesses.notice.antigravity_caller_only",
 		}, true
 	case HarnessCodex:
@@ -56,6 +58,7 @@ func StaticCapabilities(harnessID string) (Capabilities, bool) {
 			WorkspaceWriteLevel:  ProtectionOSSandbox,
 			HasNativeFileTools:   true,
 			SupportsAutoApproval: true,
+			SupportsSteer:        true,
 			ReasoningEfforts:     []string{"low", "medium", "high", "xhigh"},
 		}, true
 	case HarnessClaudeCode:
@@ -68,6 +71,7 @@ func StaticCapabilities(harnessID string) (Capabilities, bool) {
 			WorkspaceWriteLevel:  ProtectionHarnessRestrict,
 			HasNativeFileTools:   true,
 			SupportsAutoApproval: true,
+			SupportsSteer:        true,
 			ReasoningEfforts:     []string{"low", "medium", "high", "xhigh", "max"},
 		}, true
 	case HarnessDeepSeek:
@@ -80,6 +84,7 @@ func StaticCapabilities(harnessID string) (Capabilities, bool) {
 			WorkspaceWriteLevel:  ProtectionHarnessRestrict,
 			HasNativeFileTools:   true,
 			SupportsAutoApproval: false,
+			SupportsSteer:        false,
 			ReasoningEfforts:     []string{"off", "low", "high", "max"},
 		}, true
 	default:

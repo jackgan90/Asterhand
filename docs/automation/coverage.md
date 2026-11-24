@@ -109,8 +109,8 @@
 
 | 人类操作 / 入口 | 公共操作（CLI 与 MCP 等价） | 分类与规则 |
 |---|---|---|
-| 创建、查询、纯写派发、有界等待（含多轮次 `workers_wait_any`）、回答业务提问（`workers_reply`）、分页与尾部读正文/日志、精确取消、关闭与人工核对协作 Worker | `workers_create/list/get/send/wait/wait_any/reply/result/logs/cancel/close/resolve` | 归属 `collab` 工具集；写操作统一使用 `operation_id` 幂等收据、单 Worker 活跃锁与规范化工作树写互斥；`cancel` 必填 `turn_id`；`workers_reply` 仅允许回答 `waiting_input` 业务提问或显式升级人类，不可用于审批 `waiting_approval` |
+| 创建、查询、纯写派发、有界等待（含 `commentaries`/`wake_on_commentary` 与多轮次 `workers_wait_any`）、运行中插话（`workers_steer`）、回答/续期核实/带附注升级业务提问（`workers_reply`）、分页与尾部读正文/日志、精确取消、关闭与人工核对协作 Worker | `workers_create/list/get/send/wait/wait_any/steer/reply/result/logs/cancel/close/resolve` | 归属 `collab` 工具集；写操作统一使用 `operation_id` 幂等收据、单 Worker 活跃锁与规范化工作树写互斥；`workers_steer` 仅允许对声明 `supports_steer: true` 且处于 `running` 的轮次注入补充指令；`cancel` 必填 `turn_id`；`workers_reply` 仅允许回答、续期核实（`defer_seconds`）或带附注显式升级 `waiting_input` 业务提问，不可用于审批 `waiting_approval` |
 | Web「编程协作者」面板查看各项目 Worker、轮次、工作树快照与实时日志、停止/核对/归档（`/api/workers/*`） | `workers_list/get/wait/result/logs/cancel/close/resolve`（Milestone 1—2 已实现） | 业务状态、日志分页、工作树快照、取消、归档与核对关闭完全等价；界面滚动/筛选/展开属展示等价 |
 | 修改 Harness 权限开关（含 `allow_workspace_write`）、手工路径覆盖、执行外部 MCP 配置接管/重新接入 | 无（Web「设置 → 编程智能体」`/api/harnesses*` 人工专用入口，Milestone 1—2 已实现） | **人工例外**（`AUTO-19`）：修改本机外部工具全局配置与协作权限边界，禁止开放给模型自动写入；日常任意常规本地项目免逐项目登记直通，敏感系统与凭据目录由服务端内置拦截 |
-| 查看全部已发现的 Coding Harness、版本、能力矩阵（含 `supports_auto_approval`）、三开关与期望/观察 MCP 托管状态 | `harnesses_list`、`harnesses_get`（Milestone 2 已实现） | 归属 `collab` 工具集，公共只读查询，不含凭据或内部 token |
-| 批准或拒绝被控 Harness B 的权限审批、开启/撤销 Worker「本会话免审」或作为人类接管回答待处理队列（Milestone 4.1 实施中） | 无（右下角单一交互浮窗与 Web「编程协作者」`/api/workers/interactions*`、`/api/workers/{id}/session-auto-approve` 人工专用入口） | **人工例外**（`AUTO-20`）：绝不开放给发起方 A 的模型代批或自行开启会话免审 |
+| 查看全部已发现的 Coding Harness、版本、能力矩阵（含 `supports_auto_approval`、`supports_steer`）、三开关与期望/观察 MCP 托管状态 | `harnesses_list`、`harnesses_get`（Milestone 2 已实现） | 归属 `collab` 工具集，公共只读查询，不含凭据或内部 token |
+| 批准或拒绝被控 Harness B 的权限审批、开启/撤销 Worker「本会话免审」或作为人类接管回答待处理队列（含提前抢答主控核实中的提问） | 无（右下角单一交互浮窗与 Web「编程协作者」`/api/workers/interactions*`、`/api/workers/session-auto-approve` 人工专用入口） | **人工例外**（`AUTO-20`）：绝不开放给发起方 A 的模型代批或自行开启会话免审 |

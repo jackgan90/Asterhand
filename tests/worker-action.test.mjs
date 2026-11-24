@@ -46,7 +46,7 @@ function makeFakeDoc() {
     'action-approval-body', 'action-tool-pill', 'action-risk-pill', 'action-project',
     'action-summary', 'action-cmd-wrap', 'action-cmd', 'action-cmd-toggle', 'action-paths',
     'action-reason', 'btn-allow-once', 'btn-allow-session', 'btn-deny', 'btn-cancel-approval',
-    'action-input-body', 'action-input-project', 'action-questions', 'action-answer-input',
+    'action-input-body', 'action-input-project', 'action-input-note', 'action-questions', 'action-answer-input',
     'btn-send-answer', 'btn-cancel-input',
   ];
   const map = new Map(ids.map(id => [id, makeFakeElement(id)]));
@@ -94,6 +94,7 @@ test('workerActionView handles approval/question queue switching, hard-redline h
       harness_id: 'claude-code',
       workspace_root: 'F:\\proj\\minidb',
       summary: 'Pick test runner',
+      escalation_note: 'Verified repo uses pytest in CI',
       questions: [{id: 'q1', question: 'Pick test runner', options: [{label: 'pytest'}, {label: 'unittest'}]}],
     },
   ];
@@ -109,6 +110,8 @@ test('workerActionView handles approval/question queue switching, hard-redline h
   doc.getElementById('action-next').dispatch('click');
   assert.equal(doc.getElementById('action-approval-body').hidden, true);
   assert.equal(doc.getElementById('action-input-body').hidden, false);
+  assert.equal(doc.getElementById('action-input-note').hidden, false);
+  assert.match(doc.getElementById('action-input-note').textContent, /Verified repo uses pytest in CI/);
   assert.equal(doc.getElementById('action-counter').textContent, '2 / 2');
 
   // Enter during IME composition must NOT submit.

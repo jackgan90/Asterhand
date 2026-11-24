@@ -529,3 +529,272 @@ func TestDecideAllowSessionPersistsSynchronouslyBeforeReturning(t *testing.T) {
 		t.Fatalf("expected completed turn, got %s err=%v", doneTurn.State, err)
 	}
 }
+
+type steerableFakeAdapter struct {
+	interactiveFakeAdapter
+	mu       sync.Mutex
+	steered  []string
+	onSteer  func(text string)
+}
+
+func (a *steerableFakeAdapter) SteerTurn(_ context.Context, _ ThreadHandle, _ string, text string) error {
+	a.mu.Lock()
+	a.steered = append(a.steered, text)
+	fn := a.onSteer
+	a.mu.Unlock()
+	if fn != nil {
+		fn(text)
+	}
+	return nil
+}
+
+func TestWaitingInputTwoStageClaimDeferAndNoteEscalation(t *testing.T) {
+	var mu sync.Mutex
+	var answers []string
+	adapter := &interactiveFakeAdapter{
+		harnessID: harnesses.HarnessClaudeCode,
+		run: func(ctx context.Context, spec TurnStartSpec, onEvent func(AdapterEvent)) TurnOutcome {
+			// Q1: caller claims -> defers -> escalates with verification note -> human answers.
+			dec1, err := spec.OnInteraction(ctx, InteractionRequest{
+				Kind:    InteractionInput,
+				Summary: "Pick storage engine",
+				Questions: []InteractionQuestion{{
+					ID: "q1", Question: "Pick storage engine",
+					Options: []InteractionOption{{Label: "SQLite"}, {Label: "JSON"}},
+				}},
+			})
+			if err != nil {
+				return TurnOutcome{State: TurnFailed, ErrorMessage: err.Error()}
+			}
+			// Q2: caller defers, then human takes over early -> late caller reply gets conflict.
+			dec2, err := spec.OnInteraction(ctx, InteractionRequest{
+				Kind:      InteractionInput,
+				Summary:   "Confirm port",
+				Questions: []InteractionQuestion{{ID: "q2", Question: "Confirm port"}},
+			})
+			if err != nil {
+				return TurnOutcome{State: TurnFailed, ErrorMessage: err.Error()}
+			}
+			mu.Lock()
+			answers = append(answers, dec1.Text, dec2.Text)
+			mu.Unlock()
+			return TurnOutcome{
+				State: TurnCompleted,
+				Items: []NativeItem{{ItemID: "i1", Type: "agentMessage", Phase: "final_answer", Text: "all_answered"}},
+			}
+		},
+	}
+
+	svc, ws := setupInteractiveTestService(t, harnesses.HarnessClaudeCode, adapter)
+	svc.budgets.InputCallerGrace = 120 * time.Millisecond
+	svc.budgets.InputClaimedGrace = 450 * time.Millisecond
+
+	w, err := svc.Create(context.Background(), CreateInput{
+		OperationID: "op_def_c1", HarnessID: harnesses.HarnessClaudeCode, WorkspaceRoot: ws,
+		AccessMode: harnesses.AccessReadOnly,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := svc.Send(context.Background(), SendInput{
+		OperationID: "op_def_s1", WorkerID: w.ID, Prompt: "review",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Stage 1 -> Stage 2: caller observes Q1 via Wait -> ClaimedByCaller=true and stays silent for desktop past 120ms.
+	wt, _, _, err := svc.Wait(context.Background(), turn.ID, "", 2*time.Second)
+	if err != nil || wt.State != TurnWaitingInput || wt.PendingInteraction == nil {
+		t.Fatalf("expected waiting_input Q1, got state=%s pi=%+v err=%v", wt.State, wt.PendingInteraction, err)
+	}
+	if !wt.PendingInteraction.ClaimedByCaller || wt.PendingInteraction.EscalateAt == nil {
+		t.Fatalf("expected caller observation to claim Q1 and set escalate_at, got %+v", wt.PendingInteraction)
+	}
+	time.Sleep(180 * time.Millisecond)
+	if len(svc.ListHumanInteractions()) != 0 {
+		t.Fatalf("expected claimed Q1 NOT to escalate after unclaimed 120ms grace")
+	}
+
+	// Caller explicitly defers escalation while verifying code.
+	defT, escalated, err := svc.ReplyTurn(ReplyInput{
+		TurnID: turn.ID, DeferSeconds: 60, Note: "Verifying storage benchmarks",
+	})
+	if err != nil || escalated || defT.PendingInteraction == nil || defT.PendingInteraction.DeferCount != 1 {
+		t.Fatalf("expected deferred Q1, got esc=%v pi=%+v err=%v", escalated, defT.PendingInteraction, err)
+	}
+	if len(svc.ListHumanInteractions()) != 0 {
+		t.Fatalf("deferred Q1 must not pop desktop notification")
+	}
+	allPending := svc.ListAllPendingInteractions()
+	if len(allPending) != 1 || allPending[0].EscalationNote != "Verifying storage benchmarks" {
+		t.Fatalf("expected Web ListAllPendingInteractions to expose claimed/deferred Q1 with note, got %+v", allPending)
+	}
+
+	// Caller finishes verifying and escalates to human WITH a decision note.
+	escT, escalated, err := svc.ReplyTurn(ReplyInput{
+		TurnID: turn.ID, EscalateToHuman: true, Note: "SQLite needs 0 extra deps; JSON is simpler—please choose",
+	})
+	if err != nil || !escalated || escT.PendingInteraction == nil || !escT.PendingInteraction.VisibleToHuman {
+		t.Fatalf("expected escalated Q1, got esc=%v pi=%+v err=%v", escalated, escT.PendingInteraction, err)
+	}
+	humanList := svc.ListHumanInteractions()
+	if len(humanList) != 1 || humanList[0].EscalationNote != "SQLite needs 0 extra deps; JSON is simpler—please choose" {
+		t.Fatalf("expected human popup to carry escalation_note, got %+v", humanList)
+	}
+	if _, err := svc.DecideInteractionHuman(humanList[0].RequestID, InteractionDecision{
+		Decision: DecisionAnswer, Text: "SQLite",
+	}); err != nil {
+		t.Fatalf("human answer Q1 failed: %v", err)
+	}
+
+	// Q2: caller claims & defers, then human takes over early from Web!
+	wt2, _, _, err := svc.Wait(context.Background(), turn.ID, "", 2*time.Second)
+	if err != nil || wt2.State != TurnWaitingInput || wt2.PendingInteraction == nil {
+		t.Fatalf("expected waiting_input Q2, got state=%s err=%v", wt2.State, err)
+	}
+	if _, _, err := svc.ReplyTurn(ReplyInput{TurnID: turn.ID, DeferSeconds: 60}); err != nil {
+		t.Fatalf("defer Q2 failed: %v", err)
+	}
+	q2ReqID := wt2.PendingInteraction.RequestID
+	if _, err := svc.DecideInteractionHuman(q2ReqID, InteractionDecision{
+		Decision: DecisionAnswer, Text: "9090",
+	}); err != nil {
+		t.Fatalf("human early takeover Q2 failed: %v", err)
+	}
+	// Late caller reply after human early takeover must fail cleanly with conflict.
+	if _, _, err := svc.ReplyTurn(ReplyInput{TurnID: turn.ID, Text: "8080"}); err == nil {
+		t.Fatalf("expected conflict on late caller ReplyTurn after human early takeover")
+	}
+
+	doneTurn, _, _, err := svc.Wait(context.Background(), turn.ID, "", 3*time.Second)
+	if err != nil || doneTurn.State != TurnCompleted {
+		t.Fatalf("expected completed turn, got %s err=%v", doneTurn.State, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(answers) != 2 || answers[0] != "SQLite" || answers[1] != "9090" {
+		t.Fatalf("unexpected delivered answers: %v", answers)
+	}
+}
+
+func TestSteerTurnAndCommentaryWake(t *testing.T) {
+	steerReceived := make(chan string, 1)
+	finishGate := make(chan struct{})
+	adapter := &steerableFakeAdapter{
+		interactiveFakeAdapter: interactiveFakeAdapter{
+			harnessID: harnesses.HarnessCodex,
+			run: func(ctx context.Context, spec TurnStartSpec, onEvent func(AdapterEvent)) TurnOutcome {
+				it1 := NativeItem{ItemID: "c1", Type: "agentMessage", Phase: "commentary", Text: "Found race in interactions.go"}
+				onEvent(AdapterEvent{Kind: "commentary", ItemID: "c1", Phase: "commentary", Summary: it1.Text, Item: &it1})
+				steeredText := <-steerReceived
+				it2 := NativeItem{ItemID: "c2", Type: "agentMessage", Phase: "commentary", Text: "Incorporated steer: " + steeredText}
+				onEvent(AdapterEvent{Kind: "commentary", ItemID: "c2", Phase: "commentary", Summary: it2.Text, Item: &it2})
+				<-finishGate
+				// Simulate Claude emitting final text also as a commentary event right before completion;
+				// finalizeTurn must deduplicate the trailing entry matching final_answer!
+				dupFinal := NativeItem{ItemID: "f1", Type: "agentMessage", Phase: "commentary", Text: "REVIEW_DONE"}
+				onEvent(AdapterEvent{Kind: "commentary", ItemID: "f1", Phase: "commentary", Summary: dupFinal.Text, Item: &dupFinal})
+				return TurnOutcome{
+					State: TurnCompleted,
+					Items: []NativeItem{it1, it2, {ItemID: "f1", Type: "agentMessage", Phase: "final_answer", Text: "REVIEW_DONE"}},
+				}
+			},
+		},
+		onSteer: func(text string) { steerReceived <- text },
+	}
+
+	svc, ws := setupInteractiveTestService(t, harnesses.HarnessCodex, adapter)
+	w, err := svc.Create(context.Background(), CreateInput{
+		OperationID: "op_st_c1", HarnessID: harnesses.HarnessCodex, WorkspaceRoot: ws,
+		AccessMode: harnesses.AccessReadOnly,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := svc.Send(context.Background(), SendInput{
+		OperationID: "op_st_s1", WorkerID: w.ID, Prompt: "review repo",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait with wake_on_commentary=true must wake immediately on commentary #1.
+	t1, _, _, comms1, err := svc.WaitWithOptions(context.Background(), turn.ID, "", WaitOptions{
+		WaitDuration:     5 * time.Second,
+		WakeOnCommentary: true,
+	})
+	if err != nil || t1.State != TurnRunning || len(comms1) != 1 || comms1[0].Seq != 1 || !strings.Contains(comms1[0].Text, "Found race") {
+		t.Fatalf("expected immediate wake on commentary #1, got state=%s comms=%+v err=%v", t1.State, comms1, err)
+	}
+
+	// Inject mid-turn steer message.
+	if _, err := svc.SteerTurn(context.Background(), SteerInput{
+		TurnID: turn.ID, Text: "also check workers_api.go",
+	}); err != nil {
+		t.Fatalf("SteerTurn failed: %v", err)
+	}
+
+	// Wait with after_commentary_seq=1 and wake_on_commentary=true wakes on commentary #2 only.
+	t2, _, _, comms2, err := svc.WaitWithOptions(context.Background(), turn.ID, "", WaitOptions{
+		WaitDuration:       5 * time.Second,
+		AfterCommentarySeq: 1,
+		WakeOnCommentary:   true,
+	})
+	if err != nil || t2.State != TurnRunning || len(comms2) != 1 || comms2[0].Seq != 2 || !strings.Contains(comms2[0].Text, "also check workers_api.go") {
+		t.Fatalf("expected incremental commentary #2, got state=%s comms=%+v err=%v", t2.State, comms2, err)
+	}
+
+	close(finishGate)
+	doneT, preview, _, doneComms, err := svc.WaitWithOptions(context.Background(), turn.ID, "", WaitOptions{WaitDuration: 3 * time.Second})
+	if err != nil || doneT.State != TurnCompleted || preview != "REVIEW_DONE" {
+		t.Fatalf("expected completed REVIEW_DONE, got state=%s preview=%q err=%v", doneT.State, preview, err)
+	}
+	for _, c := range doneComms {
+		if c.Text == "REVIEW_DONE" {
+			t.Fatalf("expected duplicate trailing commentary matching final_answer to be deduplicated, got %+v", doneComms)
+		}
+	}
+	// Steering a completed turn returns turn_not_running.
+	if _, err := svc.SteerTurn(context.Background(), SteerInput{TurnID: turn.ID, Text: "too late"}); err == nil {
+		t.Fatalf("expected error steering completed turn")
+	}
+
+	// Non-steerable adapter (DeepSeek) returns unsupported_steer without cancelling turn.
+	dsGate := make(chan struct{})
+	dsAdapter := &interactiveFakeAdapter{
+		harnessID: harnesses.HarnessDeepSeek,
+		run: func(ctx context.Context, spec TurnStartSpec, onEvent func(AdapterEvent)) TurnOutcome {
+			<-dsGate
+			return TurnOutcome{State: TurnCompleted, Items: []NativeItem{{ItemID: "d1", Type: "agentMessage", Phase: "final_answer", Text: "DS_OK"}}}
+		},
+	}
+	svcDS, wsDS := setupInteractiveTestService(t, harnesses.HarnessDeepSeek, dsAdapter)
+	wDS, err := svcDS.Create(context.Background(), CreateInput{
+		OperationID: "op_ds_c1", HarnessID: harnesses.HarnessDeepSeek, WorkspaceRoot: wsDS,
+		AccessMode: harnesses.AccessReadOnly,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tDS, err := svcDS.Send(context.Background(), SendInput{OperationID: "op_ds_s1", WorkerID: wDS.ID, Prompt: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Wait briefly for turn to reach running state.
+	for i := 0; i < 40; i++ {
+		if cur, _ := svcDS.GetTurn(tDS.ID, ""); cur.State == TurnRunning {
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	_, err = svcDS.SteerTurn(context.Background(), SteerInput{TurnID: tDS.ID, Text: "try steer"})
+	if err == nil || !strings.Contains(err.Error(), "does not support mid-turn steering") {
+		t.Fatalf("expected unsupported_steer error for DeepSeek, got %v", err)
+	}
+	close(dsGate)
+	doneDS, _, _, err := svcDS.Wait(context.Background(), tDS.ID, "", 3*time.Second)
+	if err != nil || doneDS.State != TurnCompleted {
+		t.Fatalf("unsupported steer must NOT cancel running DeepSeek turn, got %s err=%v", doneDS.State, err)
+	}
+}

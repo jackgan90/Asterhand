@@ -109,7 +109,24 @@ func (s *Service) awaitTurnStart(rt *runningTurn, w *Worker, t *Turn, adapter Ad
 					}
 				})
 			}
-		case "progress", "commentary", "command", "edit", "mcp", "search", "plan", "tool", "system", "approval_auto":
+		case "commentary":
+			fullText := ""
+			if ev.Item != nil {
+				fullText = strings.TrimSpace(ev.Item.Text)
+			}
+			if fullText == "" {
+				fullText = strings.TrimSpace(ev.Summary)
+			}
+			if seq := s.recordCommentary(rt, fullText, now); seq > 0 {
+				t.LatestCommentarySeq = seq
+			}
+			if ev.Summary != "" || fullText != "" {
+				t.Progress = firstNonEmptyStr(ev.Summary, truncateSummary(fullText, 160))
+				t.UpdatedAt = now
+				_ = s.store.SaveTurn(*t)
+				s.notifyWaiters(t.ID)
+			}
+		case "progress", "command", "edit", "mcp", "search", "plan", "tool", "system", "approval_auto":
 			if ev.Summary != "" {
 				t.Progress = ev.Summary
 				t.UpdatedAt = now
@@ -341,6 +358,7 @@ func (s *Service) finalizeRevoked(rt *runningTurn, w *Worker, t *Turn, reason, n
 	t.AfterVCS = CaptureVCSSnapshot(context.Background(), w.WorkspaceRoot)
 	t.UpdatedAt = now
 	t.FinishedAt = &now
+	s.archiveTurnCommentaries(rt, "")
 	_ = s.store.SaveTurn(*t)
 
 	w.State = WorkerIdle
@@ -380,6 +398,11 @@ func (s *Service) finalizeTurn(rt *runningTurn, w *Worker, t *Turn, state string
 	t.AfterVCS = CaptureVCSSnapshot(context.Background(), w.WorkspaceRoot)
 	t.UpdatedAt = now
 	t.FinishedAt = &now
+	archivedAnswer := ""
+	if state == TurnCompleted && avail {
+		archivedAnswer = answer
+	}
+	s.archiveTurnCommentaries(rt, archivedAnswer)
 	_ = s.store.SaveTurn(*t)
 
 	w.State = WorkerIdle

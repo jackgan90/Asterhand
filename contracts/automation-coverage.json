@@ -205,6 +205,7 @@
         "workers_send",
         "workers_wait",
         "workers_wait_any",
+        "workers_steer",
         "workers_reply",
         "workers_result",
         "workers_logs",

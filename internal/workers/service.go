@@ -20,6 +20,7 @@ type Budgets struct {
 	InterruptGrace     time.Duration
 	IdleRecycleTimeout time.Duration
 	InputCallerGrace   time.Duration
+	InputClaimedGrace  time.Duration
 	InteractionTimeout time.Duration
 }
 
@@ -32,6 +33,7 @@ func DefaultBudgets() Budgets {
 		InterruptGrace:     10 * time.Second,
 		IdleRecycleTimeout: 10 * time.Minute,
 		InputCallerGrace:   15 * time.Second,
+		InputClaimedGrace:  30 * time.Second,
 		InteractionTimeout: 30 * time.Minute,
 	}
 }
@@ -39,29 +41,36 @@ func DefaultBudgets() Budgets {
 const (
 	MinWallClockSeconds = 30
 	MaxWallClockSeconds = 3600
+	MinDeferSeconds     = 30
+	MaxDeferSeconds     = 300
+	maxBufferedComments = 20
+	maxCommentaryBytes  = 2048
+	maxSteerBytes       = 16 << 10
 )
 
 type runningTurn struct {
-	turnID       string
-	workerID     string
-	workspaceID  string
-	worktreeKey  string
-	harnessID    string
-	accessMode   string
-	nativeTurnID string
-	handle       *ThreadHandle
-	revoked      bool
-	revokeReason string
-	cancelCh     chan struct{}
-	cancelOnce   sync.Once
-	wallClock    time.Duration
-	execStarted  time.Time
-	waitingSince time.Time
-	pausedTotal  time.Duration
-	lastEventAt  time.Time
-	streamEvents int64
-	streamBytes  int64
-	doneCh       chan struct{}
+	turnID        string
+	workerID      string
+	workspaceID   string
+	worktreeKey   string
+	harnessID     string
+	accessMode    string
+	nativeTurnID  string
+	handle        *ThreadHandle
+	revoked       bool
+	revokeReason  string
+	cancelCh      chan struct{}
+	cancelOnce    sync.Once
+	wallClock     time.Duration
+	execStarted   time.Time
+	waitingSince  time.Time
+	pausedTotal   time.Duration
+	lastEventAt   time.Time
+	streamEvents  int64
+	streamBytes   int64
+	commentarySeq int64
+	commentaries  []CommentaryEntry
+	doneCh        chan struct{}
 }
 
 func (rt *runningTurn) signalCancel() {
@@ -91,6 +100,8 @@ type Service struct {
 	writeLocks            map[string]string       // worktreeKey -> active turnID
 	residents             map[string]*residentProc
 	waiters               map[string][]chan struct{} // turnID -> notification chans
+	turnCommentaries      map[string][]CommentaryEntry
+	turnCommentaryOrder   []string
 	interactions          map[string]*pendingInteraction
 	onInteractionsChanged func([]InteractionView)
 	wg                    sync.WaitGroup
@@ -117,9 +128,10 @@ func NewService(home string, hs *harnesses.Service, adapters ...Adapter) (*Servi
 		activeTurns:  map[string]*runningTurn{},
 		workerTurn:   map[string]string{},
 		writeLocks:   map[string]string{},
-		residents:    map[string]*residentProc{},
-		waiters:      map[string][]chan struct{}{},
-		interactions: map[string]*pendingInteraction{},
+		residents:        map[string]*residentProc{},
+		waiters:          map[string][]chan struct{}{},
+		turnCommentaries: map[string][]CommentaryEntry{},
+		interactions:     map[string]*pendingInteraction{},
 		reaperStop:   make(chan struct{}),
 	}
 	if err := s.markInterruptedOnStartup(); err != nil {
@@ -458,8 +470,86 @@ func (s *Service) populateTurnActivity(t *Turn) {
 		}
 		t.StreamEvents = rt.streamEvents
 		t.StreamBytes = rt.streamBytes
+		t.LatestCommentarySeq = rt.commentarySeq
+	} else if hist := s.turnCommentaries[t.ID]; len(hist) > 0 {
+		t.LatestCommentarySeq = hist[len(hist)-1].Seq
 	}
 	s.mu.Unlock()
+}
+
+func (s *Service) recordCommentary(rt *runningTurn, text string, now time.Time) int64 {
+	txt := truncateSummary(strings.TrimSpace(text), maxCommentaryBytes)
+	if txt == "" {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rt.commentarySeq++
+	entry := CommentaryEntry{
+		Seq:       rt.commentarySeq,
+		Timestamp: now,
+		Text:      txt,
+	}
+	rt.commentaries = append(rt.commentaries, entry)
+	if len(rt.commentaries) > maxBufferedComments {
+		rt.commentaries = append([]CommentaryEntry(nil), rt.commentaries[len(rt.commentaries)-maxBufferedComments:]...)
+	}
+	return rt.commentarySeq
+}
+
+func (s *Service) archiveTurnCommentaries(rt *runningTurn, finalAnswer string) {
+	if rt == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(rt.commentaries) == 0 {
+		return
+	}
+	cp := append([]CommentaryEntry(nil), rt.commentaries...)
+	if normFinal := truncateSummary(strings.TrimSpace(finalAnswer), maxCommentaryBytes); normFinal != "" && len(cp) > 0 && cp[len(cp)-1].Text == normFinal {
+		cp = cp[:len(cp)-1]
+	}
+	if len(cp) == 0 {
+		return
+	}
+	if _, exists := s.turnCommentaries[rt.turnID]; !exists {
+		s.turnCommentaryOrder = append(s.turnCommentaryOrder, rt.turnID)
+		if len(s.turnCommentaryOrder) > 64 {
+			evict := s.turnCommentaryOrder[0]
+			s.turnCommentaryOrder = s.turnCommentaryOrder[1:]
+			delete(s.turnCommentaries, evict)
+		}
+	}
+	s.turnCommentaries[rt.turnID] = cp
+}
+
+func (s *Service) selectCommentaries(turnID string, afterSeq int64, defaultTail int) ([]CommentaryEntry, int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var src []CommentaryEntry
+	if rt, ok := s.activeTurns[turnID]; ok {
+		src = rt.commentaries
+	} else {
+		src = s.turnCommentaries[turnID]
+	}
+	if len(src) == 0 {
+		return nil, 0
+	}
+	latest := src[len(src)-1].Seq
+	if afterSeq > 0 {
+		var out []CommentaryEntry
+		for _, e := range src {
+			if e.Seq > afterSeq {
+				out = append(out, e)
+			}
+		}
+		return out, latest
+	}
+	if defaultTail <= 0 || len(src) <= defaultTail {
+		return append([]CommentaryEntry(nil), src...), latest
+	}
+	return append([]CommentaryEntry(nil), src[len(src)-defaultTail:]...), latest
 }
 
 type SendInput struct {

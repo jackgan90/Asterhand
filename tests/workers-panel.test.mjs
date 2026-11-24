@@ -98,6 +98,7 @@ function installFakeDOM() {
     ["workers-refresh", "button"],
     ["workers-include-closed", "input"],
     ["workers-status", "div"],
+    ["workers-interactions", "section"],
     ["workers-list", "aside"],
     ["workers-detail", "section"],
   ]) {
@@ -407,6 +408,87 @@ test("Workers panel preserves polling after transient selectWorker error and sup
     assert.equal(getCalls, 3);
     assert.match(byId.get("workers-detail").textContent, /免审|auto-approve/i);
     panel.stop();
+  } finally {
+    globalThis.setTimeout = origSetTimeout;
+    globalThis.clearTimeout = origClearTimeout;
+  }
+});
+
+test("Workers panel ticks pending input countdown in place every second without replacing answer textarea", async () => {
+  const byId = installFakeDOM();
+  const {workersPanel} = await import("../web/workers-panel.mjs");
+
+  const scheduled = [];
+  const origSetTimeout = globalThis.setTimeout;
+  const origClearTimeout = globalThis.clearTimeout;
+  globalThis.setTimeout = (fn, ms) => {
+    const token = {fn, ms, cleared: false};
+    scheduled.push(token);
+    return token;
+  };
+  globalThis.clearTimeout = (token) => {
+    if (token && typeof token === "object") token.cleared = true;
+  };
+
+  try {
+    let nowMs = Date.parse("2026-11-23T15:00:00.000Z");
+    const escalateAt = "2026-11-23T15:00:15.000Z";
+    const w1 = {worker_id: "w1", alias: "codex-1", harness_id: "codex", access_mode: "workspace_write", state: "running", workspace_root: "F:\\proj"};
+    const pendingInput = {
+      request_id: "wir_q1",
+      kind: "input",
+      worker_id: "w1",
+      worker_alias: "codex-1",
+      harness_id: "codex",
+      workspace_root: "F:\\proj",
+      summary: "Pick format",
+      questions: [{id: "q1", question: "Pick format"}],
+      visible_to_human: false,
+      claimed_by_caller: true,
+      escalate_at: escalateAt,
+      escalation_note: "Checking config.json",
+    };
+
+    const panel = workersPanel({
+      api: async (url) => {
+        if (url.startsWith("/api/workers/list")) return {items: [w1], interactions: [pendingInput]};
+        if (url.includes("worker_id=w1")) return {worker: w1, turns: []};
+        throw new Error("unexpected url " + url);
+      },
+      post: async () => ({}),
+      listen: (t, e, cb) => t.addEventListener(e, cb),
+      session: () => ({active: true}),
+      notice: () => {},
+      now: () => nowMs,
+    });
+
+    await panel.open();
+    const intEl = byId.get("workers-interactions");
+    assert.match(intEl.textContent, /15s/);
+    const taBefore = intEl.querySelectorAll(".workers-int-input")[0];
+    assert.ok(taBefore, "expected answer textarea rendered");
+
+    // Advance 1s and fire the 1000ms countdown tick -> badge updates in place without replacing textarea.
+    const tick1 = scheduled.find(t => !t.cleared && t.ms === 1000);
+    assert.ok(tick1, "expected 1000ms countdown timer scheduled");
+    nowMs += 1000;
+    tick1.cleared = true;
+    tick1.fn();
+
+    assert.match(intEl.textContent, /14s/);
+    assert.doesNotMatch(intEl.textContent, /15s/);
+    assert.equal(intEl.querySelectorAll(".workers-int-input")[0], taBefore, "textarea DOM ref must stay intact across countdown ticks");
+
+    // Advance another 3s and fire next tick -> shows 11s.
+    const tick2 = scheduled.findLast(t => !t.cleared && t.ms === 1000);
+    assert.ok(tick2);
+    nowMs += 3000;
+    tick2.cleared = true;
+    tick2.fn();
+    assert.match(intEl.textContent, /11s/);
+
+    panel.stop();
+    assert.equal(scheduled.filter(t => !t.cleared && t.ms === 1000).length, 0, "stop() must clear countdown timer");
   } finally {
     globalThis.setTimeout = origSetTimeout;
     globalThis.clearTimeout = origClearTimeout;

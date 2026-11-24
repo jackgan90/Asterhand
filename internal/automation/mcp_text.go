@@ -85,6 +85,9 @@ func nextStepHint(opName string, response Response) string {
 	if !ok {
 		return ""
 	}
+	if ns, _ := dataMap["next_step"].(string); ns != "" {
+		return ns
+	}
 	switch opName {
 	case "operations_new_id":
 		if id, _ := dataMap["operation_id"].(string); id != "" {
@@ -133,9 +136,14 @@ func nextStepHint(opName string, response Response) string {
 			return fmt.Sprintf("Turn %q requires attention (completed, waiting_input, or terminal/reconciliation). Inspect its state/preview, call workers_reply if waiting_input or workers_result if truncated, and continue monitoring remaining active turns with workers_wait_any.", trig)
 		}
 		return "All watched turns are still active (or waiting on human approval). Continue calling workers_wait_any with the active turn_ids."
+	case "workers_steer":
+		return "Steering message injected into the running turn. Continue calling workers_wait to observe worker progress and response."
 	case "workers_reply":
 		if esc, _ := dataMap["escalated"].(bool); esc {
 			return "Question escalated to the human desktop/Web prompt. Continue calling workers_wait until the human responds."
+		}
+		if def, _ := dataMap["deferred"].(bool); def {
+			return "Human escalation deferred while you verify. Call workers_reply with your answer (or escalate_to_human=true, or defer_seconds again) before escalate_at."
 		}
 		return "Reply delivered to worker. Continue calling workers_wait until the turn finishes."
 	case "workers_result":

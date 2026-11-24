@@ -215,6 +215,15 @@ export function workerActionView({
       byID('btn-cancel-approval').disabled = actionDisabled;
     } else {
       byID('action-input-project').textContent = proj;
+      const noteEl = byID('action-input-note');
+      if (noteEl) {
+        if (item.escalation_note) {
+          noteEl.hidden = false;
+          noteEl.textContent = t('common.worker_action.escalation_note', {note: item.escalation_note});
+        } else {
+          noteEl.hidden = true;
+        }
+      }
       const draft = getDraft(item.request_id);
       const qWrap = byID('action-questions');
       qWrap.replaceChildren();

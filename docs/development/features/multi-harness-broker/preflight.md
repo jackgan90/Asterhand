@@ -87,3 +87,18 @@
 ### 6.2 Windows 右下角交互浮窗置顶与焦点策略核对（参考历史修复 `d6e4b7b`）
 - 历史修复 `d6e4b7b` 已在 [notification_surface_windows.go](../../../../internal/quickinput/notification_surface_windows.go) 证实：Windows 上隐藏窗口直接调 `SetWindowPos(HWND_TOPMOST)` + `ShowWindow(SW_SHOWNOACTIVATE)` 可能静默不晋升 `WS_EX_TOPMOST`；必须先在隐藏态重置 `HWND_BOTTOM`，再调用 `SetWindowPos(HWND_TOPMOST, SWP_NOSIZE|SWP_NOMOVE|SWP_NOACTIVATE|SWP_SHOWWINDOW)` 并以 `IsWindowVisible && WS_EX_TOPMOST` 复核，后续移动仅传 `SWP_NOACTIVATE|SWP_NOZORDER`。
 - 与旧通知不同，M4 交互浮窗在「协作者提问」模式下需支持自由文本与中文 IME 输入，不能挂永久 `WS_EX_NOACTIVATE`（否则鼠标点击也无法获焦打字）；应复用上述 Z 序晋升与校验逻辑，同时弹出时使用 `SWP_NOACTIVATE` 防抢焦点，用户主动点击浮窗内部后正常激活输入。
+
+## 7. 双 Agent 实时协作增强预检结论（运行中 `steer` 插话与中间 `commentary` 反馈）
+
+### 7.1 三家运行中 `steer` 插话协议实测（Windows x64）
+
+| Harness / 版本 | 实测方式 | 实测结论 | 对 `workers_steer` 的直接约束 |
+|---|---|---|---|
+| **Codex (`codex-cli 0.171.0`)** | 复用已验证的 `turn/steer({threadId, expectedTurnId, input})` | 原生支持向运行中的 `turnId` 注入补充消息；`expectedTurnId` 不匹配（轮次已结束）时返回明确错误 | `supports_steer: true`，经 `CodexAdapter.SteerTurn` 直发 `turn/steer` |
+| **Claude Code (`claude 2.1.330`)** | 隔离临时目录以 `--input-format stream-json --output-format stream-json` 启动首轮多步读取任务，在首次 `tool_use` 触发时立即向 stdin 写入第二条 `{"type":"user","message":{"role":"user","content":"..."}}` 并观察 5 秒收尾；另对照进入最终文本生成阶段后的尾段注入 | 尚有后续 `tool_use` 边界时，Claude 在下一工具边界无缝采纳注入指令并包含在同轮终稿中，且全过程仅产出 1 个 `result`（`resultsSeen = 1`）；若模型已进入无剩余工具调用的最终文本生成阶段，`claude -p` 结束当前 `result` 不再纳入该帧（也不污染后续新轮次） | `supports_steer: true`，经 `ClaudeAdapter.SteerTurn` 在持有 `s.active` 且匹配 `nativeTurnID` 时写入 `user` 帧；`workers_steer` 返回 `delivery_mode: "tool_boundary"` 与明确 `next_step`，提示主控在尾段收尾场景下核对终稿并在需要时跟进 `workers_send` |
+| **DeepSeek Harness (`dsh 0.2.2-rc.5` ACP v1)** | 对本机 `dsh --profile acp` 执行 `initialize` 并探测 `session/steer` 与 `_session/steering` | `initialize` 返回 `sessionCapabilities: {close, list, resume}` 无 steering 扩展；两种方法均返回 `-32601 Method not found` | `supports_steer: false`，`workers_steer` 返回结构化 `unsupported_steer` 并引导等待本轮结束后改用 `workers_send`，严禁暗中改为取消重跑 |
+
+### 7.2 三家中间 `commentary` 与思维链隔离核对
+- **Codex**：仅取 `item.type == "agentMessage"` 且 `phase == "commentary"` 的面向用户文本（`item.type == "reasoning"` 不进入 `commentary`）。
+- **Claude Code**：仅取 `assistant` 消息中的 `content.type == "text"` 块（`content.type == "thinking"` 仅作 `Thinking...` 进度）。
+- **DeepSeek Harness**：仅取工具调用前由 `agent_message_chunk` 冲刷出的可见旁白（`agent_thought_chunk` 仅作 `Thinking...` 进度）。

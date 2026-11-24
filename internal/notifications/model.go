@@ -68,6 +68,7 @@ type WorkerInteraction struct {
 	HardRedline      bool             `json:"hard_redline,omitempty"`
 	OutsideWorkspace bool             `json:"outside_workspace,omitempty"`
 	AllowSessionOK   bool             `json:"allow_session_ok,omitempty"`
+	EscalationNote   string           `json:"escalation_note,omitempty"`
 	Questions        []WorkerQuestion `json:"questions,omitempty"`
 }
 

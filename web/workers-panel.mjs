@@ -109,6 +109,9 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
   let lastInteractionsSig = null;
   let interactionGuardUntil = 0;
   let interactionGuardTimer = null;
+  let countdownEl = null;
+  let countdownMeta = null;
+  let countdownTimer = null;
   const interactionDrafts = new Map();
   let selectedWorkerID = "";
   let selectedWorker = null;
@@ -173,6 +176,45 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
       interactionGuardTimer = null;
       if (dialog?.open && interactions.length) renderInteractions(true);
     }, INTERACTION_SWITCH_GUARD_MS);
+  }
+
+  function clearCountdown() {
+    if (countdownTimer !== null) {
+      clearTimeout(countdownTimer);
+      countdownTimer = null;
+    }
+    countdownEl = null;
+    countdownMeta = null;
+  }
+
+  function paintCountdown() {
+    if (!countdownEl || !countdownMeta) return;
+    const secs = Math.max(0, Math.ceil((countdownMeta.dueMs - now()) / 1000));
+    const key = countdownMeta.claimed ? "web.workers.input_caller_verifying" : "web.workers.input_caller_grace";
+    countdownEl.textContent = t(key, {seconds: String(secs)});
+  }
+
+  function armCountdown(el, item) {
+    clearCountdown();
+    const dueMs = Date.parse(item.escalate_at);
+    if (!el || Number.isNaN(dueMs)) return;
+    countdownEl = el;
+    countdownMeta = {dueMs, claimed: Boolean(item.claimed_by_caller)};
+    paintCountdown();
+    const tick = () => {
+      countdownTimer = null;
+      if (!dialog?.open || !countdownEl || !countdownMeta) {
+        clearCountdown();
+        return;
+      }
+      paintCountdown();
+      if (countdownMeta.dueMs > now()) {
+        countdownTimer = setTimeout(tick, 1000);
+      }
+    };
+    if (dueMs > now()) {
+      countdownTimer = setTimeout(tick, 1000);
+    }
   }
 
   function clearPoll() {
@@ -258,6 +300,7 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
       activeInteractionID = "";
       lastInteractionsSig = "";
       clearInteractionGuard();
+      clearCountdown();
       return;
     }
     const prevActiveID = activeInteractionID;
@@ -276,13 +319,21 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
       locale: t("common.worker_action.badge_approval"),
       ids: interactions.map(x => x.request_id),
       active: item.request_id,
+      visible: Boolean(item.visible_to_human),
+      claimed: Boolean(item.claimed_by_caller),
+      escalateAt: item.escalate_at || "",
+      note: item.escalation_note || "",
       expanded: interactionCmdExpanded,
       busyAction,
       guarded: isInteractionGuarded(),
       selected: Object.fromEntries(Object.entries(getInteractionDraft(item.request_id).selected).map(([k, v]) => [k, Array.from(v)])),
     });
-    if (!force && sig === lastInteractionsSig) return;
+    if (!force && sig === lastInteractionsSig) {
+      paintCountdown();
+      return;
+    }
     lastInteractionsSig = sig;
+    clearCountdown();
 
     interactionsEl.hidden = false;
     interactionsEl.replaceChildren();
@@ -375,6 +426,15 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
       actions.append(bCancel);
       interactionsEl.append(actions);
     } else {
+      if (!item.visible_to_human && item.escalate_at) {
+        const waitBadge = node("span", "", "badge");
+        waitBadge.dataset.tone = "warn";
+        armCountdown(waitBadge, item);
+        interactionsEl.append(waitBadge);
+      }
+      if (item.escalation_note) {
+        interactionsEl.append(node("p", t("common.worker_action.escalation_note", {note: item.escalation_note}), "worker-meta-line"));
+      }
       const draft = getInteractionDraft(item.request_id);
       const qs = Array.isArray(item.questions) && item.questions.length ? item.questions : [{id: "q1", question: item.summary}];
       for (const q of qs) {
@@ -910,6 +970,7 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
 
   function stop() {
     clearPoll();
+    clearCountdown();
     if (dialog?.open) dialog.close();
   }
 
@@ -917,7 +978,7 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
   if (refreshBtn) listen(refreshBtn, "click", () => void refresh());
   if (includeClosedEl) listen(includeClosedEl, "change", () => void refresh());
   if (dialog) {
-    listen(dialog, "close", () => clearPoll());
+    listen(dialog, "close", () => { clearPoll(); clearCountdown(); });
     trapDialogWheel(dialog, listen);
   }
 

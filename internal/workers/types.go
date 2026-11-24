@@ -131,7 +131,29 @@ type InteractionView struct {
 	AllowSessionOK   bool                  `json:"allow_session_ok,omitempty"`
 	Questions        []InteractionQuestion `json:"questions,omitempty"`
 	VisibleToHuman   bool                  `json:"visible_to_human"`
+	ClaimedByCaller  bool                  `json:"claimed_by_caller,omitempty"`
+	EscalateAt       *time.Time            `json:"escalate_at,omitempty"`
+	EscalationNote   string                `json:"escalation_note,omitempty"`
+	DeferCount       int                   `json:"defer_count,omitempty"`
 	CreatedAt        time.Time             `json:"created_at"`
+}
+
+type CommentaryEntry struct {
+	Seq       int64     `json:"seq"`
+	Timestamp time.Time `json:"timestamp"`
+	Text      string    `json:"text"`
+}
+
+type SteerInput struct {
+	TurnID      string
+	WorkspaceID string
+	Text        string
+}
+
+type WaitOptions struct {
+	WaitDuration       time.Duration
+	AfterCommentarySeq int64
+	WakeOnCommentary   bool
 }
 
 type InteractionRequest struct {
@@ -173,8 +195,10 @@ type WaitAnyItem struct {
 	StreamBytes        int64            `json:"stream_bytes,omitempty"`
 	ErrorCode          string           `json:"error_code,omitempty"`
 	ErrorMessage       string           `json:"error_message,omitempty"`
-	AfterVCS           *VCSSnapshot     `json:"after_vcs,omitempty"`
-	PendingInteraction *InteractionView `json:"pending_interaction,omitempty"`
+	AfterVCS            *VCSSnapshot      `json:"after_vcs,omitempty"`
+	PendingInteraction  *InteractionView  `json:"pending_interaction,omitempty"`
+	LatestCommentarySeq int64             `json:"latest_commentary_seq,omitempty"`
+	Commentaries        []CommentaryEntry `json:"commentaries,omitempty"`
 }
 
 type VCSSnapshot struct {
@@ -222,9 +246,10 @@ type Turn struct {
 	FinishedAt          *time.Time   `json:"finished_at,omitempty"`
 	ElapsedSeconds     int              `json:"elapsed_seconds,omitempty"`
 	IdleSeconds        int              `json:"idle_seconds,omitempty"`
-	StreamEvents       int64            `json:"stream_events,omitempty"`
-	StreamBytes        int64            `json:"stream_bytes,omitempty"`
-	PendingInteraction *InteractionView `json:"pending_interaction,omitempty"`
+	StreamEvents        int64            `json:"stream_events,omitempty"`
+	StreamBytes         int64            `json:"stream_bytes,omitempty"`
+	LatestCommentarySeq int64            `json:"latest_commentary_seq,omitempty"`
+	PendingInteraction  *InteractionView `json:"pending_interaction,omitempty"`
 }
 
 type LogEntry struct {
@@ -307,6 +332,12 @@ type Adapter interface {
 	ForceKill(handle ThreadHandle) error
 	InspectThreadTurns(ctx context.Context, handle ThreadHandle) ([]NativeTurnRecord, error)
 	CloseThread(handle ThreadHandle) error
+}
+
+// SteerAdapter is optionally implemented by adapters whose native protocol
+// supports injecting guidance into a currently running turn without cancelling it.
+type SteerAdapter interface {
+	SteerTurn(ctx context.Context, handle ThreadHandle, nativeTurnID, text string) error
 }
 
 // SelectFinalAnswer applies the strict M1 candidate selection rule:

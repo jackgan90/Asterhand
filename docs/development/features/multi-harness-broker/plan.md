@@ -8,7 +8,7 @@
   2. 为被调方提供**绑定授权工作区的稳定逻辑身份**（例如同项目内的 `codex-reviewer` 先审 Plan、再审 Code），在不强制跨 Harness 共享私有聊天库的前提下保持跨轮上下文连续；
   3. 由 Asterhand 统一发现本机已安装的 Coding Harness、托管其 MCP 注册/反注册与对账，并按**三项正交开关**控制每个 Harness 的工具暴露程度和参与角色，实现“最小必要工具暴露、升级不断连、一键启用/禁用即时生效”。
 - **状态与范围**：
-  - **当前状态**：`Milestone 1—2、Milestone 3 第 1—2 步与 Milestone 4.1（审批模式分档、人机审批桥、业务提问流转、右下角统一交互浮窗与 Web 同步入口）已完成实现、工程验证及本机用户验收；后续按序推进 Milestone 4.2（isolated_worktree）与后置的 Milestone 3 第 3 步（Worker 角色模板）`。
+  - **当前状态**：`Milestone 1—2、Milestone 3 第 1—2 步、Milestone 4.1 与双 Agent 实时协作增强（运行中 steer 插话、中间 commentary 反馈与 wake_on_commentary、waiting_input 两阶段认领/续期/附注转人工，以及三家 Go 适配器按职责拆分为 *_adapter.go + *_protocol.go）均已完成实现、工程验证及本机用户验收；后续按序推进 Milestone 4.2（isolated_worktree）与后置的 Milestone 3 第 3 步（Worker 角色模板）`。
   - **阶段边界**：Milestone 4.2 与后置角色模板在对应设计确认后分别实施与验收。
   - **预检与验证文档**：[协议预检记录](preflight.md)、[验证说明](validation.md)。
 - **关联 Rxx / Cxx / 领域需求 ID**：
@@ -232,7 +232,22 @@
   - 交互浮窗固定锚定右下角最底端，`local command` 临时完成通知按交互浮窗当前高度动态上移 `height + 12px`，互不遮挡、不抖动；
   - Web「编程协作者」面板顶部同步「待处理请求」队列条与 Worker 卡片 `effective_approval_mode` / 撤销「本会话免审」操作，经 `/api/stream` 的 `workers` 事件与桌面浮窗实时消除同步（单次请求失败不中断轮询链，并同样具备 400ms 跨项防误触保护）；主页面首屏先完成 `/api/info` 并在后台并发探活 `/api/peers`，避免离线对端阻塞连接状态。
 
-#### M4.2：Git Worktree 并行写隔离（`isolated_worktree` 访问模式，M4.1 验收后推进）
+#### 双 Agent 实时协作增强（已完成实现、工程验证与本机用户验收）：运行中插话、中间反馈流与提问核实续期
+面向“主控 Agent 发起长程审查/开发 → Worker 边查边反馈 → 主控同步核实、必要时中途纠偏或带核实结论转交人类”的高频协作工作流，补齐 3 项协议与调度能力，并同步按高内聚低耦合拆分三家 Go 适配器：
+- **运行中插话（`workers_steer`）**：
+  - `harnesses_list/get` 能力画像新增 `supports_steer: bool`（Codex `true`、Claude Code `true`、DeepSeek Harness `false`）；
+  - 新增公共协作操作 `workers_steer(turn_id, text, [workspace_id])`（CLI + MCP + 覆盖清单，归属 `collab` 工具集）：仅允许对 `running` 轮次注入指导消息，返回 `delivery_mode`（Codex 为 `rpc`，Claude Code 为 `tool_boundary`——在下一工具边界生效，若已进入无剩余工具的终稿生成阶段则提示核对终稿并按需续发 `workers_send`）并记录 `kind: "steer"` 日志事件；对 `waiting_approval`/`waiting_input`/终态或不支持的 Harness 返回明确错误码（`turn_not_running` / `unsupported_steer`）及下一步引导，绝不暗中取消重跑。
+- **结构化中间反馈流（`commentaries` + `wake_on_commentary`）**：
+  - `Turn` 运行时维护有界中间反馈缓冲（最多 20 条、单条 ≤ 2 KiB，递增 `seq`），严格只收集三家面向用户的可见 `commentary` 文本（与思维链 `reasoning`/`thinking`/`agent_thought_chunk` 彻底隔离），并在 `completed` 归档时自动去重与最终 `answer` 相同的末条冗余；
+  - `workers_wait` 新增可选参数 `after_commentary_seq` 与 `wake_on_commentary`（默认 `false` 保持兼容）：开启 `wake_on_commentary: true` 时，Worker 一吐出新的 `commentary` 即立刻提前唤醒 `workers_wait` 并返回增量 `commentaries` 与 `latest_commentary_seq`；常规 `running` 与 `workers_wait_any` 返回亦附带最近 1–2 条 `commentaries`。
+- **`waiting_input` 两阶段认领、显式续期与附注转人工**：
+  - 未被 A 读取前保持默认 15s 自动转人工兜底；一旦 A 经 `workers_wait` / `workers_wait_any` 读取到该问题，自动给予基础反应缓冲（30s）防止 LLM 思考或刚准备调用工具即被误弹打断；
+  - `workers_reply` 新增可选参数 `defer_seconds`（30..300，支持多次续期，受单轮等待总上限约束，A 掉线超时自动兜底转人工）与 `note`（配合 `escalate_to_human: true` 作为 `escalation_note` 展示在桌面浮窗与 Web 提问卡片，辅助人类快速决策）；
+  - Web「编程协作者」对已认领/延后中的提问提供原位逐秒刷新的倒计时（不重建 DOM、不打断输入焦点与中文 IME），并保留人类随时提前接管的能力（按 `request_id` 幂等仲裁，A 迟到回复收到 `conflict`）。
+- **三家 Go 适配器结构化拆分**：
+  - 将 `codex_adapter.go`、`claude_adapter.go`、`deepseek_adapter.go` 按“生命周期与会话传输（`*_adapter.go`）”和“纯协议参数/解析/摘要翻译（`*_protocol.go`）”各拆为 2 个高内聚文件，保持所有单文件远低于 1000 物理行且零行为变更。
+
+#### M4.2：Git Worktree 并行写隔离（`isolated_worktree` 访问模式，协作增强验收后推进）
 - 支持 `isolated_worktree` 访问模式（校验 Git 仓库、自动创建独立 worktree 目录与分支、按各自 worktree 根加写锁实现同仓库多 Worker 并行写、返回分支与 diff 摘要、不自动 merge/push，提供显式清理回收机制与依赖目录说明）。
 - 跨设备 Tailscale Worker 委派另行立项评估安全边界。
 

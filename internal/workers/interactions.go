@@ -14,12 +14,31 @@ import (
 )
 
 type pendingInteraction struct {
-	mu           sync.Mutex
-	view         InteractionView
-	resolved     bool
-	decisionCh   chan InteractionDecision
-	escalateStop chan struct{}
-	escalateOnce sync.Once
+	mu              sync.Mutex
+	view            InteractionView
+	resolved        bool
+	decisionCh      chan InteractionDecision
+	escalateStop    chan struct{}
+	escalateResetCh chan time.Duration
+	escalateOnce    sync.Once
+}
+
+func (pi *pendingInteraction) resetEscalationTimer(d time.Duration) {
+	if pi.escalateResetCh == nil {
+		return
+	}
+	select {
+	case pi.escalateResetCh <- d:
+	default:
+		select {
+		case <-pi.escalateResetCh:
+		default:
+		}
+		select {
+		case pi.escalateResetCh <- d:
+		default:
+		}
+	}
 }
 
 func (pi *pendingInteraction) stopEscalationTimer() {
@@ -225,9 +244,10 @@ func (s *Service) handleTurnInteraction(ctx context.Context, rt *runningTurn, w 
 	}
 
 	pi := &pendingInteraction{
-		view:         view,
-		decisionCh:   make(chan InteractionDecision, 1),
-		escalateStop: make(chan struct{}),
+		view:            view,
+		decisionCh:      make(chan InteractionDecision, 1),
+		escalateStop:    make(chan struct{}),
+		escalateResetCh: make(chan time.Duration, 1),
 	}
 
 	waitState := TurnWaitingApproval
@@ -235,6 +255,13 @@ func (s *Service) handleTurnInteraction(ctx context.Context, rt *runningTurn, w 
 	if req.Kind == InteractionInput {
 		waitState = TurnWaitingInput
 		progressMsg = "Waiting for input: " + truncateSummary(summary, 120)
+		grace := s.budgets.InputCallerGrace
+		if grace <= 0 {
+			grace = 15 * time.Second
+		}
+		escAt := now.Add(grace)
+		pi.view.EscalateAt = &escAt
+		view.EscalateAt = &escAt
 	}
 
 	s.mu.Lock()
@@ -257,14 +284,28 @@ func (s *Service) handleTurnInteraction(ctx context.Context, rt *runningTurn, w 
 		if grace <= 0 {
 			grace = 15 * time.Second
 		}
+		s.notifyInteractionsChanged()
 		go func() {
 			timer := time.NewTimer(grace)
 			defer timer.Stop()
-			select {
-			case <-timer.C:
-				s.escalateInteractionToHuman(reqID, t.ID)
-			case <-pi.escalateStop:
-			case <-rt.cancelCh:
+			for {
+				select {
+				case <-timer.C:
+					s.escalateInteractionToHuman(reqID, t.ID, "")
+					return
+				case newDur := <-pi.escalateResetCh:
+					if !timer.Stop() {
+						select {
+						case <-timer.C:
+						default:
+						}
+					}
+					timer.Reset(newDur)
+				case <-pi.escalateStop:
+					return
+				case <-rt.cancelCh:
+					return
+				}
 			}
 		}()
 	}
@@ -323,7 +364,55 @@ func (s *Service) handleTurnInteraction(ctx context.Context, rt *runningTurn, w 
 	return dec, nil
 }
 
-func (s *Service) escalateInteractionToHuman(requestID, turnID string) bool {
+func (s *Service) markInputObservedByCaller(turnID string) {
+	s.mu.Lock()
+	var pi *pendingInteraction
+	for _, cand := range s.interactions {
+		if cand.snapshot().TurnID == turnID {
+			pi = cand
+			break
+		}
+	}
+	s.mu.Unlock()
+	if pi == nil {
+		return
+	}
+
+	claimedGrace := s.budgets.InputClaimedGrace
+	if claimedGrace <= 0 {
+		base := s.budgets.InputCallerGrace
+		if base <= 0 {
+			base = 15 * time.Second
+		}
+		if base >= time.Second {
+			claimedGrace = 30 * time.Second
+		} else {
+			claimedGrace = 2 * base
+		}
+	}
+
+	now := s.now().UTC()
+	nextAt := now.Add(claimedGrace)
+	pi.mu.Lock()
+	if pi.resolved || pi.view.Kind != InteractionInput || pi.view.VisibleToHuman || pi.view.ClaimedByCaller {
+		pi.mu.Unlock()
+		return
+	}
+	pi.view.ClaimedByCaller = true
+	pi.view.EscalateAt = &nextAt
+	snap := pi.view
+	pi.mu.Unlock()
+
+	pi.resetEscalationTimer(claimedGrace)
+	if t, err := s.store.GetTurn(turnID); err == nil && t.State == TurnWaitingInput {
+		t.PendingInteraction = &snap
+		t.UpdatedAt = now
+		_ = s.store.SaveTurn(t)
+	}
+	s.notifyInteractionsChanged()
+}
+
+func (s *Service) escalateInteractionToHuman(requestID, turnID, note string) bool {
 	s.mu.Lock()
 	pi, ok := s.interactions[requestID]
 	s.mu.Unlock()
@@ -336,8 +425,13 @@ func (s *Service) escalateInteractionToHuman(requestID, turnID string) bool {
 		return false
 	}
 	pi.view.VisibleToHuman = true
+	pi.view.EscalateAt = nil
+	if trimmed := truncateSummary(strings.TrimSpace(note), 1000); trimmed != "" {
+		pi.view.EscalationNote = trimmed
+	}
 	snap := pi.view
 	pi.mu.Unlock()
+	pi.stopEscalationTimer()
 
 	if t, err := s.store.GetTurn(turnID); err == nil && t.State == TurnWaitingInput {
 		t.PendingInteraction = &snap
@@ -411,10 +505,13 @@ type ReplyInput struct {
 	Text            string
 	Answers         map[string][]string
 	EscalateToHuman bool
+	DeferSeconds    int
+	Note            string
 }
 
-// ReplyTurn lets caller A answer a waiting_input question via workers_reply or
-// explicitly escalate it to human UI. Caller A is strictly forbidden from
+// ReplyTurn lets caller A answer a waiting_input question via workers_reply,
+// defer escalation while verifying code, or explicitly escalate it to human UI
+// with an optional verification note. Caller A is strictly forbidden from
 // approving waiting_approval requests (EXEC-HARNESS-09).
 func (s *Service) ReplyTurn(in ReplyInput) (Turn, bool, error) {
 	turnID := strings.TrimSpace(in.TurnID)
@@ -432,7 +529,7 @@ func (s *Service) ReplyTurn(in ReplyInput) (Turn, bool, error) {
 		return Turn{}, false, automation.Fail("forbidden", "Caller cannot approve waiting_approval requests; human confirmation is required in desktop or Web UI")
 	}
 	if t.State != TurnWaitingInput {
-		return Turn{}, false, automation.Fail("conflict", "Turn is not waiting for input")
+		return Turn{}, false, automation.Fail("conflict", fmt.Sprintf("Turn is no longer waiting for input (current state: %s; it may have been answered already)", t.State))
 	}
 
 	s.mu.Lock()
@@ -452,16 +549,73 @@ func (s *Service) ReplyTurn(in ReplyInput) (Turn, bool, error) {
 		return Turn{}, false, automation.Fail("forbidden", "Caller cannot approve waiting_approval requests; human confirmation is required in desktop or Web UI")
 	}
 
+	hasAnswer := strings.TrimSpace(in.Text) != "" || len(in.Answers) > 0
+	if in.EscalateToHuman && in.DeferSeconds > 0 {
+		return Turn{}, false, automation.Fail("invalid_parameters", "Cannot combine escalate_to_human=true with defer_seconds")
+	}
+	if in.DeferSeconds > 0 && hasAnswer {
+		return Turn{}, false, automation.Fail("invalid_parameters", "Cannot combine defer_seconds with answer text/answers")
+	}
+
 	if in.EscalateToHuman {
-		s.escalateInteractionToHuman(snap.RequestID, turnID)
-		s.appendInteractionLog(turnID, "input_escalated", "Caller escalated question to human")
+		note := truncateSummary(strings.TrimSpace(in.Note), 1000)
+		s.escalateInteractionToHuman(snap.RequestID, turnID, note)
+		logMsg := "Caller escalated question to human"
+		if note != "" {
+			logMsg += ": " + truncateSummary(note, 200)
+		}
+		s.appendInteractionLog(turnID, "input_escalated", logMsg)
 		updated, _ := s.store.GetTurn(turnID)
 		updated.PendingInteraction = s.pendingForTurn(turnID)
 		return updated, true, nil
 	}
 
-	if strings.TrimSpace(in.Text) == "" && len(in.Answers) == 0 {
-		return Turn{}, false, automation.Fail("invalid_parameters", "Provide text/answers or set escalate_to_human=true")
+	if in.DeferSeconds > 0 {
+		if in.DeferSeconds < MinDeferSeconds || in.DeferSeconds > MaxDeferSeconds {
+			return Turn{}, false, automation.Fail("invalid_parameters", fmt.Sprintf("defer_seconds must be between %d and %d", MinDeferSeconds, MaxDeferSeconds))
+		}
+		now := s.now().UTC()
+		dur := time.Duration(in.DeferSeconds) * time.Second
+		nextAt := now.Add(dur)
+		note := truncateSummary(strings.TrimSpace(in.Note), 1000)
+		pi.mu.Lock()
+		if pi.resolved {
+			pi.mu.Unlock()
+			return Turn{}, false, automation.Fail("conflict", "Input request was already resolved")
+		}
+		if pi.view.VisibleToHuman {
+			pi.mu.Unlock()
+			return Turn{}, false, automation.Fail("conflict", "Question has already been escalated to human UI")
+		}
+		pi.view.ClaimedByCaller = true
+		pi.view.DeferCount++
+		pi.view.EscalateAt = &nextAt
+		if note != "" {
+			pi.view.EscalationNote = note
+		}
+		updatedSnap := pi.view
+		pi.mu.Unlock()
+
+		pi.resetEscalationTimer(dur)
+		logMsg := fmt.Sprintf("Caller verifying question; deferred human escalation by %ds", in.DeferSeconds)
+		if note != "" {
+			logMsg += " (" + truncateSummary(note, 160) + ")"
+		}
+		if curT, gErr := s.store.GetTurn(turnID); gErr == nil && curT.State == TurnWaitingInput {
+			curT.PendingInteraction = &updatedSnap
+			curT.Progress = logMsg
+			curT.UpdatedAt = now
+			_ = s.store.SaveTurn(curT)
+		}
+		s.appendInteractionLog(turnID, "input_deferred", logMsg)
+		s.notifyInteractionsChanged()
+		updated, _ := s.store.GetTurn(turnID)
+		updated.PendingInteraction = s.pendingForTurn(turnID)
+		return updated, false, nil
+	}
+
+	if !hasAnswer {
+		return Turn{}, false, automation.Fail("invalid_parameters", "Provide text/answers, defer_seconds, or set escalate_to_human=true")
 	}
 	if !pi.resolve(InteractionDecision{
 		Decision: DecisionAnswer,

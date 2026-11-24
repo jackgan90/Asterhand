@@ -30,7 +30,7 @@ func (a *App) workersAPI(w http.ResponseWriter, r *http.Request) {
 		send(w, 200, map[string]any{
 			"items":        items,
 			"active_turns": a.Workers.ActiveTurnsSnapshot(),
-			"interactions": a.Workers.ListHumanInteractions(),
+			"interactions": a.Workers.ListAllPendingInteractions(),
 		})
 	case "/api/workers/get":
 		if r.Method != http.MethodGet {
@@ -173,7 +173,7 @@ func (a *App) workersAPI(w http.ResponseWriter, r *http.Request) {
 		}
 		send(w, 200, map[string]any{
 			"resolved":     view,
-			"interactions": a.Workers.ListHumanInteractions(),
+			"interactions": a.Workers.ListAllPendingInteractions(),
 		})
 	case "/api/workers/session-auto-approve":
 		if r.Method != http.MethodPost {

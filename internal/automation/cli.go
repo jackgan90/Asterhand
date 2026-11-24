@@ -32,6 +32,8 @@ func ErrorExit(code string) int {
 		return 6
 	case "node_unavailable", "instance_changed":
 		return 7
+	case "wait_timeout":
+		return 8
 	default:
 		return 1
 	}
@@ -41,7 +43,7 @@ func ErrorExit(code string) int {
 // opens a writable node, launches a shell, or implicitly starts the service.
 func RunCLI(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, definitions []Definition) error {
 	if len(args) == 0 {
-		return cliError(stdout, Fail("invalid_parameters", "Usage: asterhand automation <operation|help|schema|new-id> [--home DIR] [--input FILE|-] [--operation-id ID]"))
+		return cliError(stdout, Fail("invalid_parameters", "Usage: asterhand automation <operation|help|schema|new-id> [--home DIR] [--caller ID] [--input FILE|- | --args JSON] [--operation-id ID]"))
 	}
 	name := args[0]
 	if name == "help" || name == "schema" {
@@ -75,8 +77,9 @@ func RunCLI(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 	f := flag.NewFlagSet(name, flag.ContinueOnError)
 	f.SetOutput(stderr)
 	home := f.String("home", config.DefaultHome(), "Existing node data directory")
-
+	caller := f.String("caller", "", "Optional managed coding harness caller identifier")
 	input := f.String("input", "", "JSON argument file, or - for standard input; omitted means {}")
+	inlineArgs := f.String("args", "", "Inline JSON object argument string (mutually exclusive with --input)")
 	id := f.String("operation-id", "", "Stable write identity; retain it across retries")
 	if err := f.Parse(args[1:]); err != nil {
 		return cliError(stdout, Fail("invalid_parameters", "Invalid CLI flags"))
@@ -84,8 +87,16 @@ func RunCLI(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 	if f.NArg() != 0 {
 		return cliError(stdout, Fail("invalid_parameters", "Unexpected positional argument"))
 	}
+	if *input != "" && *inlineArgs != "" {
+		return cliError(stdout, Fail("invalid_parameters", "--input and --args cannot be combined"))
+	}
 	data := []byte("{}")
-	if *input != "" {
+	if *inlineArgs != "" {
+		if len(*inlineArgs) > MaxRequest {
+			return cliError(stdout, Fail("request_too_large", "JSON input exceeds 1 MiB"))
+		}
+		data = []byte(*inlineArgs)
+	} else if *input != "" {
 		reader := stdin
 		if *input != "-" {
 			file, err := os.Open(*input)
@@ -116,7 +127,15 @@ func RunCLI(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 		}
 		_ = json.NewEncoder(stderr).Encode(map[string]string{"operation_id": *id})
 	}
-	client, err := OpenClient(*home)
+	var (
+		client *Client
+		err    error
+	)
+	if *caller != "" {
+		client, err = OpenCallerClient(*home, *caller)
+	} else {
+		client, err = OpenClient(*home)
+	}
 	if err != nil {
 		return cliError(stdout, PublicError(err))
 	}

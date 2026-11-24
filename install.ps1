@@ -657,7 +657,7 @@ function Read-LocalInstallCandidate([string]$Application, [string]$Runtime, [str
     Assert-LocalInstallFiles $Application $app.files
     Assert-LocalApplicationInventory $Application $app.files
     if (Test-Path -LiteralPath (Join-Path $Application 'runtime')) { throw 'Application input must not supply a runtime directory.' }
-    foreach ($required in @('asterhand.exe','asterhand-mcp.exe','AsterhandLauncher.exe','AsterhandInputHost.exe','input-host.json','packaging/dependencies.json','packaging/runtime-lock.json','packaging/start.ps1','packaging/configure-firewall.ps1')) {
+    foreach ($required in @('asterhand.exe','asterhand-mcp.exe','asterhand-cli.exe','AsterhandLauncher.exe','AsterhandInputHost.exe','input-host.json','packaging/dependencies.json','packaging/runtime-lock.json','packaging/start.ps1','packaging/configure-firewall.ps1')) {
         if ($required -notin @($app.files.path)) { throw "Missing local application entry: $required" }
     }
     $hostIdentity = Get-Content -LiteralPath (Join-Path $Application 'input-host.json') -Raw | ConvertFrom-Json
@@ -826,10 +826,12 @@ $staging = Assert-ChildPath (Join-Path $InstallDir ('.staging-' + [guid]::NewGui
     Assert-SeparateDirectories ([Asterhand.InstallNative]::CanonicalDirectory($InstallDir)) ([Asterhand.InstallNative]::CanonicalDirectory($DataDir))
     $hasLauncher = Test-Path -LiteralPath (Join-Path $versionDir 'AsterhandLauncher.exe') -PathType Leaf
     $hasMCP = Test-Path -LiteralPath (Join-Path $versionDir 'asterhand-mcp.exe') -PathType Leaf
+    $hasCLI = Test-Path -LiteralPath (Join-Path $versionDir 'asterhand-cli.exe') -PathType Leaf
     $desktopPath = Join-Path (Get-InstallFolder 'Desktop') 'Asterhand.lnk'
     $desktopEnabled = Select-DesktopShortcut $DesktopShortcut $hasLauncher ($null -ne $previous) (Test-OwnedShortcut $desktopPath $InstallDir)
     if ($hasLauncher) { Publish-InstallFile (Join-Path $versionDir 'AsterhandLauncher.exe') (Join-Path $InstallDir 'AsterhandLauncher.exe') }
     if ($hasMCP) { Publish-InstallFile (Join-Path $versionDir 'asterhand-mcp.exe') (Join-Path $InstallDir 'asterhand-mcp.exe') }
+    if ($hasCLI) { Publish-InstallFile (Join-Path $versionDir 'asterhand-cli.exe') (Join-Path $InstallDir 'asterhand-cli.exe') }
     Publish-InstallFile (Join-Path $versionDir 'packaging\start.ps1') (Join-Path $InstallDir 'start.ps1')
     Publish-InstallFile (Join-Path $versionDir 'packaging\configure-firewall.ps1') (Join-Path $InstallDir 'configure-firewall.ps1')
     Update-InstallShortcuts $InstallDir $desktopEnabled $hasLauncher ([bool]$LoginAtStartup)

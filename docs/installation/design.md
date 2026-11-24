@@ -173,6 +173,10 @@ LocalTools 缺失或没有策略修订时按默认开启处理，并补齐稳定
 
 安装验证应覆盖旧配置缺字段或无修订的默认值迁移、明确关闭保持、开关保存、同工作区历史/记忆/版本保留及 unknown 不重放；安装/repair 不覆盖用户明确选择。具体测试和未验证项见[本机工具验证](../development/features/local-runtime-tools/validation.md)。
 
-## 稳定 MCP 转发入口（Milestone 2 已实现并通过本机用户验收）
+## 稳定 MCP 与 CLI 转发入口
 
-对应 [INST-33](requirements.md) 与 [自动化 ADR-005](../automation/adr/005-harness-mcp-lifecycle-and-dynamic-toolsets.md)，仓库提供纯控制台轻量二进制 `cmd/asterhand-mcp`（产出 `asterhand-mcp.exe`，与 `AsterhandLauncher.exe` 同位于安装根目录）：启动时不弹出窗口、不写额外 stdout 日志，复用 `internal/launch.ReadInstallation` 校验同目录 `installation.json` 的 `Executable` 与 `Data`，在未显式传入 `--home` 时自动补齐 `--home <Installation.Data>` 并原样继承 stdin/stdout/stderr 与退出码执行 `asterhand.exe mcp`。`scripts/build-application.ps1`、`install.ps1` 与 `scripts/test-fast-local-install.ps1` 已将其纳入应用构建与激活清单，并已完成本机 `install-local.cmd` 覆盖升级与热同步验收。
+对应 [INST-33](requirements.md)、[INST-34](requirements.md)、[自动化 ADR-005](../automation/adr/005-harness-mcp-lifecycle-and-dynamic-toolsets.md) 与 [自动化 ADR-006](../automation/adr/006-long-wait-cli-and-mcp-usability.md)，仓库提供两项纯控制台轻量转发二进制，均随应用构建发布并与 `AsterhandLauncher.exe` 同位于安装根目录：
+- `cmd/asterhand-mcp`（产出 `asterhand-mcp.exe`）：启动时不弹出窗口、不写额外 stdout 日志，复用 `internal/launch.ReadInstallation` 校验同目录 `installation.json` 的 `Executable` 与 `Data`，在未显式传入 `--home` 时自动补齐 `--home <Installation.Data>` 并原样继承 stdin/stdout/stderr 与退出码执行 `asterhand.exe mcp`；
+- `cmd/asterhand-cli`（产出 `asterhand-cli.exe`）：采用相同的安装记录校验与 `--home <Installation.Data>` 自动注入机制（其中 `automation <op>` 在操作名之后插入 `--home`，`automation help/schema/new-id` 与 `version` 保持离线语义不注入 `--home`），仅允许转发 `wait`、`automation`、`status`、`version` 四类安全 CLI 子命令并拒绝 `start`/`setup`/`repair`/`mcp`，不改动用户全局 `PATH`。
+
+`scripts/build-application.ps1`、`install.ps1` 与 `scripts/test-fast-local-install.ps1` 将上述稳定入口一并纳入应用构建、安装校验与激活清单。

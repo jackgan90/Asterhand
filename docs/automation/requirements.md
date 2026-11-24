@@ -31,7 +31,7 @@ AUTO-NTF-01：`commands.create/get/list/validate/patch/clone` 与命令草稿支
 
 | ID | 要求 |
 |---|---|
-| AUTO-13 | 写操作使用稳定操作身份与规范化参数摘要；身份作用域包含可信调用主体和目标节点，相同身份不同内容拒绝；未知结果先查原请求，不自动换 ID/目标重做 |
+| AUTO-13 | 写操作使用稳定操作身份与规范化参数摘要；身份作用域包含可信调用主体和目标节点，相同身份不同内容拒绝；CLI 与 MCP 支持省略操作身份时由本地适配进程按节点规范时钟自动生成合法身份并在成功及断连响应中回传，保留显式操作身份用于跨进程重试幂等；未知结果先查原请求，不自动换 ID/目标重做 |
 | AUTO-14 | 接纳与业务对象的关联在副作用前可恢复地记录；启动回执丢失、进程重启、记录清理和请求过期均不得导致重复执行；不承诺外部副作用 exactly-once |
 | AUTO-15 | 配置修改使用对象修订；同对象旧修订拒绝覆盖，不同命令可独立修改；跨对象约束仍由领域服务串行检查 |
 | AUTO-16 | 长操作的接纳、执行、保存和观察分开；CLI/MCP 断开或取消等待不取消已接纳工作，显式停止仍需核对实际终态；节点退出沿用现有收尾 |
@@ -53,8 +53,8 @@ AUTO-NTF-01：`commands.create/get/list/validate/patch/clone` 与命令草稿支
 |---|---|
 | AUTO-HARNESS-01 | 每个已发现/配置的 Coding Harness 独立维护三项正交开关：`general_tools_enabled`、`collab_caller_enabled`、`collab_worker_enabled`，全部 8 种组合均有确定预期行为；分别维护期望状态与观察状态以支持可重试对账，外部 MCP 仅在 `general_tools_enabled || collab_caller_enabled` 为真时注册 |
 | AUTO-HARNESS-02 | MCP 公共操作按 `core`、`general`、`collab` 工具集分组；每个受管 Harness 绑定可撤销的受限主体与有效工具集，统一作用于 `tools/list`、`Dispatch`、`batches.submit` 子项、`operations.get` 收据作用域及客户端本地 `node.start`，支持 `notifications/tools/list_changed` 刷新；无 `--caller` 兼容入口明确定位为本机全量入口 |
-| AUTO-HARNESS-03 | `harnesses.list/get` 与 `workers.create/list/get/send/wait/result/logs/cancel/close` 统一提供 CLI 与 MCP、共用机器 schema 与幂等操作收据，并随对应里程碑实现同步登记至 `contracts/automation-coverage.json`；`workers.send` 为纯写接纳、`workers.wait` 上限对齐 `30s`、`workers.result/logs` 支持长正文与日志有界分页 |
+| AUTO-HARNESS-03 | `harnesses.list/get` 与 `workers.create/list/get/send/wait/result/logs/cancel/close` 统一提供 CLI 与 MCP、共用机器 schema 与幂等操作收据，并随对应里程碑实现同步登记至 `contracts/automation-coverage.json`；`workers.send` 为纯写接纳、`workers.wait` 上限对齐 `30s` 并支持可选 `verbose` 开关（默认返回紧凑视图且截断时携带 UTF-8 对齐 `next_cursor`）、`workers.result/logs` 支持长正文与日志有界分页；另提供客户端侧阻塞 `wait` 子命令及 `automation --caller`/`--args` 兜底入口与 `capabilities.cli_path` 路径发现 |
 | AUTO-HARNESS-04 | 外部 Harness 的 MCP 注册/反注册、冲突接管、路径覆盖、授权工作区与三开关变更按 `AUTO-19` 保留为 Web 专用人工例外；写入优先官方 CLI 或单键原子修改，严禁整文件备份外部含凭据配置，发现非托管同名条目时拒绝静默覆盖 |
-| AUTO-HARNESS-05 | MCP 工具响应在保留 `structuredContent` 的同时，须对 `core` 底座（`operations.new_id`、`operations.get`、`capabilities`）与全部 `harnesses.*`、`workers.*` 向 `content[].text` 输出面向发起方模型的有界结构化文本（包含 `operation_id`、`worker_id`、`turn_id`、状态、审查正文或分页/轮询指引），确保仅读取文本通道的客户端从首次生成 ID 到断线找回与读正文全链路不断链 |
+| AUTO-HARNESS-05 | MCP 工具响应在保留 `structuredContent` 的同时，须对 `core` 底座（`operations.new_id`、`operations.get`、`capabilities`）与全部 `harnesses.*`、`workers.*` 向 `content[].text` 输出面向发起方模型的有界结构化文本（包含 `operation_id`、`worker_id`、`turn_id`、状态、审查正文或精确 `next_cursor` 续读指引；超单次文本预算时仍保留定位标识与续读游标），并在守护进程重启瞬态离线期间保持已注册工具清单不被误清、仅在显式鉴权拒绝或策略变更时即时撤权 |
 
 总体业务架构见[全局设计](../overview/design.md)，公共操作与生命周期见[自动化设计](design.md)，治理要求见[开发治理](../development/requirements.md)。

@@ -67,6 +67,8 @@ INST-32：正式安装的 Windows 节点支持在运行期查询、创建或移�
 
 INST-TOOLS-01：新节点及未设置过工具权限的旧节点默认开启本批受限工具；已有明确关闭保持，不迁移或清空已有会话工作区。固定依赖仍按清单校验；文件桥和可信插件随程序交付，不额外安装系统 sandbox。INST-TOOLS-02：数据保留覆盖会话、记忆、文件版本及未知操作；隔离安装验证与真实节点用户验收分别记录。
 
-## 稳定 MCP 转发入口（Milestone 2 已实现并通过本机用户验收）
+## 稳定 MCP 与 CLI 转发入口
 
 INST-33：正式安装的 Windows 节点在安装根目录随 `AsterhandLauncher.exe` 同级提供无版本号的稳定 MCP 转发入口（`asterhand-mcp.exe`），启动时复用安装记录校验读取同目录 `installation.json` 的 `Executable` 与 `Data`，在未显式指定 `--home` 时自动向当前活动版本 `asterhand.exe mcp` 透传 `--home <Installation.Data>`、stdio 与参数；覆盖升级与自定义数据目录安装均保持外部 Coding Harness 中已托管的 MCP 配置连接正确节点实例且无需反复改写外部工具配置。详见[多 Coding Harness 中介计划](../development/features/multi-harness-broker/plan.md)。
+
+INST-34：正式安装的 Windows 节点在安装根目录与 `asterhand-mcp.exe` 同级提供无版本号的稳定 CLI 转发入口（`asterhand-cli.exe`），同样复用安装记录校验同目录 `installation.json`，仅转发安全 CLI 子命令（`wait`、`automation`、`status`、`version`）并在未显式传入 `--home` 时自动注入 `--home <Installation.Data>`；拒绝转发 `start`/`setup`/`repair`/`mcp` 等守护进程启动或协议子命令，且不修改用户系统 `PATH`（调用方通过 `capabilities.cli_path` 与 MCP 指令发现路径）。详见[多 Harness 协作长程等待与精简回传优化计划](../development/features/harness-collab-usability/plan.md)。

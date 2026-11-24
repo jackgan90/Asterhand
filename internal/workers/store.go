@@ -298,7 +298,10 @@ func (s *Store) ListTurnsByWorker(workerID string, limit int) ([]Turn, error) {
 func (s *Store) ListNonTerminalTurns() ([]Turn, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows, err := s.db.Query("SELECT body FROM turns WHERE state IN (?,?,?) ORDER BY updated_at ASC", TurnPrepared, TurnRunning, TurnReconcile)
+	rows, err := s.db.Query(
+		"SELECT body FROM turns WHERE state IN (?,?,?,?,?) ORDER BY updated_at ASC",
+		TurnPrepared, TurnRunning, TurnWaitingApproval, TurnWaitingInput, TurnReconcile,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -455,10 +458,10 @@ func (s *Store) PruneExpiredDetails(now time.Time) {
 	cutoff := now.Add(-DetailRetention).UnixMilli()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, _ = s.db.Exec(`DELETE FROM turn_results WHERE updated_at < ? AND turn_id IN (SELECT turn_id FROM turns WHERE state NOT IN (?,?,?))`,
-		cutoff, TurnPrepared, TurnRunning, TurnReconcile)
-	_, _ = s.db.Exec(`DELETE FROM turn_logs WHERE turn_id IN (SELECT turn_id FROM turns WHERE updated_at < ? AND state NOT IN (?,?,?))`,
-		cutoff, TurnPrepared, TurnRunning, TurnReconcile)
+	_, _ = s.db.Exec(`DELETE FROM turn_results WHERE updated_at < ? AND turn_id IN (SELECT turn_id FROM turns WHERE state NOT IN (?,?,?,?,?))`,
+		cutoff, TurnPrepared, TurnRunning, TurnWaitingApproval, TurnWaitingInput, TurnReconcile)
+	_, _ = s.db.Exec(`DELETE FROM turn_logs WHERE turn_id IN (SELECT turn_id FROM turns WHERE updated_at < ? AND state NOT IN (?,?,?,?,?))`,
+		cutoff, TurnPrepared, TurnRunning, TurnWaitingApproval, TurnWaitingInput, TurnReconcile)
 }
 
 func clampUTF8Bytes(b []byte, max int) int {

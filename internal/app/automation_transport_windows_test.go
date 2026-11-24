@@ -10,11 +10,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/jackgan90/Asterhand/internal/automation"
+	"github.com/jackgan90/Asterhand/internal/harnesses"
 	"github.com/jackgan90/Asterhand/internal/operations"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -120,5 +122,54 @@ func TestCLIAndRealMCPStdioSharePipeBusinessOperation(t *testing.T) {
 	if len(catalog.Commands) != 1 {
 		t.Fatal("cross-adapter replay duplicated create")
 	}
+}
 
+func TestRunCLIWithCallerArgsAndWaitPipeEndToEnd(t *testing.T) {
+	n := newNode(t, &fakeExecutor{})
+	a := n.app
+	tr := true
+	if _, err := a.Harnesses.UpdatePolicy(harnesses.UpdatePolicyInput{
+		HarnessID:           harnesses.HarnessClaudeCode,
+		CollabCallerEnabled: &tr,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. --caller + --args works for collab operation (workers_list).
+	var out, diag bytes.Buffer
+	err := automation.RunCLI(context.Background(), []string{
+		"workers_list", "--home", a.Config.Home, "--caller", harnesses.HarnessClaudeCode, "--args", `{"include_closed":false}`,
+	}, nil, &out, &diag, AutomationDefinitions())
+	if err != nil {
+		t.Fatalf("RunCLI --caller --args workers_list failed: %v out=%s diag=%s", err, out.String(), diag.String())
+	}
+
+	// 2. --caller enforces toolset restriction (general op commands_list rejected with exit 3).
+	out.Reset()
+	diag.Reset()
+	errGen := automation.RunCLI(context.Background(), []string{
+		"commands_list", "--home", a.Config.Home, "--caller", harnesses.HarnessClaudeCode,
+	}, nil, &out, &diag, AutomationDefinitions())
+	var exitErr *automation.ExitError
+	if errGen == nil || !strings.Contains(out.String(), "toolset_disabled") || !errorAsExit(errGen, &exitErr) || exitErr.Code != 3 {
+		t.Fatalf("expected toolset_disabled exit 3 for collab-only caller, got err=%v out=%s", errGen, out.String())
+	}
+
+	// 3. RunWaitCLI against unknown turn via live pipe returns structured not_found cleanly without hanging.
+	out.Reset()
+	diag.Reset()
+	errWait := automation.RunWaitCLI(context.Background(), []string{
+		"turn_missing_e2e", "--home", a.Config.Home, "--caller", harnesses.HarnessClaudeCode, "--timeout", "5", "--quiet",
+	}, &out, &diag)
+	if errWait == nil || !strings.Contains(out.String(), `"code":"not_found"`) {
+		t.Fatalf("expected structured not_found from RunWaitCLI over live pipe, got err=%v out=%s", errWait, out.String())
+	}
+}
+
+func errorAsExit(err error, target **automation.ExitError) bool {
+	e, ok := err.(*automation.ExitError)
+	if ok {
+		*target = e
+	}
+	return ok
 }

@@ -5,14 +5,20 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"maps"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/jackgan90/Asterhand/internal/config"
+	"github.com/jackgan90/Asterhand/internal/launch"
+	"github.com/jackgan90/Asterhand/internal/operations"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -42,21 +48,39 @@ func RunMCP(ctx context.Context, args []string, stderr io.Writer, definitions []
 	}
 	defer client.Close()
 
-	principal, err := client.LocalPrincipal()
-	if err != nil {
-		return err
-	}
-	initialInstance := ""
+	var (
+		principal       Principal
+		initialInstance string
+		cliPath         string
+		status          principalFetchStatus
+	)
 	if *caller != "" {
-		principal, initialInstance, _ = fetchLivePrincipal(ctx, client, *caller)
-	} else if _, inst, ok := fetchLivePrincipal(ctx, client, ""); ok {
-		initialInstance = inst
+		for attempt := 0; attempt < 3; attempt++ {
+			principal, initialInstance, cliPath, status = fetchLivePrincipal(ctx, client, *caller)
+			if status != principalTransientOffline || attempt == 2 {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+	} else {
+		principal, err = client.LocalPrincipal()
+		if err != nil {
+			return err
+		}
+		_, initialInstance, cliPath, _ = fetchLivePrincipal(ctx, client, "")
+	}
+	if cliPath == "" {
+		cliPath = resolveLocalCLIPath(*home)
 	}
 	if liveDefs, ok := fetchLiveDefinitions(ctx, client); ok && len(liveDefs) > 0 {
 		definitions = liveDefs
 	}
 
-	host := NewMCPHost(client, principal, definitions)
+	host := NewMCPHostWithCLIPath(client, principal, definitions, cliPath)
 	host.mu.Lock()
 	host.lastInstanceID = initialInstance
 	host.mu.Unlock()
@@ -89,29 +113,41 @@ type MCPHost struct {
 	activeDigests  map[string]string
 	lastRev        string
 	lastInstanceID string
+	cliPath        string
 }
 
 func NewMCPServer(client Caller, principal Principal, definitions []Definition) *mcp.Server {
 	return NewMCPHost(client, principal, definitions).Server
 }
 
-func mcpInstructions(principal Principal) string {
+func mcpInstructions(principal Principal, cliPath string) string {
 	var parts []string
 	if principal.AllowsToolset(ToolsetCore) {
-		parts = append(parts, "Write tools require an operation_id from operations_new_id (reuse unchanged after disconnection; obtain a new operation_id to retry after a rejected call); use operations_get to recover a lost receipt.")
+		parts = append(parts, "Write tools auto-generate an operation_id when omitted and return it on both success and disconnection errors; pass an explicit operation_id from operations_new_id only when you need pre-generated cross-retry idempotency, and use operations_get to recover an unknown outcome.")
 	}
 	if principal.AllowsToolset(ToolsetCollab) {
-		parts = append(parts, "For multi-harness collaboration: inspect available harnesses via harnesses_list, reuse an existing project worker via workers_list (or create one via workers_create), dispatch with workers_send (serialize workspace_write turns on the same physical worktree), wait with workers_wait (or workers_wait_any for multiple concurrent turns), inspect recent logs with workers_logs(tail=true), and read truncated output with workers_result.")
+		parts = append(parts, "For multi-harness collaboration: inspect available harnesses via harnesses_list, reuse an existing project worker via workers_list (or create one via workers_create), dispatch with workers_send (serialize workspace_write turns on the same physical worktree), wait with workers_wait (or workers_wait_any for multiple concurrent turns), inspect recent logs with workers_logs(tail=true), and read truncated output with workers_result(cursor=...).")
+		if strings.TrimSpace(cliPath) != "" {
+			callerFlag := ""
+			if principal.CallerID != "" {
+				callerFlag = " --caller " + principal.CallerID
+			}
+			parts = append(parts, fmt.Sprintf("For long-running turns (>30s) or MCP disconnect fallback, run in a background shell: %q wait <turn_id>%s (or %q automation <operation>%s --args '<json>').", cliPath, callerFlag, cliPath, callerFlag))
+		}
 	}
 	if principal.AllowsToolset(ToolsetGeneral) {
-		parts = append(parts, "Use capabilities to inspect enabled toolsets and node limits.")
+		parts = append(parts, "Use capabilities to inspect enabled toolsets, node limits, and cli_path.")
 	}
 	return strings.Join(parts, " ")
 }
 
 func NewMCPHost(client Caller, principal Principal, definitions []Definition) *MCPHost {
+	return NewMCPHostWithCLIPath(client, principal, definitions, "")
+}
+
+func NewMCPHostWithCLIPath(client Caller, principal Principal, definitions []Definition, cliPath string) *MCPHost {
 	var opts *mcp.ServerOptions
-	if inst := mcpInstructions(principal); inst != "" {
+	if inst := mcpInstructions(principal, cliPath); inst != "" {
 		opts = &mcp.ServerOptions{Instructions: inst}
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "asterhand", Version: config.Version}, opts)
@@ -125,6 +161,7 @@ func NewMCPHost(client Caller, principal Principal, definitions []Definition) *M
 		definitions:   byName,
 		activeDigests: map[string]string{},
 		lastRev:       principal.PolicyRevision,
+		cliPath:       cliPath,
 	}
 	host.SyncPrincipal(principal)
 	return host
@@ -146,14 +183,26 @@ func (h *MCPHost) SyncFromDaemon(ctx context.Context, callerID string) {
 	if h.client == nil {
 		return
 	}
-	p, instID, ok := fetchLivePrincipal(ctx, h.client, callerID)
-	if !ok && callerID == "" {
-		// Unmanaged local MCP stays bound to local principal if node is temporarily stopped.
+	p, instID, cliPath, status := fetchLivePrincipal(ctx, h.client, callerID)
+	if status == principalTransientOffline {
+		// Preserve already-registered tools during brief daemon restarts/upgrades.
+		return
+	}
+	if status == principalAuthDenied {
+		if callerID == "" {
+			return
+		}
+		h.mu.Lock()
+		h.syncLocked(p)
+		h.mu.Unlock()
 		return
 	}
 
 	h.mu.Lock()
-	instanceChanged := ok && instID != "" && instID != h.lastInstanceID
+	if cliPath != "" {
+		h.cliPath = cliPath
+	}
+	instanceChanged := instID != "" && instID != h.lastInstanceID
 	h.mu.Unlock()
 
 	if instanceChanged {
@@ -178,7 +227,7 @@ func (h *MCPHost) SyncFromDaemon(ctx context.Context, callerID string) {
 	}
 
 	h.mu.Lock()
-	if ok && instID != "" {
+	if instID != "" {
 		h.lastInstanceID = instID
 	}
 	h.syncLocked(p)
@@ -259,9 +308,8 @@ func (h *MCPHost) addDefinition(d Definition) {
 		props["operation_id"] = map[string]any{
 			"type":        "string",
 			"pattern":     pattern,
-			"description": "Create once with operations_new_id, or offline CLI new-id. Reuse unchanged only after disconnection when outcome is unknown; generate a new operation_id for a new attempt or retry after a rejected call.",
+			"description": "Optional stable write identity. When omitted, Asterhand MCP auto-generates a valid operation_id and returns it in both success and disconnection error responses; pass an explicit value from operations_new_id only when you need pre-generated cross-retry idempotency.",
 		}
-		required = append(required, "operation_id")
 	}
 	schema["properties"], schema["required"] = props, required
 
@@ -286,10 +334,17 @@ func (h *MCPHost) addDefinition(d Definition) {
 		}
 		id := ""
 		if d.Write {
-			if err := json.Unmarshal(fields["operation_id"], &id); err != nil || id == "" {
-				return mcpResult(d.Name, Response{Version: APIVersion, Error: Fail("invalid_operation_id", "A stable operation_id is required")}), nil
+			if rawID, present := fields["operation_id"]; present {
+				if err := json.Unmarshal(rawID, &id); err != nil || id == "" {
+					return mcpResult(d.Name, Response{Version: APIVersion, Error: Fail("invalid_operation_id", "operation_id must be a valid non-empty identifier when provided")}), nil
+				}
+				if err := operations.CheckName(id, d.Name); err != nil {
+					return mcpResult(d.Name, Response{Version: APIVersion, Error: Fail("invalid_operation_id", "operation_id must match the required timestamped format when provided")}), nil
+				}
+				delete(fields, "operation_id")
+			} else {
+				id = operations.NewIDFor(d.Name, time.Now())
 			}
-			delete(fields, "operation_id")
 		}
 		arguments, _ := json.Marshal(fields)
 		if normalize != nil {
@@ -300,6 +355,8 @@ func (h *MCPHost) addDefinition(d Definition) {
 		response, err := h.client.Call(ctx, d.Name, id, arguments)
 		if err != nil {
 			response = Response{Version: APIVersion, ID: id, Error: PublicError(err)}
+		} else if id != "" && response.ID == "" {
+			response.ID = id
 		}
 		return mcpResult(d.Name, response), nil
 	})
@@ -332,7 +389,38 @@ func fetchLiveDefinitions(ctx context.Context, client Caller) ([]Definition, boo
 	return defs, true
 }
 
-func fetchLivePrincipal(ctx context.Context, client Caller, callerID string) (Principal, string, bool) {
+type principalFetchStatus int
+
+const (
+	principalOnline principalFetchStatus = iota
+	principalAuthDenied
+	principalTransientOffline
+)
+
+func isAuthDeniedCode(code string) bool {
+	switch code {
+	case "forbidden", "authorization_required", "toolset_disabled":
+		return true
+	default:
+		return false
+	}
+}
+
+func resolveLocalCLIPath(home string) string {
+	exe, err := os.Executable()
+	if err != nil || exe == "" {
+		return ""
+	}
+	if installPath := launch.FindInstallation(exe, home); installPath != "" {
+		cliExe := filepath.Join(filepath.Dir(installPath), "asterhand-cli.exe")
+		if info, sErr := os.Stat(cliExe); sErr == nil && !info.IsDir() {
+			return cliExe
+		}
+	}
+	return exe
+}
+
+func fetchLivePrincipal(ctx context.Context, client Caller, callerID string) (Principal, string, string, principalFetchStatus) {
 	if reloader, ok := client.(interface{ ReloadCallerToken() bool }); ok {
 		reloader.ReloadCallerToken()
 	}
@@ -340,22 +428,29 @@ func fetchLivePrincipal(ctx context.Context, client Caller, callerID string) (Pr
 	defer cancel()
 	resp, err := client.Call(qCtx, "capabilities", "", json.RawMessage("{}"))
 	if err != nil || resp.Error != nil {
-		if callerID == "" {
-			return localPrincipal(), "", false
+		status := principalTransientOffline
+		var apiErr *Error
+		if err != nil && errors.As(err, &apiErr) && isAuthDeniedCode(apiErr.Code) {
+			status = principalAuthDenied
+		} else if resp.Error != nil && isAuthDeniedCode(resp.Error.Code) {
+			status = principalAuthDenied
 		}
-		// Credential revoked or node unavailable: expose zero tools for managed callers.
-		return Principal{ID: "harness:" + callerID, CallerID: callerID, Roles: nil, Toolsets: map[string]bool{}}, "", false
+		if callerID == "" {
+			return localPrincipal(), "", "", status
+		}
+		return Principal{ID: "harness:" + callerID, CallerID: callerID, Roles: nil, Toolsets: map[string]bool{}}, "", "", status
 	}
 	b, _ := json.Marshal(resp.Data)
 	var capData struct {
 		InstanceID     string          `json:"instance_id"`
 		PolicyRevision string          `json:"policy_revision"`
+		CLIPath        string          `json:"cli_path"`
 		Toolsets       map[string]bool `json:"toolsets"`
 		Roles          []string        `json:"roles"`
 	}
 	_ = json.Unmarshal(b, &capData)
 	if callerID == "" {
-		return localPrincipal(), capData.InstanceID, true
+		return localPrincipal(), capData.InstanceID, capData.CLIPath, principalOnline
 	}
 	roles := capData.Roles
 	if len(roles) == 0 && (capData.Toolsets[ToolsetGeneral] || capData.Toolsets[ToolsetCollab]) {
@@ -371,7 +466,7 @@ func fetchLivePrincipal(ctx context.Context, client Caller, callerID string) (Pr
 		PolicyRevision: capData.PolicyRevision,
 		Roles:          roles,
 		Toolsets:       toolsets,
-	}, capData.InstanceID, true
+	}, capData.InstanceID, capData.CLIPath, principalOnline
 }
 
 func mcpResult(opName string, response Response) *mcp.CallToolResult {

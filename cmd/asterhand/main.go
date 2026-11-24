@@ -48,6 +48,9 @@ func run() error {
 	if command == "mcp" {
 		return automation.RunMCP(context.Background(), args, os.Stderr, app.AutomationDefinitions())
 	}
+	if command == "wait" {
+		return automation.RunWaitCLI(context.Background(), args, os.Stdout, os.Stderr)
+	}
 	loc := i18n.Effective()
 	if command == "pick-local-script" {
 		f := flag.NewFlagSet(command, flag.ContinueOnError)

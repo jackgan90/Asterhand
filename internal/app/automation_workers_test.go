@@ -14,6 +14,7 @@ import (
 	"github.com/jackgan90/Asterhand/internal/harnesses"
 	"github.com/jackgan90/Asterhand/internal/operations"
 	"github.com/jackgan90/Asterhand/internal/workers"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type stubWorkerAdapter struct {
@@ -569,11 +570,11 @@ func TestM2HarnessesDiscoveryOpsAndWorkspaceWritePolicy(t *testing.T) {
 
 	// 7. Structured next_step helper on waiting_approval instructs caller not to cancel,
 	//    and waiting_input advertises defer_seconds + note escalation.
-	waitStep := workerWaitNextStep(workers.Turn{ID: "turn_wait_1", State: workers.TurnWaitingApproval}, false, 0)
+	waitStep := workerWaitNextStep(workers.Turn{ID: "turn_wait_1", State: workers.TurnWaitingApproval}, false, "", 0)
 	if !strings.Contains(waitStep, "do not cancel") || !strings.Contains(waitStep, "turn_wait_1") {
 		t.Fatalf("expected waiting_approval next_step to advise not cancelling and include turn_id, got %q", waitStep)
 	}
-	inStep := workerWaitNextStep(workers.Turn{ID: "turn_wait_2", State: workers.TurnWaitingInput}, false, 0)
+	inStep := workerWaitNextStep(workers.Turn{ID: "turn_wait_2", State: workers.TurnWaitingInput}, false, "", 0)
 	if !strings.Contains(inStep, "defer_seconds") || !strings.Contains(inStep, "note=") {
 		t.Fatalf("expected waiting_input next_step to mention defer_seconds and note, got %q", inStep)
 	}
@@ -605,5 +606,194 @@ func TestM2HarnessesDiscoveryOpsAndWorkspaceWritePolicy(t *testing.T) {
 		if hView.Capabilities.SupportsSteer != wantSteer {
 			t.Fatalf("harness %s supports_steer=%v, want %v", hView.ID, hView.Capabilities.SupportsSteer, wantSteer)
 		}
+	}
+}
+
+func TestPhase1ACompactWaitPaginationAndCapabilitiesCLIPath(t *testing.T) {
+	longText := strings.Repeat("审", 10000) // 30,000 UTF-8 bytes (> 24 KiB workers_wait preview limit)
+	failNext := false
+	adapter := &stubWorkerAdapter{
+		startFn: func(ctx context.Context, handle workers.ThreadHandle, spec workers.TurnStartSpec, onEvent func(workers.AdapterEvent)) (string, <-chan workers.TurnOutcome, error) {
+			if onEvent != nil {
+				onEvent(workers.AdapterEvent{Kind: "progress", Summary: "Inspecting parser"})
+			}
+			ch := make(chan workers.TurnOutcome, 1)
+			if failNext {
+				ch <- workers.TurnOutcome{
+					State:        workers.TurnFailed,
+					NativeTurnID: "nt_fail",
+					ErrorCode:    "native_turn_error",
+					ErrorMessage: "synthetic failure",
+				}
+				return "nt_fail", ch, nil
+			}
+			ch <- workers.TurnOutcome{
+				State:        workers.TurnCompleted,
+				NativeTurnID: "nt_long",
+				Items:        []workers.NativeItem{{ItemID: "f1", Type: "agentMessage", Phase: "final_answer", Text: longText}},
+			}
+			return "nt_long", ch, nil
+		},
+	}
+	n, ws, tok := setupM1WorkerNode(t, adapter)
+	a := n.app
+
+	// 1. capabilities advertises non-empty cli_path.
+	capResp := testAutomationCall(a, tok, "capabilities", "", automation.Empty{})
+	if capResp.Error != nil {
+		t.Fatalf("capabilities failed: %+v", capResp.Error)
+	}
+	capMap := capResp.Data.(map[string]any)
+	cliPath, _ := capMap["cli_path"].(string)
+	if strings.TrimSpace(cliPath) == "" {
+		t.Fatalf("expected non-empty cli_path in capabilities, got %+v", capMap)
+	}
+
+	// 2. Create worker and dispatch long UTF-8 output turn.
+	cr := testAutomationCall(a, tok, "workers_create", operations.NewID(time.Now()), workerCreateInput{
+		HarnessID: harnesses.HarnessCodex, WorkspaceRoot: ws.RootPath, Alias: "compact-wait", AccessMode: harnesses.AccessReadOnly,
+	})
+	if cr.Error != nil {
+		t.Fatalf("workers_create: %+v", cr.Error)
+	}
+	w := cr.Data.(workers.Worker)
+
+	sr := testAutomationCall(a, tok, "workers_send", operations.NewID(time.Now()), workerSendInput{
+		WorkerID: w.ID, WorkspaceID: ws.ID, Prompt: "long output",
+	})
+	if sr.Error != nil {
+		t.Fatalf("workers_send: %+v", sr.Error)
+	}
+	turn := sr.Data.(workers.Turn)
+
+	// 3. Default compact wait view omits nested Turn, provides aligned next_cursor, and exposes terminal after_vcs.
+	wr := testAutomationCall(a, tok, "workers_wait", "", workerWaitInput{TurnID: turn.ID, WorkspaceID: ws.ID, WaitSeconds: automation.Int(5)})
+	if wr.Error != nil {
+		t.Fatalf("workers_wait compact: %+v", wr.Error)
+	}
+	wv := wr.Data.(workerWaitView)
+	if wv.Turn != nil {
+		t.Fatalf("expected compact workers_wait to omit nested turn, got %+v", wv.Turn)
+	}
+	if !wv.Truncated || wv.NextCursor == "" || !strings.Contains(wv.NextStep, wv.NextCursor) {
+		t.Fatalf("expected truncated=true with next_cursor and cursor in next_step, got cursor=%q next_step=%q", wv.NextCursor, wv.NextStep)
+	}
+	if wv.AfterVCS == nil || wv.Progress == "" {
+		t.Fatalf("expected terminal after_vcs and progress promoted to top level, got %+v", wv)
+	}
+	compactBytes, _ := json.Marshal(wv)
+
+	// Continue pagination cleanly from wv.NextCursor without UTF-8 boundary errors.
+	rr := testAutomationCall(a, tok, "workers_result", "", workerResultInput{TurnID: turn.ID, WorkspaceID: ws.ID, Cursor: wv.NextCursor})
+	if rr.Error != nil {
+		t.Fatalf("workers_result with next_cursor failed: %+v", rr.Error)
+	}
+	page := rr.Data.(workers.ResultPage)
+	if !page.Complete || wv.Answer+page.Text != longText {
+		t.Fatalf("reconstructed paginated text mismatch: complete=%v len=%d want=%d", page.Complete, len(wv.Answer+page.Text), len(longText))
+	}
+
+	// 4. verbose=true includes full Turn and is measurably larger than compact view.
+	wrVerbose := testAutomationCall(a, tok, "workers_wait", "", workerWaitInput{TurnID: turn.ID, WorkspaceID: ws.ID, WaitSeconds: automation.Int(5), Verbose: true})
+	if wrVerbose.Error != nil {
+		t.Fatalf("workers_wait verbose: %+v", wrVerbose.Error)
+	}
+	wvVerbose := wrVerbose.Data.(workerWaitView)
+	if wvVerbose.Turn == nil || wvVerbose.Turn.BaselineVCS == nil {
+		t.Fatalf("expected verbose=true to include full Turn with BaselineVCS, got %+v", wvVerbose.Turn)
+	}
+	verboseBytes, _ := json.Marshal(wvVerbose)
+	if len(compactBytes) >= len(verboseBytes) {
+		t.Fatalf("expected compact wait payload (%d bytes) smaller than verbose (%d bytes)", len(compactBytes), len(verboseBytes))
+	}
+
+	// 5. Failed turn promotes error_code and error_message to top level in compact mode.
+	failNext = true
+	srFail := testAutomationCall(a, tok, "workers_send", operations.NewID(time.Now()), workerSendInput{
+		WorkerID: w.ID, WorkspaceID: ws.ID, Prompt: "fail turn",
+	})
+	if srFail.Error != nil {
+		t.Fatalf("workers_send fail: %+v", srFail.Error)
+	}
+	failTurn := srFail.Data.(workers.Turn)
+	wrFail := testAutomationCall(a, tok, "workers_wait", "", workerWaitInput{TurnID: failTurn.ID, WorkspaceID: ws.ID, WaitSeconds: automation.Int(5)})
+	if wrFail.Error != nil {
+		t.Fatalf("workers_wait failed turn: %+v", wrFail.Error)
+	}
+	wvFail := wrFail.Data.(workerWaitView)
+	if wvFail.Turn != nil || wvFail.ErrorCode != "native_turn_error" || wvFail.ErrorMessage != "synthetic failure" {
+		t.Fatalf("expected top-level error fields without Turn, got %+v", wvFail)
+	}
+}
+
+type realDefsRestartCaller struct {
+	instanceID string
+	defs       []automation.Definition
+}
+
+func (r *realDefsRestartCaller) Call(ctx context.Context, op, id string, args json.RawMessage) (automation.Response, error) {
+	return automation.Response{
+		Version:  automation.APIVersion,
+		Instance: r.instanceID,
+		Data: map[string]any{
+			"instance_id":     r.instanceID,
+			"policy_revision": "rev1",
+			"roles":           []string{"read", "edit", "execute"},
+			"toolsets":        map[string]bool{automation.ToolsetGeneral: true, automation.ToolsetCollab: true},
+		},
+	}, nil
+}
+
+func (r *realDefsRestartCaller) FetchDefinitions(ctx context.Context) (string, []automation.Definition, error) {
+	return r.instanceID, r.defs, nil
+}
+
+func TestAllAutomationDefinitionsJSONRoundTripZeroSpuriousListChanged(t *testing.T) {
+	liveDefs := AutomationDefinitions()
+	raw, err := json.Marshal(liveDefs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded []automation.Definition
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	caller := &realDefsRestartCaller{instanceID: "inst_a", defs: decoded}
+	pAll := automation.Principal{
+		ID:       "harness:claude-code",
+		CallerID: "claude-code",
+		Roles:    []string{"read", "edit", "execute"},
+		Toolsets: map[string]bool{automation.ToolsetGeneral: true, automation.ToolsetCollab: true},
+	}
+	host := automation.NewMCPHostWithCLIPath(caller, pAll, liveDefs, "asterhand-cli.exe")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	t1, t2 := mcp.NewInMemoryTransports()
+	ss, err := host.Server.Connect(ctx, t1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ss.Close()
+	changed := make(chan struct{}, 4)
+	client := mcp.NewClient(&mcp.Implementation{Name: "full-defs-check", Version: "1"}, &mcp.ClientOptions{
+		ToolListChangedHandler: func(context.Context, *mcp.ToolListChangedRequest) {
+			select {
+			case changed <- struct{}{}:
+			default:
+			}
+		},
+	})
+	cs, err := client.Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+
+	caller.instanceID = "inst_b"
+	host.SyncFromDaemon(ctx, "claude-code")
+	select {
+	case <-changed:
+		t.Fatal("same-schema daemon restart with full AutomationDefinitions emitted spurious tools/list_changed")
+	case <-time.After(60 * time.Millisecond):
 	}
 }

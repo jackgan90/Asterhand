@@ -50,8 +50,17 @@ func formatMCPText(opName string, response Response) string {
 	if response.Data != nil {
 		payload["data"] = response.Data
 	}
-	if hint := nextStepHint(opName, response); hint != "" {
-		payload["next_step"] = hint
+	dataMap, hasMap := toStringMap(response.Data)
+	hasEmbeddedNextStep := false
+	if hasMap {
+		if ns, _ := dataMap["next_step"].(string); ns != "" {
+			hasEmbeddedNextStep = true
+		}
+	}
+	if !hasEmbeddedNextStep {
+		if hint := nextStepHint(opName, response); hint != "" {
+			payload["next_step"] = hint
+		}
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -60,17 +69,54 @@ func formatMCPText(opName string, response Response) string {
 	if len(raw) <= maxMCPTextBytes {
 		return string(raw)
 	}
-	// Preserve essential metadata and truncate only the verbose data payload.
+	// Preserve essential identification/pagination metadata when trimming oversized data.
 	delete(payload, "data")
 	payload["text_truncated"] = true
-	if opName == "workers_wait" || opName == "workers_result" || opName == "workers_get" {
-		payload["next_step"] = "Text projection exceeded single-message budget; read full body with workers_result using cursor pagination."
+	if hasMap {
+		if compact := compactOverBudgetData(dataMap); len(compact) > 0 {
+			payload["data"] = compact
+		}
+	}
+	if hint := overBudgetNextStep(opName, dataMap); hint != "" {
+		payload["next_step"] = hint
 	}
 	raw, err = json.Marshal(payload)
 	if err != nil {
 		return "Completed"
 	}
 	return clampUTF8(string(raw), maxMCPTextBytes)
+}
+
+func compactOverBudgetData(dataMap map[string]any) map[string]any {
+	keys := []string{"turn_id", "worker_id", "state", "truncated", "result_bytes", "next_cursor", "triggered_turn_id", "error_code"}
+	compact := map[string]any{}
+	for _, k := range keys {
+		if v, ok := dataMap[k]; ok && v != nil && v != "" {
+			compact[k] = v
+		}
+	}
+	return compact
+}
+
+func overBudgetNextStep(opName string, dataMap map[string]any) string {
+	switch opName {
+	case "workers_wait", "workers_result", "workers_get":
+		tid, _ := dataMap["turn_id"].(string)
+		cur, _ := dataMap["next_cursor"].(string)
+		if tid != "" && cur != "" {
+			return fmt.Sprintf("Text projection exceeded single-message budget; call workers_result(turn_id=%q, cursor=%q) to read paginated output.", tid, cur)
+		}
+		if tid != "" {
+			return fmt.Sprintf("Text projection exceeded single-message budget; call workers_result(turn_id=%q, cursor=\"0\") to read paginated output.", tid)
+		}
+		return "Text projection exceeded single-message budget; read full body with workers_result using cursor pagination."
+	case "workers_wait_any":
+		if trig, _ := dataMap["triggered_turn_id"].(string); trig != "" {
+			return fmt.Sprintf("Text projection exceeded single-message budget; inspect turn %q via workers_wait(turn_id=%q) or workers_result(turn_id=%q, cursor=\"0\").", trig, trig, trig)
+		}
+		return "Text projection exceeded single-message budget; inspect individual turns via workers_wait(turn_id=...) or workers_result(turn_id=..., cursor=\"0\")."
+	}
+	return ""
 }
 
 func needsRichMCPText(opName string) bool {
@@ -95,7 +141,7 @@ func nextStepHint(opName string, response Response) string {
 		}
 	case "workers_send":
 		if tid, _ := dataMap["turn_id"].(string); tid != "" {
-			return fmt.Sprintf("Turn accepted. Call workers_wait(turn_id=%q) in this conversation until terminal.", tid)
+			return fmt.Sprintf("Turn accepted. Call workers_wait(turn_id=%q) in this conversation until terminal (or run the cli_path from capabilities with `wait %s` in a background shell for long turns).", tid, tid)
 		}
 	case "workers_wait", "workers_get":
 		state, _ := dataMap["state"].(string)
@@ -119,6 +165,9 @@ func nextStepHint(opName string, response Response) string {
 			return fmt.Sprintf("Worker asked a business question (see pending_interaction.questions). Answer via workers_reply(turn_id=%q, text=...) or escalate via workers_reply(turn_id=%q, escalate_to_human=true).", tid, tid)
 		case "completed":
 			if trunc, _ := dataMap["truncated"].(bool); trunc {
+				if cur, _ := dataMap["next_cursor"].(string); cur != "" {
+					return fmt.Sprintf("Turn completed with truncated preview. Call workers_result(turn_id=%q, cursor=%q) to read the rest.", tid, cur)
+				}
 				return fmt.Sprintf("Turn completed with truncated preview. Call workers_result(turn_id=%q) with cursor to read the rest.", tid)
 			}
 			if avail, ok := dataMap["answer_available"].(bool); ok && !avail {
@@ -185,8 +234,11 @@ func clampUTF8(s string, maxBytes int) string {
 }
 
 func appendChangedFilesNote(base string, dataMap map[string]any) string {
-	turnObj, _ := dataMap["turn"].(map[string]any)
-	afterVCS, _ := turnObj["after_vcs"].(map[string]any)
+	afterVCS, _ := dataMap["after_vcs"].(map[string]any)
+	if afterVCS == nil {
+		turnObj, _ := dataMap["turn"].(map[string]any)
+		afterVCS, _ = turnObj["after_vcs"].(map[string]any)
+	}
 	filesAny, _ := afterVCS["changed_files"].([]any)
 	if len(filesAny) == 0 {
 		return base

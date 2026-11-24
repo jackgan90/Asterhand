@@ -1,5 +1,7 @@
 # 文档导航
 
+[多 Harness 协作长程等待、MCP 容错与精简回传优化计划](development/features/harness-collab-usability/plan.md)：修复 `workers_wait` / `workers_wait_any` 截断 `next_cursor` 与超限文本定位字段、守护进程重启瞬断保持 MCP 工具清单及等待态重启对账、默认精简 `workers_wait` 响应（可选 `verbose`）、MCP 写工具 `operation_id` 可选自动生成，以及稳定无版本号 CLI 转发入口 `asterhand-cli.exe` 与客户端侧阻塞长等待 `wait` 子命令（详见 [ADR-006](automation/adr/006-long-wait-cli-and-mcp-usability.md)）。
+
 [多 Coding Harness 本地中介与统一接入管理计划](development/features/multi-harness-broker/plan.md)（**Milestone 1—2 已完成实现、工程验证及本机用户验收；Milestone 3—4 待后续实施**）：已交付四家本机自动发现与版本探测、安装根目录稳定转发入口 `asterhand-mcp.exe`、守护进程升级零断连热同步最新工具与 Schema、全仓统一 `[a-zA-Z0-9_-]` 下划线操作名、Antigravity/Codex/Claude 官方 MCP 托管对账与三开关 8 组合矩阵、公共 `harnesses_list/get`、Web「Coding Workers」实时结构化日志观测页，以及 `Codex (app-server)` 只读与受控 `workspace_write`（含规范化工作树写互斥与 Git/非 Git 变更快照）；详见[协议预检](development/features/multi-harness-broker/preflight.md)、[验证说明](development/features/multi-harness-broker/validation.md)、[执行器 ADR-008](executors/adr/008-multi-harness-broker-and-native-adapters.md) 与 [自动化 ADR-005](automation/adr/005-harness-mcp-lifecycle-and-dynamic-toolsets.md)。
 
 [本机持续会话工具能力计划](development/features/local-runtime-tools/plan.md)：首批本机文件、搜索、记忆、进度与文件恢复已交付并通过用户验收；采用[正式文件 I/O 桥接](development/features/local-runtime-tools/preflight.md)，未设置过工具权限时默认开启，可在“设置 → 助手”关闭。工程覆盖与专项验证边界见[验证说明](development/features/local-runtime-tools/validation.md)。先逐步完善本机能力，再评估远程聊天。

@@ -193,6 +193,7 @@ func (s *Service) markInterruptedOnStartup() error {
 			continue
 		}
 		t.State = TurnReconcile
+		t.PendingInteraction = nil
 		t.UpdatedAt = now
 		if t.ErrorCode == "" {
 			t.ErrorCode = "node_restarted"

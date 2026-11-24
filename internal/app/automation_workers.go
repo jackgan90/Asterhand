@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackgan90/Asterhand/internal/automation"
@@ -53,6 +54,7 @@ type workerWaitInput struct {
 	WaitSeconds        automation.OptionalInt `json:"wait_seconds,omitempty,omitzero" description:"Seconds to wait for progress or completion (1..30, default 30)"`
 	AfterCommentarySeq int64                  `json:"after_commentary_seq,omitempty" description:"Return only mid-turn commentary entries with seq greater than this value (pass previous latest_commentary_seq for incremental updates)"`
 	WakeOnCommentary   bool                   `json:"wake_on_commentary,omitempty" description:"When true, return immediately whenever the worker emits a new user-facing commentary update instead of waiting until wait_seconds expires"`
+	Verbose            bool                   `json:"verbose,omitempty" description:"When true, include the full nested turn metadata object (default false returns a compact view; use workers_get for full turn metadata)"`
 }
 
 type workerWaitAnyInput struct {
@@ -127,16 +129,21 @@ type workerGetView struct {
 }
 
 type workerWaitView struct {
-	Turn                workers.Turn              `json:"turn"`
+	Turn                *workers.Turn             `json:"turn,omitempty"`
 	WorkerID            string                    `json:"worker_id"`
 	TurnID              string                    `json:"turn_id"`
 	State               string                    `json:"state"`
+	Progress            string                    `json:"progress,omitempty"`
 	AnswerAvailable     bool                      `json:"answer_available"`
 	AnswerSource        string                    `json:"answer_source,omitempty"`
 	Answer              string                    `json:"answer,omitempty"`
 	PartialOutput       string                    `json:"partial_output,omitempty"`
 	Truncated           bool                      `json:"truncated,omitempty"`
-	ResultBytes         int                       `json:"result_bytes"`
+	ResultBytes         int                       `json:"result_bytes,omitempty"`
+	NextCursor          string                    `json:"next_cursor,omitempty"`
+	ErrorCode           string                    `json:"error_code,omitempty"`
+	ErrorMessage        string                    `json:"error_message,omitempty"`
+	AfterVCS            *workers.VCSSnapshot      `json:"after_vcs,omitempty"`
 	ElapsedSeconds      int                       `json:"elapsed_seconds,omitempty"`
 	IdleSeconds         int                       `json:"idle_seconds,omitempty"`
 	StreamEvents        int64                     `json:"stream_events,omitempty"`
@@ -323,17 +330,35 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			if err != nil {
 				return automation.Outcome{}, err
 			}
+			nextCursor := ""
+			if trunc {
+				nextCursor = strconv.Itoa(len(preview))
+			}
+			var fullTurn *workers.Turn
+			if v.Verbose {
+				cp := t
+				fullTurn = &cp
+			}
+			var afterVCS *workers.VCSSnapshot
+			if workers.IsTurnTerminal(t.State) {
+				afterVCS = t.AfterVCS
+			}
 			return automation.Outcome{Data: workerWaitView{
-				Turn:                t,
+				Turn:                fullTurn,
 				WorkerID:            t.WorkerID,
 				TurnID:              t.ID,
 				State:               t.State,
+				Progress:            t.Progress,
 				AnswerAvailable:     t.AnswerAvailable,
 				AnswerSource:        t.AnswerSource,
 				Answer:              preview,
 				PartialOutput:       t.PartialOutput,
 				Truncated:           trunc,
 				ResultBytes:         t.ResultBytes,
+				NextCursor:          nextCursor,
+				ErrorCode:           t.ErrorCode,
+				ErrorMessage:        t.ErrorMessage,
+				AfterVCS:            afterVCS,
 				ElapsedSeconds:      t.ElapsedSeconds,
 				IdleSeconds:         t.IdleSeconds,
 				StreamEvents:        t.StreamEvents,
@@ -341,7 +366,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 				LatestCommentarySeq: t.LatestCommentarySeq,
 				Commentaries:        commentaries,
 				PendingInteraction:  t.PendingInteraction,
-				NextStep:            workerWaitNextStep(t, trunc, len(commentaries)),
+				NextStep:            workerWaitNextStep(t, trunc, nextCursor, len(commentaries)),
 			}}, nil
 		})
 
@@ -595,7 +620,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 		})
 }
 
-func workerWaitNextStep(t workers.Turn, truncated bool, newCommentaries int) string {
+func workerWaitNextStep(t workers.Turn, truncated bool, nextCursor string, newCommentaries int) string {
 	switch t.State {
 	case workers.TurnRunning, workers.TurnPrepared:
 		if newCommentaries > 0 {
@@ -614,19 +639,42 @@ func workerWaitNextStep(t workers.Turn, truncated bool, newCommentaries int) str
 		return fmt.Sprintf("Worker asked a business question (see pending_interaction.questions). Answer via workers_reply(turn_id=%q, text=...), defer escalation while verifying via workers_reply(turn_id=%q, defer_seconds=120), or escalate via workers_reply(turn_id=%q, escalate_to_human=true, note=...).", t.ID, t.ID, t.ID)
 	case workers.TurnCompleted:
 		if truncated {
+			if nextCursor != "" {
+				return fmt.Sprintf("Turn completed with truncated preview. Call workers_result(turn_id=%q, cursor=%q) to read the rest.", t.ID, nextCursor)
+			}
 			return fmt.Sprintf("Turn completed with truncated preview. Call workers_result(turn_id=%q) with cursor to read the rest.", t.ID)
 		}
 		if !t.AnswerAvailable {
 			return fmt.Sprintf("Turn completed without a candidate final answer; inspect workers_logs(turn_id=%q).", t.ID)
 		}
 	case workers.TurnBlockedApproval, workers.TurnBlockedUserInput:
-		return "Worker requested an unsupported interactive approval or user question and stopped cleanly; report the reason to the user."
+		return appendWaitChangedFilesNote("Worker requested an unsupported interactive approval or user question and stopped cleanly; report the reason to the user.", t)
 	case workers.TurnInterrupted, workers.TurnCancelled, workers.TurnCancelledRevoked, workers.TurnFailed:
-		return fmt.Sprintf("Turn ended with non-success state %q; inspect workers_logs(turn_id=%q).", t.State, t.ID)
+		return appendWaitChangedFilesNote(fmt.Sprintf("Turn ended with non-success state %q; inspect workers_logs(turn_id=%q).", t.State, t.ID), t)
 	case workers.TurnReconcile:
 		return fmt.Sprintf("Turn requires reconciliation before continuing; do not resend automatically. Inspect workers_get or workers_logs(turn_id=%q).", t.ID)
 	}
 	return ""
+}
+
+func appendWaitChangedFilesNote(base string, t workers.Turn) string {
+	if t.AfterVCS == nil || len(t.AfterVCS.ChangedFiles) == 0 {
+		return base
+	}
+	var names []string
+	for i, f := range t.AfterVCS.ChangedFiles {
+		if i >= 8 {
+			names = append(names, fmt.Sprintf("... (+%d more)", len(t.AfterVCS.ChangedFiles)-8))
+			break
+		}
+		if f != "" {
+			names = append(names, f)
+		}
+	}
+	if len(names) == 0 {
+		return base
+	}
+	return base + " Worktree currently has changed files on disk: " + strings.Join(names, ", ") + "."
 }
 
 func describeWorkerAutomationResults(r *automation.Registry) {

@@ -117,7 +117,7 @@ try {
     $checks.Add('runtime-hit-zero-copy-key-corruption-fresh-repair-and-immutable-generations')
 
     $app = Join-Path $workspace 'app'
-    foreach ($name in @('asterhand.exe','asterhand-mcp.exe','AsterhandLauncher.exe','AsterhandInputHost.exe','packaging/start.ps1','packaging/configure-firewall.ps1')) { Write-Text (Join-Path $app $name) }
+    foreach ($name in @('asterhand.exe','asterhand-mcp.exe','asterhand-cli.exe','AsterhandLauncher.exe','AsterhandInputHost.exe','packaging/start.ps1','packaging/configure-firewall.ps1')) { Write-Text (Join-Path $app $name) }
     foreach ($name in @('dependencies.json','runtime-lock.json')) { Copy-Item -LiteralPath (Join-Path $repo ('packaging/'+$name)) -Destination (Join-Path $app 'packaging') }
     $source = 'a'*64
     Write-Text (Join-Path $app 'input-host.json') ('{"schema":1,"version":"1.0.0","source_sha256":"'+$source+'"}')

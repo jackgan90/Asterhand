@@ -8,7 +8,7 @@
   2. 为被调方提供**绑定授权工作区的稳定逻辑身份**（例如同项目内的 `codex-reviewer` 先审 Plan、再审 Code），在不强制跨 Harness 共享私有聊天库的前提下保持跨轮上下文连续；
   3. 由 Asterhand 统一发现本机已安装的 Coding Harness、托管其 MCP 注册/反注册与对账，并按**三项正交开关**控制每个 Harness 的工具暴露程度和参与角色，实现“最小必要工具暴露、升级不断连、一键启用/禁用即时生效”。
 - **状态与范围**：
-  - **当前状态**：`Milestone 1—2、Milestone 3 第 1—2 步、Milestone 4.1 与双 Agent 实时协作增强（运行中 steer 插话、中间 commentary 反馈与 wake_on_commentary、waiting_input 两阶段认领/续期/附注转人工，以及三家 Go 适配器按职责拆分为 *_adapter.go + *_protocol.go）均已完成实现、工程验证及本机用户验收；后续按序推进 Milestone 4.2（isolated_worktree）与后置的 Milestone 3 第 3 步（Worker 角色模板）`。
+  - **当前状态**：Milestone 1—2、Milestone 3 第 1—2 步、Milestone 4.1 与双 Agent 实时协作增强（运行中 `steer` 插话、中间 `commentary` 反馈与 `wake_on_commentary`、`waiting_input` 两阶段认领/续期/附注转人工，以及三家 Go 适配器按职责拆分为 `*_adapter.go` + `*_protocol.go`）均已完成实现、工程验证及本机用户验收；长程等待 CLI、MCP 瞬断容错、紧凑等待回传与可选自动操作身份优化见[长程等待与可用性优化计划](../harness-collab-usability/plan.md)；后续按序推进 Milestone 4.2（`isolated_worktree`）与后置的 Milestone 3 第 3 步（Worker 角色模板）。
   - **阶段边界**：Milestone 4.2 与后置角色模板在对应设计确认后分别实施与验收。
   - **预检与验证文档**：[协议预检记录](preflight.md)、[验证说明](validation.md)。
 - **关联 Rxx / Cxx / 领域需求 ID**：

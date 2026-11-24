@@ -6,18 +6,20 @@
 
 ## CLI
 
-以下路径为占位值。使用默认节点目录时可以省略 --home。帮助、schema 和生成操作 ID 不要求节点在线。已安装节点或本地构建安装的当前 `asterhand.exe` 与默认节点目录可从 `%LOCALAPPDATA%\Programs\Asterhand\installation.json` 的 `executable` 和 `data` 字段读取；命令、脚本图、运行与日志的完整字段正则、取值范围、节点约束及 Windows Job 语义均由 `automation schema <操作>` 直接给出。
+以下路径为占位值。使用默认节点目录时可以省略 `--home`。已安装节点（Windows）优先使用安装根目录无版本号的稳定 CLI 转发入口 `<安装目录>\asterhand-cli.exe`（可从 `capabilities` 返回的 `cli_path` 读取，默认位于 `%LOCALAPPDATA%\Programs\Asterhand\asterhand-cli.exe`），它会自动读取同目录 `installation.json` 并向当前活动版本 `asterhand.exe` 注入 `--home <Data>`；开发或源码直跑环境可直接调用 `asterhand.exe`。帮助、schema 和生成操作 ID 不要求节点在线；命令、脚本图、运行与日志的完整字段正则、取值范围、节点约束及 Windows Job 语义均由 `automation schema <操作>` 直接给出。
 
 ```powershell
-& '<安装目录>\versions\<版本>\asterhand.exe' automation help
-& '<安装目录>\versions\<版本>\asterhand.exe' automation schema commands.patch
-& '<安装目录>\versions\<版本>\asterhand.exe' automation new-id
-& '<安装目录>\versions\<版本>\asterhand.exe' automation commands.list --home '<节点数据目录>'
+& '<安装目录>\asterhand-cli.exe' automation help
+& '<安装目录>\asterhand-cli.exe' automation schema commands_patch
+& '<安装目录>\asterhand-cli.exe' automation new-id
+& '<安装目录>\asterhand-cli.exe' automation commands_list --home '<节点数据目录>'
+& '<安装目录>\asterhand-cli.exe' automation workers_list --caller codex --args '{"include_closed":false}'
+& '<安装目录>\asterhand-cli.exe' wait <turn_id> --caller claude-code --timeout 1800
 ```
 
-业务参数用 UTF-8（无 BOM）JSON 文件传给 `--input <文件>`，或者用 `--input -` 从 stdin 读取；包含非 ASCII 字符或复杂参数时优先使用 UTF-8 无 BOM 文件。stdout 是单个 JSON 响应；stderr 是诊断及首次写入前生成的 `{"operation_id":...}`（在 PowerShell 中调用时注意避免因 `stderr` 输出触发 `NativeCommandError`）。自动调用方应先生成并保存操作 ID，再显式传 `--operation-id`，以便进程或连接中断后核对原请求。
+业务参数可用 `--args '<JSON>'` 单行传入（适合简短参数），也可用 UTF-8（无 BOM）JSON 文件传给 `--input <文件>` 或 `--input -` 从 stdin 读取（两者互斥；包含非 ASCII 字符或长文本时优先使用 `--input` 文件或 stdin）；受管 Coding Harness 调用可通过 `--caller <harness_id>` 沿用三开关受限权限。stdout 是单个 JSON 响应；stderr 是诊断、首次写入前生成的 `{"operation_id":...}` 以及 `wait` 状态切换单行进度（在 PowerShell 中调用时注意避免因 `stderr` 输出触发 `NativeCommandError`）。跨进程重试时应先生成并保存操作 ID，再显式传 `--operation-id`，以便进程或连接中断后核对原请求。
 
-例如先用 `commands.get` 读取目标的 `id` 和 `revision`，再提交如下 `commands.patch` 参数；图的步骤、边和属性也可在同次 patch 内修改，所有修改通过验证后一次保存。
+例如先用 `commands_get` 读取目标的 `id` 和 `revision`，再提交如下 `commands_patch` 参数；图的步骤、边和属性也可在同次 patch 内修改，所有修改通过验证后一次保存。
 
 ```json
 {
@@ -27,26 +29,28 @@
 }
 ```
 
-`commands.run` 使用同样的 `command_id` 和 `expected_revision`，返回独立 `run_id`。用 `runs.get/wait` 查询，`runs.stop` 明确列出 `run_ids`；读日志用 `logs.read`，参数包含 `command_id`、`run_id`，可加 `step_id`、`stream` 和 `encoding`。把 `next` 原样用于后续请求，不修改游标。`at_end` 只表示到达当前日志末尾，`finished` 才表示执行已结束且解码尾部已处理。
+`commands_run` 使用同样的 `command_id` 和 `expected_revision`，返回独立 `run_id`。用 `runs_get` / `runs_wait` 查询，`runs_stop` 明确列出 `run_ids`；读日志用 `logs_read`，参数包含 `command_id`、`run_id`，可加 `step_id`、`stream` 和 `encoding`。把 `next` 原样用于后续请求，不修改游标。`at_end` 只表示到达当前日志末尾，`finished` 才表示执行已结束且解码尾部已处理。
 
-退出码：0 成功，2 参数/版本问题，3 授权问题，4 冲突，5 结果未知，6 容量限制，7 节点不可用或实例改变，其余失败为 1。业务判断以 JSON 的 `error.code` 和收据为准。
+长耗时多 Harness Worker 轮次（如 10–30 分钟）推荐在后台 shell 执行 `asterhand-cli.exe wait <turn_id> [<turn_id2> ...] [--caller <harness_id>] [--workspace-id <id>] [--timeout 1800] [--poll-seconds 30] [--wake-on-commentary] [--after-commentary-seq N] [--disconnect-grace 60] [--quiet]`：该命令内部循环切片等待并在节点短暂重启恢复期间按 `--disconnect-grace` 退避重试，直到轮次到达终态、`reconciliation_required`、`waiting_input`（且尚未自动转人工）、命中 `--wake-on-commentary` 新旁白或总超时才退出并向 stdout 输出单个紧凑 JSON。
+
+退出码：0 成功，2 参数/版本问题，3 授权问题，4 冲突，5 结果未知，6 容量限制，7 节点不可用或实例改变，8 阻塞等待总超时（`wait_timeout`，stdout 仍保留最新快照 `data`），其余失败为 1。业务判断以 JSON 的 `error.code` 和收据为准。
 
 ## MCP
 
-在支持 stdio MCP 的客户端中配置同一个可执行程序。下例中的路径为占位值；具体外层配置位置由使用的客户端决定。
+在支持 stdio MCP 的客户端中优先配置安装根目录的稳定转发入口 `asterhand-mcp.exe`（或开发环境下直连 `asterhand.exe`）。下例中的路径为占位值；具体外层配置位置由使用的客户端决定。
 
 ```json
 {
   "mcpServers": {
     "asterhand": {
-      "command": "C:\\<安装目录>\\versions\\<版本>\\asterhand.exe",
-      "args": ["mcp", "--home", "C:\\<节点数据目录>"]
+      "command": "C:\\<安装目录>\\asterhand-mcp.exe",
+      "args": []
     }
   }
 }
 ```
 
-工具名称与 CLI 操作名称相同，输入参数来自同一 schema；写工具另要求 `operation_id`。先调用 `operations.new_id` 获得节点时钟生成的身份，再调用目标工具。MCP 请求编号只识别本次通信，不能替代业务操作 ID。结果在 `structuredContent` 中，业务错误设置 `isError`；简短文本仅供显示。敏感操作不在工具列表内。
+工具名称与 CLI 操作名称统一使用下划线规范名（`[a-zA-Z0-9_-]`），输入参数来自同一 schema；写工具的 `operation_id` 为可选字段——省略时由 `asterhand-mcp` 自动按节点规范时钟生成并随成功响应或断连 `result_unknown` 报错原样返回；若需要调用前预先固化跨进程重放身份，仍可先调用 `operations_new_id`（对应 `node_start` 传 `{"operation":"node_start"}`）再显式传入。MCP 请求编号只识别本次通信，不能替代业务操作 ID。结果在 `structuredContent` 与有界 `content[].text` 中双通道返回，业务错误设置 `isError`；守护进程短暂重启期间已注册工具清单保留不清除，仅在显式鉴权拒绝或策略撤销时即时收回。敏感操作不在工具列表内。
 
 ## 续改未保存内容
 

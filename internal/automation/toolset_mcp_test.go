@@ -370,3 +370,287 @@ func TestMCPHostLiveSchemaSyncOnDaemonUpgrade(t *testing.T) {
 		t.Fatal("expected daemon to receive call for dynamically synced harnesses_list")
 	}
 }
+
+func TestMCPHostTransientOfflinePreservesToolsAndStableJSONDigest(t *testing.T) {
+	defs := []automation.Definition{
+		{
+			Name:        "workers_send",
+			Description: "Send turn",
+			Role:        "execute",
+			Toolset:     automation.ToolsetCollab,
+			Write:       true,
+			Schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"worker_id": map[string]any{"type": "string"},
+					"prompt":    map[string]any{"type": "string"},
+				},
+				"required": []string{"worker_id", "prompt"},
+			},
+			OutputSchema: map[string]any{"type": "object", "properties": map[string]any{"data": map[string]any{"type": "object"}}},
+		},
+		{
+			Name:        "workers_wait",
+			Description: "Wait turn",
+			Role:        "read",
+			Toolset:     automation.ToolsetCollab,
+			Schema:      map[string]any{"type": "object", "properties": map[string]any{"turn_id": map[string]any{"type": "string"}}, "required": []string{"turn_id"}},
+			OutputSchema: map[string]any{"type": "object", "properties": map[string]any{"data": map[string]any{"type": "object"}}},
+		},
+	}
+	// Simulate /v1/definitions JSON round-trip ([]string -> []any) to prove zero spurious list_changed on same-schema restart.
+	rawDefs, _ := json.Marshal(defs)
+	var roundTripped []automation.Definition
+	if err := json.Unmarshal(rawDefs, &roundTripped); err != nil {
+		t.Fatal(err)
+	}
+
+	mode := "online"
+	instanceID := "inst_1"
+	caller := &struct {
+		fakeMCPCaller
+		defs []automation.Definition
+	}{defs: roundTripped}
+	var currentDefs = &caller.defs
+	_ = currentDefs
+
+	dynCaller := &transientAndAuthCaller{
+		getState: func() (string, string, []automation.Definition) {
+			return mode, instanceID, roundTripped
+		},
+	}
+
+	pCollab := automation.Principal{
+		ID:       "harness:claude-code",
+		CallerID: "claude-code",
+		Roles:    []string{"read", "edit", "execute"},
+		Toolsets: map[string]bool{automation.ToolsetCollab: true},
+	}
+	host := automation.NewMCPHostWithCLIPath(dynCaller, pCollab, defs, `C:\Apps\Asterhand\asterhand-cli.exe`)
+	host.SyncFromDaemon(context.Background(), "claude-code")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	t1, t2 := mcp.NewInMemoryTransports()
+	serverSession, err := host.Server.Connect(ctx, t1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+
+	listChangedCh := make(chan struct{}, 8)
+	client := mcp.NewClient(&mcp.Implementation{Name: "resilience-client", Version: "1.0"}, &mcp.ClientOptions{
+		ToolListChangedHandler: func(ctx context.Context, req *mcp.ToolListChangedRequest) {
+			select {
+			case listChangedCh <- struct{}{}:
+			default:
+			}
+		},
+	})
+	clientSession, err := client.Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	if initRes := clientSession.InitializeResult(); initRes == nil || !strings.Contains(initRes.Instructions, "asterhand-cli.exe") {
+		t.Fatalf("expected MCP instructions to advertise cli_path, got %+v", initRes)
+	}
+
+	// 1. Transient daemon restart (node_unavailable) MUST preserve all tools and emit zero list_changed!
+	mode = "offline"
+	host.SyncFromDaemon(ctx, "claude-code")
+	select {
+	case <-listChangedCh:
+		t.Fatal("transient node_unavailable must not emit tools/list_changed or drop tools")
+	case <-time.After(60 * time.Millisecond):
+	}
+	listedOffline, err := clientSession.ListTools(ctx, nil)
+	if err != nil || len(listedOffline.Tools) != 2 {
+		t.Fatalf("expected 2 tools preserved during transient disconnect, got %d (err=%v)", len(listedOffline.Tools), err)
+	}
+
+	// 2. Daemon recovers with a new instance_id and JSON-roundtripped identical schemas -> zero spurious list_changed!
+	mode = "online"
+	instanceID = "inst_2"
+	host.SyncFromDaemon(ctx, "claude-code")
+	select {
+	case <-listChangedCh:
+		t.Fatal("same-schema restart after JSON round-trip must not emit spurious tools/list_changed")
+	case <-time.After(60 * time.Millisecond):
+	}
+
+	// 3. Explicit credential revocation (forbidden) MUST immediately remove all tools and emit list_changed!
+	mode = "forbidden"
+	host.SyncFromDaemon(ctx, "claude-code")
+	select {
+	case <-listChangedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected notifications/tools/list_changed on explicit forbidden")
+	}
+	listedRevoked, err := clientSession.ListTools(ctx, nil)
+	if err != nil || len(listedRevoked.Tools) != 0 {
+		t.Fatalf("expected 0 tools after explicit auth denial, got %d (err=%v)", len(listedRevoked.Tools), err)
+	}
+}
+
+type transientAndAuthCaller struct {
+	getState func() (mode string, instanceID string, defs []automation.Definition)
+}
+
+func (t *transientAndAuthCaller) Call(ctx context.Context, op, id string, args json.RawMessage) (automation.Response, error) {
+	mode, inst, _ := t.getState()
+	if mode == "offline" {
+		return automation.Response{}, automation.Fail("node_unavailable", "Daemon restarting")
+	}
+	if mode == "forbidden" {
+		return automation.Response{Version: automation.APIVersion, Error: automation.Fail("forbidden", "Credential revoked")}, nil
+	}
+	return automation.Response{
+		Version:  automation.APIVersion,
+		Instance: inst,
+		Data: map[string]any{
+			"instance_id":     inst,
+			"policy_revision": "rev1",
+			"roles":           []string{"read", "edit", "execute"},
+			"toolsets":        map[string]bool{automation.ToolsetCollab: true},
+		},
+	}, nil
+}
+
+func (t *transientAndAuthCaller) FetchDefinitions(ctx context.Context) (string, []automation.Definition, error) {
+	mode, inst, defs := t.getState()
+	if mode == "offline" {
+		return "", nil, automation.Fail("node_unavailable", "Daemon restarting")
+	}
+	return inst, defs, nil
+}
+
+func TestMCPWriteAutoGeneratesOptionalOperationIDAndTextFormatting(t *testing.T) {
+	r := automation.NewRegistry("node", "inst", nil)
+	type sendArgs struct {
+		Prompt string `json:"prompt"`
+	}
+	automation.Register[sendArgs](r, automation.Definition{Name: "workers_send", Role: "execute", Toolset: automation.ToolsetCollab, Write: true}, nil, nil, nil)
+	automation.Register[automation.Empty](r, automation.Definition{Name: "node_start", Role: "execute", Toolset: automation.ToolsetGeneral, Write: true}, nil, nil, nil)
+	automation.Register[automation.Empty](r, automation.Definition{Name: "workers_wait", Role: "read", Toolset: automation.ToolsetCollab}, nil, nil, nil)
+	defs := r.Definitions(automation.Principal{Roles: []string{"read", "edit", "execute"}})
+
+	var seenIDs []string
+	failTransport := false
+	bigAnswer := strings.Repeat("A", 50<<10)
+	caller := fakeMCPCaller{fn: func(ctx context.Context, op, id string, args json.RawMessage) (automation.Response, error) {
+		seenIDs = append(seenIDs, id)
+		if failTransport {
+			return automation.Response{}, automation.Fail("result_unknown", "Lost pipe after write")
+		}
+		if op == "workers_wait" {
+			return automation.Response{
+				Version: automation.APIVersion,
+				Data: map[string]any{
+					"worker_id":    "wkr_1",
+					"turn_id":      "turn_big",
+					"state":        "completed",
+					"truncated":    true,
+					"result_bytes": 60000,
+					"next_cursor":  "24576",
+					"answer":       bigAnswer,
+					"next_step":    "Turn completed with truncated preview. Call workers_result(turn_id=\"turn_big\", cursor=\"24576\") to read the rest.",
+					"after_vcs":    map[string]any{"changed_files": []string{"a.go"}},
+				},
+			}, nil
+		}
+		return automation.Response{
+			Version: automation.APIVersion,
+			ID:      id,
+			Data:    map[string]any{"turn_id": "turn_1", "state": "running"},
+			Receipt: &operations.Receipt{State: "completed", Accepted: true},
+		}, nil
+	}}
+
+	pAll := automation.Principal{
+		ID:       "harness:claude-code",
+		CallerID: "claude-code",
+		Roles:    []string{"read", "edit", "execute"},
+		Toolsets: map[string]bool{automation.ToolsetGeneral: true, automation.ToolsetCollab: true},
+	}
+	host := automation.NewMCPHost(caller, pAll, defs)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	t1, t2 := mcp.NewInMemoryTransports()
+	serverSession, err := host.Server.Connect(ctx, t1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+	clientSession, err := mcp.NewClient(&mcp.Implementation{Name: "opid-client", Version: "1.0"}, nil).Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	// 1. Write tool schema exposes operation_id without marking it required.
+	listed, err := clientSession.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range listed.Tools {
+		if tool.Name == "workers_send" {
+			b, _ := json.Marshal(tool.InputSchema)
+			var s map[string]any
+			_ = json.Unmarshal(b, &s)
+			for _, reqField := range s["required"].([]any) {
+				if reqField == "operation_id" {
+					t.Fatalf("operation_id must be optional on MCP write tools, schema=%s", string(b))
+				}
+			}
+		}
+	}
+
+	// 2. Omitting operation_id auto-generates valid timestamped ID and echoes it back.
+	resSend, err := clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "workers_send", Arguments: map[string]any{"prompt": "hello"}})
+	if err != nil || resSend.IsError || len(seenIDs) != 1 || operations.CheckName(seenIDs[0], "workers_send") != nil {
+		t.Fatalf("expected auto-generated valid operation_id, seen=%v err=%v res=%+v", seenIDs, err, resSend)
+	}
+	sendText := resSend.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(sendText, seenIDs[0]) {
+		t.Fatalf("expected auto-generated operation_id %q in text %q", seenIDs[0], sendText)
+	}
+
+	// 3. node_start without operation_id generates start:-prefixed ID.
+	resStart, err := clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "node_start", Arguments: map[string]any{}})
+	if err != nil || resStart.IsError || len(seenIDs) != 2 || !strings.HasPrefix(seenIDs[1], "start:") {
+		t.Fatalf("expected start:-prefixed operation_id for node_start, seen=%v err=%v res=%+v", seenIDs, err, resStart)
+	}
+
+	// 4. Transport error still echoes auto-generated operation_id for reconciliation.
+	failTransport = true
+	resErr, err := clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "workers_send", Arguments: map[string]any{"prompt": "lost"}})
+	if err != nil || !resErr.IsError || len(seenIDs) != 3 {
+		t.Fatalf("expected IsError with generated ID recorded, seen=%v err=%v res=%+v", seenIDs, err, resErr)
+	}
+	errText := resErr.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(errText, seenIDs[2]) {
+		t.Fatalf("expected generated operation_id %q in disconnect error text %q", seenIDs[2], errText)
+	}
+	failTransport = false
+
+	// 5. Explicit malformed / empty / null operation_id is rejected cleanly.
+	for _, bad := range []any{"", nil, "not_a_timestamp_id"} {
+		badRes, err := clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "workers_send", Arguments: map[string]any{"prompt": "x", "operation_id": bad}})
+		if err != nil || !badRes.IsError || !strings.Contains(badRes.Content[0].(*mcp.TextContent).Text, "invalid_operation_id") {
+			t.Fatalf("expected invalid_operation_id for %#v, got err=%v res=%+v", bad, err, badRes)
+		}
+	}
+
+	// 6. Over-budget workers_wait text projection preserves turn_id, next_cursor, and actionable cursor next_step.
+	resWait, err := clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "workers_wait", Arguments: map[string]any{}})
+	if err != nil || resWait.IsError {
+		t.Fatalf("workers_wait over-budget failed: %v %+v", err, resWait)
+	}
+	waitText := resWait.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(waitText, `"text_truncated":true`) || !strings.Contains(waitText, `"turn_id":"turn_big"`) || !strings.Contains(waitText, `"next_cursor":"24576"`) || !strings.Contains(waitText, `cursor=\"24576\"`) {
+		t.Fatalf("over-budget text projection lost essential cursor metadata: %s", waitText)
+	}
+}

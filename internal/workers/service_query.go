@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -133,6 +134,10 @@ func (s *Service) buildWaitAnyItems(turnIDs []string, expectedWorkspaceID string
 			}
 		}
 		preview, trunc := s.readPreviewCapped(t, 4<<10)
+		nextCursor := ""
+		if trunc {
+			nextCursor = strconv.Itoa(len(preview))
+		}
 		comments, latestSeq := s.selectCommentaries(t.ID, 0, 2)
 		if latestSeq > t.LatestCommentarySeq {
 			t.LatestCommentarySeq = latestSeq
@@ -149,6 +154,7 @@ func (s *Service) buildWaitAnyItems(turnIDs []string, expectedWorkspaceID string
 			AnswerPreview:       preview,
 			Truncated:           trunc,
 			ResultBytes:         t.ResultBytes,
+			NextCursor:          nextCursor,
 			ElapsedSeconds:      t.ElapsedSeconds,
 			IdleSeconds:         t.IdleSeconds,
 			StreamEvents:        t.StreamEvents,

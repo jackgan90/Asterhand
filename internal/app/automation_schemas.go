@@ -57,7 +57,7 @@ func describeAutomationResults(r *automation.Registry) {
 	set("operations_new_id", resultObject("operation_id", "", "", nil))
 	set("node_version", resultObject("version api_version platform source_digest", "", "", nil))
 	set("node_status node_start node_stop", resultObject("node_id instance_id version", "running stopping", "", nil))
-	set("capabilities", resultObject("api_version node_id instance_id caller_id policy_revision", "", "server_time_ms", map[string]any{"roles": arrayOf(text), "toolsets": object, "operations": arrayOf(resultObject("name role toolset", "write batch", "", nil)), "limits": object}))
+	set("capabilities", resultObject("api_version node_id instance_id caller_id policy_revision cli_path", "", "server_time_ms", map[string]any{"roles": arrayOf(text), "toolsets": object, "operations": arrayOf(resultObject("name role toolset", "write batch", "", nil)), "limits": object}))
 	set("nodes_get nodes_capabilities", resultObject("node_id name version checked_at automation_api", "cached", "age_seconds", map[string]any{"online": map[string]any{"type": []string{"boolean", "string"}}, "capabilities": object, "projects": arrayOf(object), "task_projects": arrayOf(text)}))
 	set("nodes_list", resultObject("next", "", "", map[string]any{"items": arrayOf(object)}))
 	chat := resultObject("connection active_conversation_id next", "can_send busy", "", map[string]any{

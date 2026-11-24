@@ -187,9 +187,10 @@ type WaitAnyItem struct {
 	AnswerAvailable    bool             `json:"answer_available"`
 	AnswerSource       string           `json:"answer_source,omitempty"`
 	AnswerPreview      string           `json:"answer_preview,omitempty"`
-	Truncated          bool             `json:"truncated,omitempty"`
-	ResultBytes        int              `json:"result_bytes"`
-	ElapsedSeconds     int              `json:"elapsed_seconds,omitempty"`
+	Truncated           bool              `json:"truncated,omitempty"`
+	ResultBytes         int               `json:"result_bytes"`
+	NextCursor          string            `json:"next_cursor,omitempty"`
+	ElapsedSeconds      int               `json:"elapsed_seconds,omitempty"`
 	IdleSeconds        int              `json:"idle_seconds,omitempty"`
 	StreamEvents       int64            `json:"stream_events,omitempty"`
 	StreamBytes        int64            `json:"stream_bytes,omitempty"`

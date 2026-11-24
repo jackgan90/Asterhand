@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -134,7 +135,7 @@ func (a *App) registerAutomationCore(r *automation.Registry) {
 				"worker_stall_seconds":          int(wb.StallTimeout / time.Second),
 				"worker_max_active_turns":       wb.MaxActiveTurns,
 			}
-			return automation.Outcome{Data: map[string]any{"api_version": automation.APIVersion, "node_id": r.Node, "instance_id": r.Instance, "caller_id": call.Principal.CallerID, "policy_revision": call.Principal.PolicyRevision, "roles": call.Principal.Roles, "toolsets": toolsets, "server_time_ms": r.Now().UnixMilli(), "operations": names, "limits": limits}}, nil
+			return automation.Outcome{Data: map[string]any{"api_version": automation.APIVersion, "node_id": r.Node, "instance_id": r.Instance, "caller_id": call.Principal.CallerID, "policy_revision": call.Principal.PolicyRevision, "cli_path": a.automationCLIPath(), "roles": call.Principal.Roles, "toolsets": toolsets, "server_time_ms": r.Now().UnixMilli(), "operations": names, "limits": limits}}, nil
 		})
 	type receiptInput struct {
 		ID string `json:"operation_id" description:"Operation identity previously returned by operations_new_id"`
@@ -230,6 +231,24 @@ func (a *App) automationHumanAPI(w http.ResponseWriter, r *http.Request) bool {
 	}
 	http.NotFound(w, r)
 	return true
+}
+
+func (a *App) automationCLIPath() string {
+	exe, err := os.Executable()
+	if err != nil || exe == "" {
+		return ""
+	}
+	home := ""
+	if a != nil && a.Config != nil {
+		home = a.Config.Home
+	}
+	if installPath := launch.FindInstallation(exe, home); installPath != "" {
+		cliExe := filepath.Join(filepath.Dir(installPath), "asterhand-cli.exe")
+		if info, sErr := os.Stat(cliExe); sErr == nil && !info.IsDir() {
+			return cliExe
+		}
+	}
+	return exe
 }
 
 func compactResult(value any) json.RawMessage { b, _ := json.Marshal(value); return b }

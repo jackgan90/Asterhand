@@ -39,9 +39,25 @@ export function workerActionView({
   let guardTimer = null;
   let resizing = false;
   let resizeTimer = null;
-  const drafts = new Map(); // request_id -> { text, selected: { [qID]: Set<string> } }
+  const drafts = new Map(); // request_id -> { text, answers: { [qID]: string }, selected: { [qID]: Set<string> } } (never stores secret values or secret option selections)
+  const secretInputs = new Map(); // question_id -> HTMLInputElement (type=password)
+  const secretSelected = new Map(); // question_id -> Set<string> (current secret card only)
+  let secretRenderedReqID = '';
 
   const post = (kind, fields = {}) => bridge.send({version: 1, kind, generation: epoch, ...fields});
+
+  function clearSecretInputs() {
+    for (const input of secretInputs.values()) {
+      input.value = '';
+    }
+    secretInputs.clear();
+    secretSelected.clear();
+    secretRenderedReqID = '';
+  }
+
+  function questionHasSecret(questions) {
+    return Array.isArray(questions) && questions.some(q => Boolean(q?.is_secret));
+  }
 
   function isActionGuarded() {
     return now() < guardUntil;
@@ -100,7 +116,7 @@ export function workerActionView({
 
   function getDraft(reqID) {
     if (!drafts.has(reqID)) {
-      drafts.set(reqID, {text: '', selected: {}});
+      drafts.set(reqID, {text: '', answers: {}, selected: {}});
     }
     return drafts.get(reqID);
   }
@@ -164,6 +180,7 @@ export function workerActionView({
     const proj = projectBase(item.workspace_root);
 
     if (isApproval) {
+      if (secretInputs.size > 0) clearSecretInputs();
       const toolPill = byID('action-tool-pill');
       toolPill.textContent = item.tool_name || 'action';
       const riskPill = byID('action-risk-pill');
@@ -226,49 +243,118 @@ export function workerActionView({
       }
       const draft = getDraft(item.request_id);
       const qWrap = byID('action-questions');
-      qWrap.replaceChildren();
       const qs = item.questions && item.questions.length ? item.questions : [{id: 'q1', question: item.summary}];
-      for (const q of qs) {
-        const qBox = document.createElement('div');
-        qBox.className = 'action-q-item';
-        const qText = document.createElement('div');
-        qText.className = 'action-q-text';
-        qText.textContent = q.question || item.summary || '';
-        qBox.appendChild(qText);
-        if (q.options && q.options.length) {
-          const optWrap = document.createElement('div');
-          optWrap.className = 'action-q-opts';
-          if (!draft.selected[q.id]) draft.selected[q.id] = new Set();
-          for (const opt of q.options) {
-            const chip = document.createElement('button');
-            chip.type = 'button';
-            chip.className = 'action-opt-chip';
-            chip.textContent = opt.description ? `${opt.label} — ${opt.description}` : opt.label;
-            const active = draft.selected[q.id].has(opt.label);
-            chip.setAttribute('aria-pressed', active ? 'true' : 'false');
-            chip.disabled = busy;
-            chip.addEventListener('click', () => {
-              const sel = draft.selected[q.id];
-              if (q.multi_select) {
-                if (sel.has(opt.label)) sel.delete(opt.label);
-                else sel.add(opt.label);
-              } else {
-                const had = sel.has(opt.label);
-                sel.clear();
-                if (!had) sel.add(opt.label);
-              }
-              paint();
-            });
-            optWrap.appendChild(chip);
-          }
-          qBox.appendChild(optWrap);
+      const hasSecret = questionHasSecret(qs);
+      if (hasSecret && secretRenderedReqID === item.request_id) {
+        for (const input of secretInputs.values()) {
+          input.disabled = busy;
         }
-        qWrap.appendChild(qBox);
+        answerInput.hidden = true;
+        answerInput.value = '';
+      } else {
+        if (secretInputs.size > 0) clearSecretInputs();
+        qWrap.replaceChildren();
+        for (const q of qs) {
+          const qID = q.id || 'q1';
+          const qBox = document.createElement('div');
+          qBox.className = 'action-q-item';
+          const qText = document.createElement('div');
+          qText.className = 'action-q-text';
+          qText.textContent = q.question || item.summary || '';
+          qBox.appendChild(qText);
+          if (q.options && q.options.length) {
+            const optWrap = document.createElement('div');
+            optWrap.className = 'action-q-opts';
+            let sel;
+            if (q.is_secret) {
+              if (!secretSelected.has(qID)) secretSelected.set(qID, new Set());
+              sel = secretSelected.get(qID);
+            } else {
+              if (!draft.selected[qID]) draft.selected[qID] = new Set();
+              sel = draft.selected[qID];
+            }
+            for (const opt of q.options) {
+              const chip = document.createElement('button');
+              chip.type = 'button';
+              chip.className = 'action-opt-chip';
+              chip.textContent = opt.description ? `${opt.label} — ${opt.description}` : opt.label;
+              const active = sel.has(opt.label);
+              chip.setAttribute('aria-pressed', active ? 'true' : 'false');
+              chip.disabled = busy;
+              chip.addEventListener('click', () => {
+                if (q.multi_select) {
+                  if (sel.has(opt.label)) sel.delete(opt.label);
+                  else sel.add(opt.label);
+                } else {
+                  const had = sel.has(opt.label);
+                  sel.clear();
+                  if (!had) sel.add(opt.label);
+                }
+                if (hasSecret) {
+                  for (const child of optWrap.children) {
+                    const label = child.dataset?.optionLabel;
+                    if (label !== undefined) {
+                      child.setAttribute('aria-pressed', sel.has(label) ? 'true' : 'false');
+                    }
+                  }
+                } else {
+                  paint();
+                }
+              });
+              chip.dataset.optionLabel = opt.label;
+              optWrap.appendChild(chip);
+            }
+            qBox.appendChild(optWrap);
+          }
+          if (hasSecret) {
+            if (q.is_secret) {
+              const secInput = document.createElement('input');
+              secInput.type = 'password';
+              secInput.className = 'action-secret-input';
+              secInput.autocomplete = 'new-password';
+              secInput.spellcheck = false;
+              secInput.placeholder = t('common.worker_action.answer_placeholder');
+              secInput.dataset.questionId = qID;
+              secInput.disabled = busy;
+              secInput.addEventListener('keydown', event => {
+                if (event.key === 'Enter' && !event.isComposing) {
+                  event.preventDefault();
+                  submitAnswer();
+                }
+              });
+              secretInputs.set(qID, secInput);
+              qBox.appendChild(secInput);
+            } else if (!q.options || !q.options.length || q.is_other) {
+              const txtInput = document.createElement('input');
+              txtInput.type = 'text';
+              txtInput.className = 'action-secret-input';
+              txtInput.placeholder = t('common.worker_action.answer_placeholder');
+              txtInput.value = draft.answers[qID] || '';
+              txtInput.disabled = busy;
+              txtInput.addEventListener('input', () => { draft.answers[qID] = txtInput.value; });
+              txtInput.addEventListener('keydown', event => {
+                if (event.key === 'Enter' && !event.isComposing) {
+                  event.preventDefault();
+                  submitAnswer();
+                }
+              });
+              qBox.appendChild(txtInput);
+            }
+          }
+          qWrap.appendChild(qBox);
+        }
+        if (hasSecret) {
+          secretRenderedReqID = item.request_id;
+          answerInput.hidden = true;
+          answerInput.value = '';
+        } else {
+          answerInput.hidden = false;
+          if (answerInput.value !== draft.text) {
+            answerInput.value = draft.text;
+          }
+          answerInput.disabled = busy;
+        }
       }
-      if (answerInput.value !== draft.text) {
-        answerInput.value = draft.text;
-      }
-      answerInput.disabled = busy;
       byID('btn-send-answer').disabled = actionDisabled;
       byID('btn-cancel-input').disabled = actionDisabled;
     }
@@ -279,6 +365,7 @@ export function workerActionView({
   function submitApproval(decision) {
     const item = currentItem();
     if (!item || submittingID === item.request_id || isActionGuarded()) return;
+    clearSecretInputs();
     submittingID = item.request_id;
     paint();
     post('decide', {request_id: item.request_id, decision});
@@ -288,18 +375,51 @@ export function workerActionView({
     const item = currentItem();
     if (!item || submittingID === item.request_id || isActionGuarded()) return;
     const draft = getDraft(item.request_id);
-    const text = (draft.text || '').trim();
+    const qs = item.questions && item.questions.length ? item.questions : [{id: 'q1', question: item.summary}];
+    const hasSecret = questionHasSecret(qs);
     const answers = {};
-    let hasSelected = false;
+    let hasAnswer = false;
     for (const [qID, set] of Object.entries(draft.selected)) {
       if (set && set.size > 0) {
         answers[qID] = Array.from(set);
-        hasSelected = true;
+        hasAnswer = true;
       }
     }
-    if (!text && !hasSelected) {
-      answerInput.focus();
-      return;
+    let text = '';
+    if (hasSecret) {
+      for (const [qID, set] of secretSelected.entries()) {
+        if (set && set.size > 0) {
+          answers[qID] = Array.from(set);
+          hasAnswer = true;
+        }
+      }
+      for (const [qID, val] of Object.entries(draft.answers)) {
+        const trimmed = (val || '').trim();
+        if (trimmed) {
+          answers[qID] = answers[qID] ? [...answers[qID], trimmed] : [trimmed];
+          hasAnswer = true;
+        }
+      }
+      let firstSecret = null;
+      for (const [qID, input] of secretInputs.entries()) {
+        if (!firstSecret) firstSecret = input;
+        const val = input.value || '';
+        if (val !== '') {
+          answers[qID] = answers[qID] ? [...answers[qID], val] : [val];
+          hasAnswer = true;
+        }
+      }
+      if (!hasAnswer) {
+        firstSecret?.focus?.();
+        return;
+      }
+      clearSecretInputs();
+    } else {
+      text = (draft.text || '').trim();
+      if (!text && !hasAnswer) {
+        answerInput.focus();
+        return;
+      }
     }
     submittingID = item.request_id;
     paint();
@@ -318,6 +438,7 @@ export function workerActionView({
   });
   byID('action-prev').addEventListener('click', () => {
     if (items.length <= 1) return;
+    clearSecretInputs();
     const idx = (currentIndex() - 1 + items.length) % items.length;
     activeRequestID = items[idx].request_id;
     cmdExpanded = false;
@@ -326,6 +447,7 @@ export function workerActionView({
   });
   byID('action-next').addEventListener('click', () => {
     if (items.length <= 1) return;
+    clearSecretInputs();
     const idx = (currentIndex() + 1) % items.length;
     activeRequestID = items[idx].request_id;
     cmdExpanded = false;
@@ -381,10 +503,12 @@ export function workerActionView({
       if (!liveIDs.has(submittingID)) submittingID = '';
       const autoSwitched = Boolean(prevActiveID && !liveIDs.has(prevActiveID));
       if (!liveIDs.has(activeRequestID)) {
+        clearSecretInputs();
         activeRequestID = items.length ? items[0].request_id : '';
         cmdExpanded = false;
       }
       if (!items.length) {
+        clearSecretInputs();
         collapsed = false;
         lastReportedHeight = 0;
         clearSwitchGuard();

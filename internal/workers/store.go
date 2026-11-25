@@ -24,7 +24,10 @@ const (
 	DetailRetention    = 7 * 24 * time.Hour
 )
 
-var ErrNotFound = errors.New("not_found")
+var (
+	ErrNotFound    = errors.New("not_found")
+	ErrStoreClosed = errors.New("workers_store_closed")
+)
 
 type Store struct {
 	mu sync.Mutex
@@ -119,6 +122,9 @@ func (s *Store) SaveWorker(w Worker) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return ErrStoreClosed
+	}
 	_, err = s.db.Exec(
 		`INSERT INTO workers(worker_id, workspace_id, alias, operation_id, state, body, updated_at)
 		 VALUES(?,?,?,?,?,?,?)
@@ -137,6 +143,9 @@ func (s *Store) SaveWorker(w Worker) error {
 func (s *Store) GetWorker(workerID string) (Worker, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return Worker{}, ErrStoreClosed
+	}
 	var b []byte
 	err := s.db.QueryRow("SELECT body FROM workers WHERE worker_id=?", workerID).Scan(&b)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -152,6 +161,9 @@ func (s *Store) GetWorker(workerID string) (Worker, error) {
 func (s *Store) FindActiveWorkerByAlias(workspaceID, alias string) (Worker, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return Worker{}, ErrStoreClosed
+	}
 	var b []byte
 	err := s.db.QueryRow(
 		"SELECT body FROM workers WHERE workspace_id=? AND alias=? AND state<>? ORDER BY updated_at DESC LIMIT 1",
@@ -170,6 +182,9 @@ func (s *Store) FindActiveWorkerByAlias(workspaceID, alias string) (Worker, erro
 func (s *Store) WorkerByOperationID(operationID string) (Worker, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return Worker{}, ErrStoreClosed
+	}
 	var b []byte
 	err := s.db.QueryRow("SELECT body FROM workers WHERE operation_id=? LIMIT 1", operationID).Scan(&b)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -188,6 +203,9 @@ func (s *Store) ListWorkers(workspaceID string, includeClosed bool, limit int) (
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return nil, ErrStoreClosed
+	}
 	query := "SELECT body FROM workers WHERE 1=1"
 	args := []any{}
 	if workspaceID != "" {
@@ -227,6 +245,9 @@ func (s *Store) SaveTurn(t Turn) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return ErrStoreClosed
+	}
 	_, err = s.db.Exec(
 		`INSERT INTO turns(turn_id, worker_id, workspace_id, operation_id, client_correlation_id, state, body, updated_at)
 		 VALUES(?,?,?,?,?,?,?,?)
@@ -239,9 +260,67 @@ func (s *Store) SaveTurn(t Turn) error {
 	return err
 }
 
+// SaveTurnAndWorker persists a turn update and an optional worker update in a
+// single SQLite transaction so turn state, write-lock retention, and worker
+// ownership never diverge on partial failures.
+func (s *Store) SaveTurnAndWorker(t Turn, w *Worker) error {
+	tb, err := json.Marshal(t)
+	if err != nil {
+		return err
+	}
+	var wb []byte
+	if w != nil {
+		wb, err = json.Marshal(*w)
+		if err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.db == nil {
+		return ErrStoreClosed
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(
+		`INSERT INTO turns(turn_id, worker_id, workspace_id, operation_id, client_correlation_id, state, body, updated_at)
+		 VALUES(?,?,?,?,?,?,?,?)
+		 ON CONFLICT(turn_id) DO UPDATE SET
+		   state=excluded.state,
+		   body=excluded.body,
+		   updated_at=excluded.updated_at`,
+		t.ID, t.WorkerID, t.WorkspaceID, t.OperationID, t.ClientCorrelationID, t.State, tb, t.UpdatedAt.UnixMilli(),
+	); err != nil {
+		return err
+	}
+	if w != nil {
+		if _, err := tx.Exec(
+			`INSERT INTO workers(worker_id, workspace_id, alias, operation_id, state, body, updated_at)
+			 VALUES(?,?,?,?,?,?,?)
+			 ON CONFLICT(worker_id) DO UPDATE SET
+			   workspace_id=excluded.workspace_id,
+			   alias=excluded.alias,
+			   operation_id=excluded.operation_id,
+			   state=excluded.state,
+			   body=excluded.body,
+			   updated_at=excluded.updated_at`,
+			w.ID, w.WorkspaceID, w.Alias, w.OperationID, w.State, wb, w.UpdatedAt.UnixMilli(),
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *Store) GetTurn(turnID string) (Turn, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return Turn{}, ErrStoreClosed
+	}
 	var b []byte
 	err := s.db.QueryRow("SELECT body FROM turns WHERE turn_id=?", turnID).Scan(&b)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -257,6 +336,9 @@ func (s *Store) GetTurn(turnID string) (Turn, error) {
 func (s *Store) TurnByOperationID(operationID string) (Turn, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return Turn{}, ErrStoreClosed
+	}
 	var b []byte
 	err := s.db.QueryRow("SELECT body FROM turns WHERE operation_id=? LIMIT 1", operationID).Scan(&b)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -275,6 +357,9 @@ func (s *Store) ListTurnsByWorker(workerID string, limit int) ([]Turn, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return nil, ErrStoreClosed
+	}
 	rows, err := s.db.Query("SELECT body FROM turns WHERE worker_id=? ORDER BY updated_at DESC LIMIT ?", workerID, limit)
 	if err != nil {
 		return nil, err
@@ -298,6 +383,9 @@ func (s *Store) ListTurnsByWorker(workerID string, limit int) ([]Turn, error) {
 func (s *Store) ListNonTerminalTurns() ([]Turn, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return nil, ErrStoreClosed
+	}
 	rows, err := s.db.Query(
 		"SELECT body FROM turns WHERE state IN (?,?,?,?,?) ORDER BY updated_at ASC",
 		TurnPrepared, TurnRunning, TurnWaitingApproval, TurnWaitingInput, TurnReconcile,
@@ -330,6 +418,9 @@ func (s *Store) SaveResultText(turnID, text string, now time.Time) (int, bool, e
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return 0, false, ErrStoreClosed
+	}
 	_, err := s.db.Exec(
 		`INSERT INTO turn_results(turn_id, body, byte_len, updated_at)
 		 VALUES(?,?,?,?)
@@ -342,6 +433,9 @@ func (s *Store) SaveResultText(turnID, text string, now time.Time) (int, bool, e
 func (s *Store) ReadResultText(turnID string) (string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return "", false, ErrStoreClosed
+	}
 	var b []byte
 	err := s.db.QueryRow("SELECT body FROM turn_results WHERE turn_id=?", turnID).Scan(&b)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -356,6 +450,9 @@ func (s *Store) ReadResultText(turnID string) (string, bool, error) {
 func (s *Store) AppendLog(turnID string, entry LogEntry) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return 0, ErrStoreClosed
+	}
 	var total int
 	_ = s.db.QueryRow("SELECT COALESCE(SUM(byte_len),0) FROM turn_logs WHERE turn_id=?", turnID).Scan(&total)
 	if total >= MaxTurnLogBytes {
@@ -381,6 +478,9 @@ func (s *Store) ReadLogs(turnID string, afterSeq int64, limit int) ([]LogEntry, 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return nil, false, ErrStoreClosed
+	}
 	rows, err := s.db.Query(
 		"SELECT body FROM turn_logs WHERE turn_id=? AND seq>? ORDER BY seq ASC LIMIT ?",
 		turnID, afterSeq, limit+1,
@@ -418,6 +518,9 @@ func (s *Store) ReadLogsTail(turnID string, limit int) ([]LogEntry, bool, error)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return nil, false, ErrStoreClosed
+	}
 	rows, err := s.db.Query(
 		"SELECT body FROM turn_logs WHERE turn_id=? ORDER BY seq DESC LIMIT ?",
 		turnID, limit+1,
@@ -458,6 +561,9 @@ func (s *Store) PruneExpiredDetails(now time.Time) {
 	cutoff := now.Add(-DetailRetention).UnixMilli()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return
+	}
 	_, _ = s.db.Exec(`DELETE FROM turn_results WHERE updated_at < ? AND turn_id IN (SELECT turn_id FROM turns WHERE state NOT IN (?,?,?,?,?))`,
 		cutoff, TurnPrepared, TurnRunning, TurnWaitingApproval, TurnWaitingInput, TurnReconcile)
 	_, _ = s.db.Exec(`DELETE FROM turn_logs WHERE turn_id IN (SELECT turn_id FROM turns WHERE updated_at < ? AND state NOT IN (?,?,?,?,?))`,

@@ -47,6 +47,8 @@ main::before {display:none}
 .action-opt-chip[aria-pressed=true] {border-color:var(--accent);background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--fg);font-weight:600}
 .action-textarea {width:100%;height:auto;margin:0;box-sizing:border-box;font:inherit;font-size:12.5px;line-height:1.4;padding:7px 9px;border-radius:8px;border:1px solid var(--border-soft);background:var(--surface);color:var(--fg);resize:none;min-height:48px;max-height:110px}
 .action-textarea:focus {outline:2px solid var(--accent);outline-offset:-1px}
+.action-secret-input {width:100%;height:auto;margin:0;box-sizing:border-box;font:inherit;font-size:12.5px;line-height:1.4;padding:7px 9px;border-radius:8px;border:1px solid var(--border-soft);background:var(--surface);color:var(--fg)}
+.action-secret-input:focus {outline:2px solid var(--accent);outline-offset:-1px}
 
 .action-buttons {display:flex;flex-wrap:wrap;gap:6px;padding-top:2px}
 .act-btn {font:inherit;font-size:12px;font-weight:600;padding:5px 10px;border-radius:7px;border:1px solid transparent;cursor:pointer;white-space:nowrap;transition:opacity 120ms,background-color 120ms}

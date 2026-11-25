@@ -797,3 +797,156 @@ func TestAllAutomationDefinitionsJSONRoundTripZeroSpuriousListChanged(t *testing
 	case <-time.After(60 * time.Millisecond):
 	}
 }
+
+// Deferring a non-head waiting_input question through the public automation
+// registry must persist both request_id and escalate_at in the durable receipt
+// summary so same-operation-ID replays and operations_get recover the exact
+// deadline.
+func TestDurableReplyReceiptPreservesEscalateAt(t *testing.T) {
+	bothPending := make(chan struct{})
+	release := make(chan struct{})
+	adapter := &stubWorkerAdapter{
+		startFn: func(ctx context.Context, handle workers.ThreadHandle, spec workers.TurnStartSpec, onEvent func(workers.AdapterEvent)) (string, <-chan workers.TurnOutcome, error) {
+			ch := make(chan workers.TurnOutcome, 1)
+			go func() {
+				var wg sync.WaitGroup
+				wg.Add(2)
+				go func() {
+					defer wg.Done()
+					_, _ = spec.OnInteraction(context.Background(), workers.InteractionRequest{
+						Kind:      workers.InteractionInput,
+						Summary:   "Question 1",
+						Questions: []workers.InteractionQuestion{{ID: "q1", Question: "First?"}},
+					})
+				}()
+				go func() {
+					defer wg.Done()
+					_, _ = spec.OnInteraction(context.Background(), workers.InteractionRequest{
+						Kind:      workers.InteractionInput,
+						Summary:   "Question 2",
+						Questions: []workers.InteractionQuestion{{ID: "q2", Question: "Second?"}},
+					})
+				}()
+				<-release
+				ch <- workers.TurnOutcome{
+					State:        workers.TurnCancelled,
+					NativeTurnID: "nt_defer_rcpt",
+				}
+			}()
+			close(bothPending)
+			return "nt_defer_rcpt", ch, nil
+		},
+	}
+
+	n, ws, tok := setupM1WorkerNode(t, adapter)
+	defer close(release)
+	a := n.app
+	a.Workers.SetBudgets(workers.Budgets{
+		InputCallerGrace:  10 * time.Second,
+		InputClaimedGrace: 30 * time.Second,
+	})
+
+	w, err := a.Workers.Create(context.Background(), workers.CreateInput{
+		OperationID: "op_defer_rcpt_w", HarnessID: harnesses.HarnessCodex, WorkspaceRoot: ws.RootPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := a.Workers.Send(context.Background(), workers.SendInput{
+		OperationID: "op_defer_rcpt_s", WorkerID: w.ID, Prompt: "ask two questions",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-bothPending
+
+	var req2 string
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		list := a.Workers.ListAllPendingInteractions()
+		if len(list) == 2 {
+			for _, it := range list {
+				if it.Summary == "Question 2" {
+					req2 = it.RequestID
+				}
+			}
+			if req2 != "" {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if req2 == "" {
+		t.Fatal("expected two pending questions")
+	}
+
+	opID := operations.NewID(time.Now())
+	replyInput := map[string]any{
+		"turn_id":       turn.ID,
+		"request_id":    req2,
+		"workspace_id":  ws.ID,
+		"defer_seconds": 180,
+	}
+
+	// 1. Direct execution through public automation registry.
+	directResp := testAutomationCall(a, tok, "workers_reply", opID, replyInput)
+	if directResp.Error != nil {
+		t.Fatalf("direct workers_reply failed: %+v", directResp.Error)
+	}
+	directBytes, _ := json.Marshal(directResp.Data)
+	var directData struct {
+		RequestID  string     `json:"request_id"`
+		Deferred   bool       `json:"deferred"`
+		EscalateAt *time.Time `json:"escalate_at"`
+	}
+	if err := json.Unmarshal(directBytes, &directData); err != nil {
+		t.Fatalf("unmarshal direct data: %v", err)
+	}
+	if directData.RequestID != req2 || !directData.Deferred || directData.EscalateAt == nil {
+		t.Fatalf("direct response missing target request_id or escalate_at: %+v", directData)
+	}
+
+	assertReceipt := func(label string, rc *operations.Receipt) {
+		t.Helper()
+		if rc == nil || len(rc.Result) == 0 {
+			t.Fatalf("%s: expected non-empty receipt result", label)
+		}
+		var summary struct {
+			RequestID  string     `json:"request_id"`
+			Deferred   bool       `json:"deferred"`
+			EscalateAt *time.Time `json:"escalate_at"`
+		}
+		if err := json.Unmarshal(rc.Result, &summary); err != nil {
+			t.Fatalf("%s: unmarshal receipt result: %v (%s)", label, err, string(rc.Result))
+		}
+		if summary.RequestID != req2 || !summary.Deferred || summary.EscalateAt == nil {
+			t.Fatalf("%s: receipt missing request_id/escalate_at: %+v (raw=%s)", label, summary, string(rc.Result))
+		}
+		if !summary.EscalateAt.Equal(*directData.EscalateAt) {
+			t.Fatalf("%s: escalate_at mismatch: got %v want %v", label, summary.EscalateAt, directData.EscalateAt)
+		}
+	}
+
+	assertReceipt("direct_receipt", directResp.Receipt)
+
+	// 2. Same operation_id replay.
+	replayResp := testAutomationCall(a, tok, "workers_reply", opID, replyInput)
+	if replayResp.Error != nil {
+		t.Fatalf("replay workers_reply failed: %+v", replayResp.Error)
+	}
+	assertReceipt("replay_receipt", replayResp.Receipt)
+
+	// 3. Durable recovery via operations_get.
+	getResp := testAutomationCall(a, tok, "operations_get", "", struct {
+		OperationID string `json:"operation_id"`
+	}{OperationID: opID})
+	if getResp.Error != nil {
+		t.Fatalf("operations_get failed: %+v", getResp.Error)
+	}
+	getBytes, _ := json.Marshal(getResp.Data)
+	var recovered operations.Receipt
+	if err := json.Unmarshal(getBytes, &recovered); err != nil {
+		t.Fatalf("unmarshal operations_get data: %v (%s)", err, string(getBytes))
+	}
+	assertReceipt("operations_get", &recovered)
+}

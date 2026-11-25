@@ -48,6 +48,7 @@ type WorkerQuestion struct {
 	Header   string         `json:"header,omitempty"`
 	Question string         `json:"question"`
 	Multi    bool           `json:"multi_select,omitempty"`
+	IsSecret bool           `json:"is_secret,omitempty"`
 	Options  []WorkerOption `json:"options,omitempty"`
 }
 

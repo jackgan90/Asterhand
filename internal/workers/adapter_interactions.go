@@ -18,7 +18,7 @@ func codexTurnPolicies(accessMode, approvalMode string, sessionAutoApprove bool,
 			"user"
 	}
 	if sessionAutoApprove {
-		// Verified by M4 preflight Probe C: danger-full-access + untrusted + user
+		// Codex app-server contract: danger-full-access + untrusted + user
 		// routes every untrusted command through Asterhand's hard-redline gate.
 		return "danger-full-access",
 			map[string]any{"type": "dangerFullAccess"},
@@ -203,10 +203,9 @@ func buildCodexInteractionReply(method string, params json.RawMessage, req Inter
 			Permissions any `json:"permissions"`
 		}
 		_ = json.Unmarshal(params, &p)
+		// Always grant at most per-turn scope to Codex; Asterhand's Go Service
+		// owns revocable session auto-approve and hard-redline gating.
 		scope := "turn"
-		if dec.Decision == DecisionAllowSession {
-			scope = "session"
-		}
 		if p.Permissions == nil {
 			p.Permissions = map[string]any{}
 		}
@@ -215,10 +214,11 @@ func buildCodexInteractionReply(method string, params json.RawMessage, req Inter
 
 	if method == "item/commandExecution/requestApproval" || method == "item/fileChange/requestApproval" || method == "execCommandApproval" || method == "applyPatchApproval" {
 		switch dec.Decision {
-		case DecisionAllowOnce:
+		case DecisionAllowOnce, DecisionAllowSession:
+			// Always approve one request at a time on the native harness so
+			// revoking session_auto_approve in Web UI takes effect immediately
+			// and every subsequent request still passes Go's hard-redline gate.
 			return map[string]any{"decision": "accept"}, nil, false
-		case DecisionAllowSession:
-			return map[string]any{"decision": "acceptForSession"}, nil, false
 		case DecisionDeny:
 			return map[string]any{"decision": "decline"}, nil, false
 		default:
@@ -364,7 +364,16 @@ func buildClaudeInteractionReply(toolName string, origInput json.RawMessage, req
 	}
 }
 
-func parseDeepSeekPermissionRequest(params, fallbackRaw json.RawMessage, fallbackTitle, fallbackKind string) (req InteractionRequest, allowOpts []string, rejectOpts []string) {
+type deepSeekPermissionOption struct {
+	OptionID string
+	Kind     string
+}
+
+func normalizeACPOptionKind(raw string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(raw)), "-", "_")
+}
+
+func parseDeepSeekPermissionRequest(params, fallbackRaw json.RawMessage, fallbackTitle, fallbackKind string) (req InteractionRequest, opts []deepSeekPermissionOption) {
 	var p struct {
 		ToolCall struct {
 			ToolCallID string          `json:"toolCallId"`
@@ -386,12 +395,10 @@ func parseDeepSeekPermissionRequest(params, fallbackRaw json.RawMessage, fallbac
 			continue
 		}
 		nativeOpts = append(nativeOpts, o.OptionID)
-		k := strings.ToLower(o.Kind + " " + o.OptionID)
-		if strings.Contains(k, "allow") {
-			allowOpts = append(allowOpts, o.OptionID)
-		} else if strings.Contains(k, "reject") || strings.Contains(k, "deny") {
-			rejectOpts = append(rejectOpts, o.OptionID)
-		}
+		opts = append(opts, deepSeekPermissionOption{
+			OptionID: o.OptionID,
+			Kind:     normalizeACPOptionKind(o.Kind),
+		})
 	}
 
 	rawInput := p.ToolCall.RawInput
@@ -445,7 +452,7 @@ func parseDeepSeekPermissionRequest(params, fallbackRaw json.RawMessage, fallbac
 		Paths:         paths,
 		Reason:        firstNonEmptyStr(inFields.Justification, inFields.Reason, inFields.Description, inFields.Mode),
 		NativeOptions: nativeOpts,
-	}, allowOpts, rejectOpts
+	}, opts
 }
 
 func bytesTrim(b []byte) []byte {
@@ -561,28 +568,40 @@ func handleCodexAsyncQuestions(s *codexSession, at *codexActiveTurn, item codexT
 	}()
 }
 
-func buildDeepSeekPermissionReply(allowOpts, rejectOpts []string, dec InteractionDecision) (map[string]any, bool) {
-	pick := func(opts []string, preferSub string) string {
+func buildDeepSeekPermissionReply(opts []deepSeekPermissionOption, dec InteractionDecision) (map[string]any, bool) {
+	hasKind := false
+	for _, o := range opts {
+		if o.Kind != "" {
+			hasKind = true
+			break
+		}
+	}
+	pickExact := func(wantKind string) string {
 		for _, o := range opts {
-			if strings.Contains(strings.ToLower(o), preferSub) {
-				return o
+			if o.Kind == wantKind {
+				return o.OptionID
 			}
 		}
-		if len(opts) > 0 {
-			return opts[0]
+		if !hasKind {
+			for _, o := range opts {
+				if normalizeACPOptionKind(o.OptionID) == wantKind {
+					return o.OptionID
+				}
+			}
 		}
 		return ""
 	}
 	switch dec.Decision {
 	case DecisionAllowOnce, DecisionAllowSession:
-		// Prefer allow-once even for allow_session so Asterhand's Go hard-redline
-		// gate inspects every subsequent request.
-		if opt := pick(allowOpts, "once"); opt != "" {
+		// Always select ACP allow_once even for allow_session so Asterhand's
+		// Go hard-redline gate inspects every subsequent request and Web revoke
+		// takes effect immediately. Never silently escalate to allow_always.
+		if opt := pickExact("allow_once"); opt != "" {
 			return map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": opt}}, false
 		}
-		return map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": "allow-once"}}, false
+		return map[string]any{"outcome": map[string]any{"outcome": "cancelled"}}, false
 	case DecisionDeny:
-		if opt := pick(rejectOpts, "once"); opt != "" {
+		if opt := pickExact("reject_once"); opt != "" {
 			return map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": opt}}, false
 		}
 		return map[string]any{"outcome": map[string]any{"outcome": "cancelled"}}, false
@@ -591,12 +610,12 @@ func buildDeepSeekPermissionReply(allowOpts, rejectOpts []string, dec Interactio
 	}
 }
 
-func resolveDeepSeekPermission(s *deepseekSession, idVal any, sid string, active *deepseekActiveTurn, handler InteractionHandler, turnCtx context.Context, ireq InteractionRequest, allowOpts, rejectOpts []string) {
+func resolveDeepSeekPermission(s *deepseekSession, idVal any, sid string, active *deepseekActiveTurn, handler InteractionHandler, turnCtx context.Context, ireq InteractionRequest, opts []deepSeekPermissionOption) {
 	dec, err := handler(turnCtx, ireq)
 	if err != nil {
 		dec = InteractionDecision{Decision: DecisionCancelTurn, Message: err.Error()}
 	}
-	res, shouldCancel := buildDeepSeekPermissionReply(allowOpts, rejectOpts, dec)
+	res, shouldCancel := buildDeepSeekPermissionReply(opts, dec)
 	if shouldCancel {
 		s.mu.Lock()
 		if s.active == active {

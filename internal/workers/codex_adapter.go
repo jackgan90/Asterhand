@@ -35,8 +35,9 @@ type codexSession struct {
 }
 
 type rpcReply struct {
-	result json.RawMessage
-	err    error
+	result     json.RawMessage
+	err        error
+	localClose bool
 }
 
 type codexActiveTurn struct {
@@ -155,9 +156,12 @@ func (a *CodexAdapter) OpenThread(ctx context.Context, spec ThreadOpenSpec) (Thr
 }
 
 func (a *CodexAdapter) StartTurn(ctx context.Context, handle ThreadHandle, spec TurnStartSpec, onEvent func(AdapterEvent)) (string, <-chan TurnOutcome, error) {
+	if err := ctx.Err(); err != nil {
+		return "", nil, fmt.Errorf("%w: %v", ErrPreStartFailed, err)
+	}
 	sess, ok := handle.ProcessRef.(*codexSession)
 	if !ok || sess == nil {
-		return "", nil, errors.New("invalid codex handle")
+		return "", nil, fmt.Errorf("%w: invalid codex handle", ErrPreStartFailed)
 	}
 	turnCtx, turnCancel := context.WithCancel(context.Background())
 	at := &codexActiveTurn{
@@ -172,7 +176,7 @@ func (a *CodexAdapter) StartTurn(ctx context.Context, handle ThreadHandle, spec 
 	if sess.closed {
 		sess.mu.Unlock()
 		turnCancel()
-		return "", nil, errors.New("codex session closed")
+		return "", nil, fmt.Errorf("%w: codex session closed", ErrPreStartFailed)
 	}
 	sess.active = at
 	sess.mu.Unlock()
@@ -316,7 +320,7 @@ func (s *codexSession) request(ctx context.Context, method string, params any) (
 			err = errors.New("codex session closed")
 		}
 		s.mu.Unlock()
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrPreStartFailed, err)
 	}
 	s.nextID++
 	id := s.nextID
@@ -331,9 +335,9 @@ func (s *codexSession) request(ctx context.Context, method string, params any) (
 	})
 	if err != nil {
 		s.deletePending(id)
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrPreStartFailed, err)
 	}
-	if err := s.writeLine(payload); err != nil {
+	if err := s.writeLineCtx(ctx, payload); err != nil {
 		s.deletePending(id)
 		return nil, err
 	}
@@ -365,6 +369,31 @@ func (s *codexSession) writeLine(b []byte) error {
 	return err
 }
 
+func (s *codexSession) writeLineCtx(ctx context.Context, b []byte) error {
+	line := append(append([]byte(nil), b...), '\n')
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	s.mu.Lock()
+	closed := s.closed
+	proc := s.proc
+	s.mu.Unlock()
+	if closed || proc == nil {
+		if ctx != nil {
+			if cErr := ctx.Err(); cErr != nil {
+				return fmt.Errorf("%w: %v", ErrPreStartFailed, cErr)
+			}
+		}
+		return fmt.Errorf("%w: codex session closed", ErrPreStartFailed)
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("%w: %v", ErrPreStartFailed, err)
+		}
+	}
+	_, err := proc.Stdin().Write(line)
+	return err
+}
+
 func (s *codexSession) deletePending(id int64) {
 	s.mu.Lock()
 	delete(s.pending, id)
@@ -381,27 +410,57 @@ func (s *codexSession) clearActive(at *codexActiveTurn) {
 
 func (s *codexSession) close() error {
 	s.mu.Lock()
-	if !s.closed {
-		s.closed = true
-		if s.closeErr == nil {
-			s.closeErr = errors.New("codex process closed")
-		}
-		for id, ch := range s.pending {
-			ch <- rpcReply{err: s.closeErr}
-			delete(s.pending, id)
-		}
-		if s.active != nil {
-			s.finishActiveLocked(s.active, TurnOutcome{
-				State:        TurnInterrupted,
-				NativeTurnID: s.active.turnID,
-				Items:        append([]NativeItem(nil), s.active.items...),
-				ErrorCode:    "interrupted",
-				ErrorMessage: "Codex process terminated before turn completion",
-			})
+	alreadyClosed := s.closed
+	s.closed = true
+	if s.closeErr == nil {
+		s.closeErr = errors.New("codex process closed")
+	}
+	closeErr := s.closeErr
+	pending := s.pending
+	s.pending = map[int64]chan rpcReply{}
+	active := s.active
+	s.active = nil
+	var activeTurnID string
+	var activeItems []NativeItem
+	if active != nil {
+		activeTurnID = active.turnID
+		activeItems = append([]NativeItem(nil), active.items...)
+	}
+	proc := s.proc
+	s.mu.Unlock()
+
+	if !alreadyClosed {
+		for _, ch := range pending {
+			ch <- rpcReply{err: closeErr, localClose: true}
 		}
 	}
-	s.mu.Unlock()
-	return s.proc.Kill()
+	var killErr error
+	if proc != nil {
+		killErr = proc.Kill()
+	}
+	if active != nil {
+		out := TurnOutcome{
+			State:        TurnInterrupted,
+			NativeTurnID: activeTurnID,
+			Items:        activeItems,
+			ErrorCode:    "interrupted",
+			ErrorMessage: "Codex process terminated before turn completion",
+			LocalClose:   true,
+			StopErr:      killErr,
+		}
+		if killErr != nil {
+			out.ErrorCode = "process_stop_unconfirmed"
+			out.ErrorMessage = fmt.Sprintf("Codex process termination could not be confirmed: %v", killErr)
+		}
+		active.doneOnce.Do(func() {
+			if active.turnCancel != nil {
+				active.turnCancel()
+			}
+			active.done <- out
+			close(active.done)
+		})
+	}
+	return killErr
 }
 
 func (s *codexSession) readLoop() {

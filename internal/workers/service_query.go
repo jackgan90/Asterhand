@@ -45,7 +45,7 @@ func (s *Service) WaitWithOptions(ctx context.Context, turnID, expectedWorkspace
 	}
 	finish := func(t Turn) (Turn, string, bool, []CommentaryEntry, error) {
 		if t.State == TurnWaitingInput && t.PendingInteraction != nil && !t.PendingInteraction.VisibleToHuman {
-			s.markInputObservedByCaller(t.ID)
+			s.markInputObservedByCaller(t.ID, t.PendingInteraction.RequestID)
 			if refreshed, gErr := s.GetTurn(t.ID, expectedWorkspaceID); gErr == nil {
 				t = refreshed
 			}
@@ -128,7 +128,7 @@ func (s *Service) buildWaitAnyItems(turnIDs []string, expectedWorkspaceID string
 			triggered = t.ID
 		}
 		if t.State == TurnWaitingInput && t.PendingInteraction != nil && !t.PendingInteraction.VisibleToHuman {
-			s.markInputObservedByCaller(t.ID)
+			s.markInputObservedByCaller(t.ID, t.PendingInteraction.RequestID)
 			if refreshed, gErr := s.GetTurn(t.ID, expectedWorkspaceID); gErr == nil {
 				t = refreshed
 			}
@@ -349,6 +349,9 @@ func (s *Service) ReadLogsTail(turnID, expectedWorkspaceID string, limit int) (T
 // Never guesses by prompt equality; if revocation_requested was persisted, late
 // native completion only appends audit facts and never promotes to completed.
 func (s *Service) ReconcileTurn(ctx context.Context, turnID string) (Turn, error) {
+	if _, _, fErr := s.flushPendingReconcile(turnID); fErr != nil {
+		return Turn{}, fErr
+	}
 	t, err := s.store.GetTurn(turnID)
 	if errors.Is(err, ErrNotFound) {
 		return Turn{}, automation.Fail("not_found", "Turn not found")
@@ -371,7 +374,13 @@ func (s *Service) ReconcileTurn(ctx context.Context, turnID string) (Turn, error
 		return t, nil
 	}
 	_, exe := s.harnesses.IsWorkerEnabled(w.HarnessID)
-	handle, err := s.acquireHandle(ctx, adapter, w, exe)
+	handle, err := s.acquireHandle(ctx, adapter, w, exe, t.ID, true)
+	if errors.Is(err, errTurnStateStale) {
+		if latest, gErr := s.store.GetTurn(turnID); gErr == nil {
+			return latest, nil
+		}
+		return t, nil
+	}
 	if err != nil {
 		return t, nil
 	}
@@ -395,32 +404,67 @@ func (s *Service) ReconcileTurn(ctx context.Context, turnID string) (Turn, error
 	now := s.now().UTC()
 	t.NativeTurnID = matched.NativeTurnID
 
-	if t.RevocationRequested {
-		t.State = TurnCancelledRevoked
-		t.AnswerAvailable = false
-		t.AnswerSource = AnswerSourceNone
-		t.ErrorCode = "authorization_revoked"
-		if t.RevocationReason != "" {
-			t.ErrorMessage = t.RevocationReason
+	// Never auto-finalize or release write locks while the native turn is still
+	// non-terminal (even when revocation was requested): only record the
+	// confirmed native_turn_id and keep reconciliation_required + retained locks.
+	if !IsTurnTerminal(matched.Status) {
+		curTurn, _, _, err := s.commitTurnAndWorker(t.ID, "", residentActionNone, requireReconcileState, func(cur *Turn) {
+			cur.NativeTurnID = matched.NativeTurnID
+			cur.UpdatedAt = now
+		}, nil)
+		if errors.Is(err, errTurnStateStale) {
+			return curTurn, nil
 		}
-		t.UpdatedAt = now
-		t.FinishedAt = &now
-		_ = s.store.SaveTurn(t)
-		if w.ActiveTurnID == t.ID {
-			w.State = WorkerIdle
-			w.ActiveTurnID = ""
-			w.UpdatedAt = now
-			_ = s.store.SaveWorker(w)
+		if err != nil {
+			return Turn{}, err
 		}
-		return t, nil
+		return curTurn, nil
 	}
 
-	if !IsTurnTerminal(matched.Status) {
-		t.UpdatedAt = now
-		_ = s.store.SaveTurn(t)
-		return t, nil
+	if t.RevocationRequested {
+		curTurn, _, evicted, err := s.commitTurnAndWorker(t.ID, w.ID, residentActionEvict, requireReconcileState, func(cur *Turn) {
+			cur.NativeTurnID = matched.NativeTurnID
+			cur.State = TurnCancelledRevoked
+			cur.AnswerAvailable = false
+			cur.AnswerSource = AnswerSourceNone
+			cur.ErrorCode = "authorization_revoked"
+			if cur.RevocationReason != "" {
+				cur.ErrorMessage = cur.RevocationReason
+			}
+			cur.WriteLockRetained = false
+			cur.WriteLockRoot = ""
+			cur.WriteLockKey = ""
+			cur.WriteLockReason = ""
+			cur.UpdatedAt = now
+			cur.FinishedAt = &now
+		}, func(cur *Worker) bool {
+			if cur.ActiveTurnID != t.ID {
+				return false
+			}
+			cur.State = WorkerIdle
+			cur.ActiveTurnID = ""
+			cur.UpdatedAt = now
+			return true
+		})
+		if errors.Is(err, errTurnStateStale) {
+			return curTurn, nil
+		}
+		if err != nil {
+			return Turn{}, err
+		}
+		s.releaseRetainedWriteLock(t.ID)
+		s.closeDetachedResident(evicted)
+		s.notifyWaiters(t.ID)
+		return curTurn, nil
 	}
-	s.finalizeTurn(nil, &w, &t, matched.Status, matched.Items, "", "")
+
+	applied, err := s.finalizeTurn(nil, &w, &t, matched.Status, matched.Items, "", "")
+	if err != nil {
+		return Turn{}, err
+	}
+	if applied {
+		s.releaseRetainedWriteLock(t.ID)
+	}
 	return t, nil
 }
 
@@ -429,6 +473,9 @@ func (s *Service) ReconcileTurn(ctx context.Context, turnID string) (Turn, error
 func (s *Service) ResolveTurn(turnID, actor, reason string) (Turn, error) {
 	if strings.TrimSpace(reason) == "" {
 		return Turn{}, automation.Fail("invalid_parameters", "Resolution reason is required")
+	}
+	if _, _, fErr := s.flushPendingReconcile(turnID); fErr != nil {
+		return Turn{}, fErr
 	}
 	t, err := s.store.GetTurn(turnID)
 	if errors.Is(err, ErrNotFound) {
@@ -441,24 +488,38 @@ func (s *Service) ResolveTurn(turnID, actor, reason string) (Turn, error) {
 		return Turn{}, automation.Fail("conflict", "Only reconciliation_required turns can be manually resolved")
 	}
 	now := s.now().UTC()
-	t.State = TurnFailed
-	t.AnswerAvailable = false
-	t.AnswerSource = AnswerSourceNone
-	t.ErrorCode = "reconciled_manually_closed"
-	t.ErrorMessage = fmt.Sprintf("Resolved by %s: %s", actor, strings.TrimSpace(reason))
-	t.UpdatedAt = now
-	t.FinishedAt = &now
-	if err := s.store.SaveTurn(t); err != nil {
+	curTurn, _, _, err := s.commitTurnAndWorker(turnID, t.WorkerID, residentActionNone, func(cur Turn) error {
+		if cur.State != TurnReconcile {
+			return automation.Fail("conflict", "Only reconciliation_required turns can be manually resolved")
+		}
+		return nil
+	}, func(cur *Turn) {
+		cur.State = TurnFailed
+		cur.AnswerAvailable = false
+		cur.AnswerSource = AnswerSourceNone
+		cur.ErrorCode = "reconciled_manually_closed"
+		cur.ErrorMessage = fmt.Sprintf("Resolved by %s: %s", actor, strings.TrimSpace(reason))
+		cur.WriteLockRetained = false
+		cur.WriteLockRoot = ""
+		cur.WriteLockKey = ""
+		cur.WriteLockReason = ""
+		cur.UpdatedAt = now
+		cur.FinishedAt = &now
+	}, func(cur *Worker) bool {
+		if cur.ActiveTurnID != turnID || cur.State != WorkerReconcile {
+			return false
+		}
+		cur.State = WorkerIdle
+		cur.ActiveTurnID = ""
+		cur.UpdatedAt = now
+		return true
+	})
+	if err != nil {
 		return Turn{}, err
 	}
-	if w, err := s.store.GetWorker(t.WorkerID); err == nil && w.ActiveTurnID == t.ID && w.State == WorkerReconcile {
-		w.State = WorkerIdle
-		w.ActiveTurnID = ""
-		w.UpdatedAt = now
-		_ = s.store.SaveWorker(w)
-	}
-	s.notifyWaiters(t.ID)
-	return t, nil
+	s.releaseRetainedWriteLock(curTurn.ID)
+	s.notifyWaiters(curTurn.ID)
+	return curTurn, nil
 }
 
 // RevokeWorkspace aborts pending or in-flight turns whose workspace was removed
@@ -474,6 +535,7 @@ func (s *Service) RevokeWorkspace(workspaceID, newMaxAccess string) {
 	for _, rt := range s.activeTurns {
 		if rt.workspaceID == workspaceID && (newRank == 0 || harnesses.AccessModeRank(rt.accessMode) > newRank) {
 			rt.revoked = true
+			rt.cancelled = true
 			rt.revokeReason = reason
 			targets = append(targets, rt)
 		}
@@ -492,6 +554,7 @@ func (s *Service) RevokeWorkerHarness(harnessID string) {
 	for _, rt := range s.activeTurns {
 		if rt.harnessID == harnessID {
 			rt.revoked = true
+			rt.cancelled = true
 			rt.revokeReason = reason
 			targets = append(targets, rt)
 		}
@@ -511,6 +574,7 @@ func (s *Service) RevokeWorkerWriteHarness(harnessID string) {
 	for _, rt := range s.activeTurns {
 		if rt.harnessID == harnessID && rt.accessMode == harnesses.AccessWorkspaceWrite {
 			rt.revoked = true
+			rt.cancelled = true
 			rt.revokeReason = reason
 			targets = append(targets, rt)
 		}
@@ -575,10 +639,228 @@ func (s *Service) ActiveTurnsSnapshot() []Turn {
 	return out
 }
 
+func (s *Service) recordPersistFailure(rt *runningTurn, w *Worker, t *Turn, errCode, errMsg string, retainLock bool, lockRoot, lockKey, nativeTurnID string, revoked bool, revokeReason string, persistErr error) {
+	if rt == nil {
+		return
+	}
+	shouldRetain := retainLock && w.AccessMode == harnesses.AccessWorkspaceWrite
+	if lockRoot == "" {
+		lockRoot = rt.workspaceRoot
+	}
+	if lockKey == "" {
+		lockKey = rt.worktreeKey
+	}
+	s.recordTurnPersistErr(rt, persistErr)
+	if shouldRetain {
+		s.retainWriteLock(rt.turnID)
+	}
+	s.mu.Lock()
+	s.pendingReconcile[t.ID] = pendingReconcileInfo{
+		turnID: t.ID, workerID: w.ID, errCode: errCode, errMsg: errMsg,
+		retainLock: shouldRetain,
+		lockRoot: lockRoot, lockKey: lockKey, nativeTurnID: nativeTurnID,
+		revoked: revoked, revokeReason: revokeReason,
+	}
+	s.mu.Unlock()
+}
+
+func (s *Service) hasPendingOrRetainedForWorkerLocked(workerID string) bool {
+	for _, pr := range s.pendingReconcile {
+		if pr.workerID == workerID {
+			return true
+		}
+	}
+	for _, lk := range s.writeLocks {
+		if lk.workerID == workerID && lk.retained {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) flushPendingReconcile(turnID string) (Turn, bool, error) {
+	now := s.now().UTC()
+	s.mu.Lock()
+	pr, ok := s.pendingReconcile[turnID]
+	if !ok {
+		s.mu.Unlock()
+		return Turn{}, false, nil
+	}
+	curTurn, _, _, err := s.commitTurnAndWorkerLocked(pr.turnID, pr.workerID, residentActionNone, func(cur Turn) error {
+		if IsTurnTerminal(cur.State) || cur.State == TurnReconcile {
+			return errTurnStateStale
+		}
+		return nil
+	}, func(cur *Turn) {
+		cur.State = TurnReconcile
+		cur.PendingInteraction = nil
+		cur.AnswerAvailable = false
+		cur.AnswerSource = AnswerSourceNone
+		cur.ErrorCode = pr.errCode
+		cur.ErrorMessage = pr.errMsg
+		if pr.nativeTurnID != "" && cur.NativeTurnID == "" {
+			cur.NativeTurnID = pr.nativeTurnID
+		}
+		if pr.revoked {
+			cur.RevocationRequested = true
+			cur.RevocationReason = pr.revokeReason
+		}
+		if pr.retainLock && cur.AccessMode == harnesses.AccessWorkspaceWrite {
+			cur.WriteLockRetained = true
+			if cur.WriteLockRoot == "" {
+				cur.WriteLockRoot = pr.lockRoot
+			}
+			if cur.WriteLockKey == "" {
+				cur.WriteLockKey = pr.lockKey
+			}
+			cur.WriteLockReason = pr.errCode
+		} else {
+			cur.WriteLockRetained = false
+			cur.WriteLockRoot = ""
+			cur.WriteLockKey = ""
+			cur.WriteLockReason = ""
+		}
+		cur.UpdatedAt = now
+	}, func(cur *Worker) bool {
+		if cur.State == WorkerClosed || (cur.ActiveTurnID != pr.turnID && cur.ActiveTurnID != "") {
+			return false
+		}
+		cur.State = WorkerReconcile
+		cur.ActiveTurnID = pr.turnID
+		cur.UpdatedAt = now
+		return true
+	})
+	if errors.Is(err, errTurnStateStale) {
+		delete(s.pendingReconcile, turnID)
+		s.mu.Unlock()
+		return curTurn, true, nil
+	}
+	if err != nil {
+		s.mu.Unlock()
+		return Turn{}, true, err
+	}
+	delete(s.pendingReconcile, turnID)
+	s.mu.Unlock()
+	s.notifyWaiters(turnID)
+	return curTurn, true, nil
+}
+
+func requireReconcileState(cur Turn) error {
+	if cur.State != TurnReconcile {
+		return errTurnStateStale
+	}
+	return nil
+}
+
+func (s *Service) recordTurnPersistErr(rt *runningTurn, err error) {
+	if rt == nil || err == nil {
+		return
+	}
+	s.mu.Lock()
+	if rt.persistErr == nil {
+		rt.persistErr = err
+	}
+	s.mu.Unlock()
+}
+
+func (s *Service) commitTurnAndWorker(
+	turnID, workerID string,
+	resAction residentCommitAction,
+	checkTurn func(Turn) error,
+	mutateTurn func(*Turn),
+	mutateWorker func(*Worker) bool,
+) (Turn, bool, *residentProc, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.commitTurnAndWorkerLocked(turnID, workerID, resAction, checkTurn, mutateTurn, mutateWorker)
+}
+
+func (s *Service) commitTurnAndWorkerLocked(
+	turnID, workerID string,
+	resAction residentCommitAction,
+	checkTurn func(Turn) error,
+	mutateTurn func(*Turn),
+	mutateWorker func(*Worker) bool,
+) (Turn, bool, *residentProc, error) {
+	curTurn, err := s.store.GetTurn(turnID)
+	if err != nil {
+		return Turn{}, false, nil, err
+	}
+	if checkTurn != nil {
+		if err := checkTurn(curTurn); err != nil {
+			return curTurn, false, nil, err
+		}
+	}
+	mutateTurn(&curTurn)
+	var workerPtr *Worker
+	workerUpdated := false
+	if workerID != "" && mutateWorker != nil {
+		curWorker, wErr := s.store.GetWorker(workerID)
+		if wErr != nil {
+			return Turn{}, false, nil, wErr
+		}
+		if mutateWorker(&curWorker) {
+			workerPtr = &curWorker
+			workerUpdated = true
+		}
+	}
+	if err := s.store.SaveTurnAndWorker(curTurn, workerPtr); err != nil {
+		return Turn{}, false, nil, err
+	}
+	if IsTurnTerminal(curTurn.State) && !curTurn.WriteLockRetained {
+		if lk, ok := s.writeLocks[turnID]; ok && lk.retained {
+			delete(s.writeLocks, turnID)
+		}
+	}
+	var evicted *residentProc
+	if workerUpdated && resAction != residentActionNone {
+		active, hasActive := s.workerTurn[workerID]
+		if !hasActive || active == "" || active == turnID {
+			if rp, ok := s.residents[workerID]; ok {
+				switch resAction {
+				case residentActionTouch:
+					rp.lastUsedAt = curTurn.UpdatedAt
+				case residentActionEvict:
+					evicted = rp
+					delete(s.residents, workerID)
+				}
+			}
+		}
+	}
+	return curTurn, workerUpdated, evicted, nil
+}
+
 func (s *Service) checkRevoked(rt *runningTurn) (bool, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return rt.revoked, rt.revokeReason
+}
+
+func (s *Service) checkCancelOrRevoked(rt *runningTurn) (cancelled bool, revoked bool, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rt.revoked {
+		return true, true, rt.revokeReason
+	}
+	if rt.cancelled || (rt.turnCtx != nil && rt.turnCtx.Err() != nil) {
+		return true, false, ""
+	}
+	return false, false, ""
+}
+
+func (s *Service) retainWriteLock(turnID string) {
+	s.mu.Lock()
+	if lk, ok := s.writeLocks[turnID]; ok {
+		lk.retained = true
+		s.writeLocks[turnID] = lk
+	}
+	s.mu.Unlock()
+}
+
+func (s *Service) releaseRetainedWriteLock(turnID string) {
+	s.mu.Lock()
+	delete(s.writeLocks, turnID)
+	s.mu.Unlock()
 }
 
 func (s *Service) releaseTurnLocks(rt *runningTurn) {
@@ -587,8 +869,8 @@ func (s *Service) releaseTurnLocks(rt *runningTurn) {
 	if s.workerTurn[rt.workerID] == rt.turnID {
 		delete(s.workerTurn, rt.workerID)
 	}
-	if s.writeLocks[rt.worktreeKey] == rt.turnID {
-		delete(s.writeLocks, rt.worktreeKey)
+	if lk, ok := s.writeLocks[rt.turnID]; ok && !lk.retained {
+		delete(s.writeLocks, rt.turnID)
 	}
 	s.mu.Unlock()
 }

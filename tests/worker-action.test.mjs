@@ -261,3 +261,128 @@ test('workerActionView arms 400ms switch guard after queue auto-advance to preve
   assert.equal(decides[1].request_id, 'wir_appr2');
   assert.equal(decides[1].decision, 'allow_once');
 });
+
+test('workerActionView masks is_secret questions with password input and bypasses drafts', () => {
+  const doc = makeFakeDoc();
+  const sent = [];
+  let onMessage = null;
+  const bridge = {
+    send(msg) { sent.push(msg); },
+    subscribe(fn) { onMessage = fn; },
+  };
+
+  workerActionView({bridge, document: doc, frame: fn => fn()});
+  onMessage({kind: 'init', generation: 'g1', theme: 'star', locale: 'zh-CN'});
+
+  const secretItem = {
+    request_id: 'wir_sec_1',
+    kind: 'input',
+    worker_alias: 'codex-sec',
+    harness_id: 'codex',
+    workspace_root: 'F:\\proj',
+    summary: 'Enter API secret',
+    questions: [{id: 'api_key', question: 'Enter API secret', is_secret: true}],
+  };
+  const normalItem = {
+    request_id: 'wir_norm_2',
+    kind: 'input',
+    worker_alias: 'codex-sec',
+    harness_id: 'codex',
+    workspace_root: 'F:\\proj',
+    summary: 'Pick port',
+    questions: [{id: 'port', question: 'Pick port'}],
+  };
+
+  onMessage({kind: 'worker_actions', items: [secretItem, normalItem], layout: 1, theme: 'star', locale: 'zh-CN'});
+
+  const ta = doc.getElementById('action-answer-input');
+  assert.equal(ta.hidden, true, 'plaintext textarea must be hidden for secret question');
+  const qWrap = doc.getElementById('action-questions');
+  const secInput = qWrap.children[0].children.find(c => c.tagName === 'INPUT');
+  assert.ok(secInput, 'expected password input element for is_secret question');
+  assert.equal(secInput.type, 'password');
+  assert.equal(secInput.autocomplete, 'new-password');
+
+  // Switch to next card and back -> secret value must be wiped and not saved in drafts.
+  secInput.value = 'temp-secret-should-clear';
+  doc.getElementById('action-next').dispatch('click');
+  assert.equal(secInput.value, '', 'secret value must be cleared when paging away');
+  assert.equal(ta.hidden, false, 'normal card restores plaintext textarea');
+
+  doc.getElementById('action-prev').dispatch('click');
+  const secInput2 = doc.getElementById('action-questions').children[0].children.find(c => c.tagName === 'INPUT');
+  assert.equal(secInput2.value, '', 'secret must not be restored from drafts');
+
+  // Submit secret answer -> delivered in answers map and input wiped.
+  secInput2.value = 'real-secret-42';
+  doc.getElementById('btn-send-answer').dispatch('click');
+  const decides = sent.filter(m => m.kind === 'decide');
+  assert.equal(decides.length, 1);
+  assert.equal(decides[0].request_id, 'wir_sec_1');
+  assert.equal(decides[0].decision, 'answer');
+  assert.deepEqual(decides[0].answers, {api_key: ['real-secret-42']});
+  assert.equal(decides[0].text, '');
+  assert.equal(secInput2.value, '', 'secret input must be cleared on submit');
+});
+
+test('workerActionView isolates is_secret option selections from ordinary drafts across card switches', () => {
+  const doc = makeFakeDoc();
+  const sent = [];
+  let onMessage = null;
+  const bridge = {
+    send(msg) { sent.push(msg); },
+    subscribe(fn) { onMessage = fn; },
+  };
+
+  workerActionView({bridge, document: doc, frame: fn => fn()});
+  onMessage({kind: 'init', generation: 'g1', theme: 'star', locale: 'zh-CN'});
+
+  const secretOptItem = {
+    request_id: 'wir_sec_opt',
+    kind: 'input',
+    worker_alias: 'codex-sec',
+    harness_id: 'codex',
+    workspace_root: 'F:\\proj',
+    summary: 'Pick secret key',
+    questions: [{
+      id: 'sec_choice',
+      question: 'Pick secret key',
+      is_secret: true,
+      options: [{label: 'Key1'}, {label: 'Key2'}],
+    }],
+  };
+  const normalItem = {
+    request_id: 'wir_norm_3',
+    kind: 'input',
+    worker_alias: 'codex-sec',
+    harness_id: 'codex',
+    workspace_root: 'F:\\proj',
+    summary: 'Pick mode',
+    questions: [{id: 'mode', question: 'Pick mode'}],
+  };
+
+  onMessage({kind: 'worker_actions', items: [secretOptItem, normalItem], layout: 1, theme: 'star', locale: 'zh-CN'});
+
+  const findFirstChip = () => {
+    const qBox = doc.getElementById('action-questions').children[0];
+    const optWrap = qBox.children.find(c => c.className === 'action-q-opts');
+    return optWrap.children[0];
+  };
+
+  const chip1 = findFirstChip();
+  chip1.dispatch('click');
+  assert.equal(chip1.getAttribute('aria-pressed'), 'true');
+
+  // Switch away and back -> secret option selection MUST be cleared (not saved in drafts).
+  doc.getElementById('action-next').dispatch('click');
+  doc.getElementById('action-prev').dispatch('click');
+  const chip2 = findFirstChip();
+  assert.equal(chip2.getAttribute('aria-pressed'), 'false', 'secret option selection must not persist across card switch');
+
+  // Re-select and submit -> delivered in answers map.
+  chip2.dispatch('click');
+  doc.getElementById('btn-send-answer').dispatch('click');
+  const decides = sent.filter(m => m.kind === 'decide');
+  assert.equal(decides.length, 1);
+  assert.deepEqual(decides[0].answers, {sec_choice: ['Key1']});
+});

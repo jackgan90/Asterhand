@@ -185,8 +185,8 @@ func TestInteractionBridgeApprovalFlowsAndTimerPause(t *testing.T) {
 	svc, ws := setupInteractiveTestService(t, harnesses.HarnessCodex, adapter)
 	// Tight stall & wall-clock budgets to prove waiting_approval PAUSES both timers!
 	svc.SetBudgets(Budgets{
-		StallTimeout:       120 * time.Millisecond,
-		WallClockTimeout:   250 * time.Millisecond,
+		StallTimeout:       250 * time.Millisecond,
+		WallClockTimeout:   450 * time.Millisecond,
 		InteractionTimeout: 5 * time.Second,
 	})
 
@@ -217,9 +217,9 @@ func TestInteractionBridgeApprovalFlowsAndTimerPause(t *testing.T) {
 		return InteractionView{}
 	}
 
-	// Approval 1: sleep 300ms (> both StallTimeout 120ms and WallClockTimeout 250ms) to verify pause!
+	// Approval 1: sleep 500ms (> both StallTimeout 250ms and WallClockTimeout 450ms) to verify pause!
 	r1 := waitForHumanReq()
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 	curTurn, _ := svc.GetTurn(turn.ID, "")
 	if curTurn.State != TurnWaitingApproval {
 		t.Fatalf("expected turn to remain waiting_approval during pause, got %s (%s)", curTurn.State, curTurn.ErrorCode)
@@ -391,15 +391,15 @@ func TestCodexClaudeDeepSeekInteractionPayloads(t *testing.T) {
 	extDir := t.TempDir()
 	cachedRaw := json.RawMessage(`{"command":"Remove-Item -Recurse -Force '` + filepath.ToSlash(extDir) + `'","justification":"delete outside dir"}`)
 	rawDSOnlyID := json.RawMessage(`{"toolCall":{"toolCallId":"tc1"},"options":[{"optionId":"allow-once","kind":"allow_once"},{"optionId":"reject-once","kind":"reject_once"}]}`)
-	dsReq, allowOpts, rejectOpts := parseDeepSeekPermissionRequest(rawDSOnlyID, cachedRaw, "pwsh", "command")
-	if !strings.Contains(dsReq.Command, "Remove-Item -Recurse -Force") || dsReq.Reason != "delete outside dir" || len(allowOpts) != 1 || len(rejectOpts) != 1 {
-		t.Fatalf("unexpected deepseek fallback parse: req=%+v allow=%v reject=%v", dsReq, allowOpts, rejectOpts)
+	dsReq, permOpts := parseDeepSeekPermissionRequest(rawDSOnlyID, cachedRaw, "pwsh", "command")
+	if !strings.Contains(dsReq.Command, "Remove-Item -Recurse -Force") || dsReq.Reason != "delete outside dir" || len(permOpts) != 2 {
+		t.Fatalf("unexpected deepseek fallback parse: req=%+v opts=%+v", dsReq, permOpts)
 	}
 	risk := EvaluateInteractionRisk(t.TempDir(), wsDir, harnesses.AccessWorkspaceWrite, dsReq)
 	if !risk.HardRedline || !risk.OutsideWorkspace || risk.RiskLevel != "critical" {
 		t.Fatalf("expected deepseek cached recursive delete outside workspace to hit hard redline, got %+v", risk)
 	}
-	dsResp, cancel := buildDeepSeekPermissionReply(allowOpts, rejectOpts, InteractionDecision{Decision: DecisionDeny})
+	dsResp, cancel := buildDeepSeekPermissionReply(permOpts, InteractionDecision{Decision: DecisionDeny})
 	if cancel {
 		t.Fatalf("deny must not cancel deepseek turn")
 	}

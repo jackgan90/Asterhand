@@ -17,6 +17,8 @@ type pendingInteraction struct {
 	mu              sync.Mutex
 	view            InteractionView
 	resolved        bool
+	ctx             context.Context
+	rt              *runningTurn
 	decisionCh      chan InteractionDecision
 	escalateStop    chan struct{}
 	escalateResetCh chan time.Duration
@@ -49,7 +51,7 @@ func (pi *pendingInteraction) stopEscalationTimer() {
 	})
 }
 
-func (pi *pendingInteraction) resolve(dec InteractionDecision) bool {
+func (pi *pendingInteraction) claim() bool {
 	pi.mu.Lock()
 	if pi.resolved {
 		pi.mu.Unlock()
@@ -58,8 +60,46 @@ func (pi *pendingInteraction) resolve(dec InteractionDecision) bool {
 	pi.resolved = true
 	pi.mu.Unlock()
 	pi.stopEscalationTimer()
-	pi.decisionCh <- dec
 	return true
+}
+
+func (pi *pendingInteraction) deliver(dec InteractionDecision) {
+	pi.decisionCh <- dec
+}
+
+func (pi *pendingInteraction) resolve(dec InteractionDecision) bool {
+	if !pi.claim() {
+		return false
+	}
+	pi.deliver(dec)
+	return true
+}
+
+func (pi *pendingInteraction) markResolved() bool {
+	return pi.claim()
+}
+
+func hasSecretQuestion(questions []InteractionQuestion) bool {
+	for _, q := range questions {
+		if q.IsSecret {
+			return true
+		}
+	}
+	return false
+}
+
+func defaultInteractionProgress(view InteractionView) string {
+	if view.Kind == InteractionInput {
+		return "Waiting for input: " + truncateSummary(view.Summary, 120)
+	}
+	return "Waiting for human approval: " + truncateSummary(view.Summary, 120)
+}
+
+func resolvedInteractionProgress(kind, decision string) string {
+	if kind == InteractionApproval {
+		return fmt.Sprintf("Approval resolved (%s); resuming...", decision)
+	}
+	return "Input delivered; resuming..."
 }
 
 func (pi *pendingInteraction) snapshot() InteractionView {
@@ -160,17 +200,104 @@ func interactionPriority(kind string) int {
 	return 1
 }
 
-func (s *Service) pendingForTurnLocked(turnID string) *InteractionView {
+func (s *Service) pendingListForTurnLocked(turnID string) []*pendingInteraction {
+	type item struct {
+		pi   *pendingInteraction
+		view InteractionView
+	}
+	var list []item
 	for _, pi := range s.interactions {
 		if pi.isResolved() {
 			continue
 		}
 		v := pi.snapshot()
 		if v.TurnID == turnID {
-			return &v
+			list = append(list, item{pi: pi, view: v})
 		}
 	}
-	return nil
+	sort.Slice(list, func(i, j int) bool {
+		pi := interactionPriority(list[i].view.Kind)
+		pj := interactionPriority(list[j].view.Kind)
+		if pi != pj {
+			return pi < pj
+		}
+		if !list[i].view.CreatedAt.Equal(list[j].view.CreatedAt) {
+			return list[i].view.CreatedAt.Before(list[j].view.CreatedAt)
+		}
+		return list[i].view.RequestID < list[j].view.RequestID
+	})
+	out := make([]*pendingInteraction, len(list))
+	for i := range list {
+		out[i] = list[i].pi
+	}
+	return out
+}
+
+func (s *Service) pendingForTurnLocked(turnID string) *InteractionView {
+	list := s.pendingListForTurnLocked(turnID)
+	if len(list) == 0 {
+		return nil
+	}
+	v := list[0].snapshot()
+	return &v
+}
+
+// syncTurnInteractionStateLocked derives the turn's waiting/running state and
+// timeout pause window strictly from the entire unresolved interaction set for
+// turnID. waitingProgress applies only when updating a waiting turn (e.g. defer);
+// resumingProgress applies only when the last pending interaction resolves.
+// Caller must hold s.mu.
+func (s *Service) syncTurnInteractionStateLocked(turnID string, rt *runningTurn, waitingProgress, resumingProgress string, now time.Time, resumeRunning bool) {
+	if rt == nil {
+		rt = s.activeTurns[turnID]
+	}
+	remaining := s.pendingListForTurnLocked(turnID)
+	if len(remaining) > 0 {
+		if rt != nil && rt.waitingSince.IsZero() {
+			rt.waitingSince = now
+		}
+		head := remaining[0].snapshot()
+		nextState := TurnWaitingInput
+		if head.Kind == InteractionApproval {
+			nextState = TurnWaitingApproval
+		}
+		if cur, err := s.store.GetTurn(turnID); err == nil && !IsTurnTerminal(cur.State) && cur.State != TurnReconcile {
+			prevState := cur.State
+			prevReqID := ""
+			if cur.PendingInteraction != nil {
+				prevReqID = cur.PendingInteraction.RequestID
+			}
+			cur.State = nextState
+			cur.PendingInteraction = &head
+			if waitingProgress != "" {
+				cur.Progress = waitingProgress
+			} else if prevReqID != head.RequestID || prevState != nextState || cur.Progress == "" {
+				cur.Progress = defaultInteractionProgress(head)
+			}
+			cur.UpdatedAt = now
+			_ = s.store.SaveTurn(cur)
+		}
+		return
+	}
+
+	if rt != nil {
+		if !rt.waitingSince.IsZero() {
+			rt.pausedTotal += now.Sub(rt.waitingSince)
+			rt.waitingSince = time.Time{}
+		}
+		rt.lastEventAt = now
+	}
+	if cur, err := s.store.GetTurn(turnID); err == nil && !IsTurnTerminal(cur.State) && cur.State != TurnReconcile {
+		cur.PendingInteraction = nil
+		if resumeRunning {
+			cur.State = TurnRunning
+			if resumingProgress != "" {
+				cur.Progress = resumingProgress
+			}
+		}
+		cur.UpdatedAt = now
+		_ = s.store.SaveTurn(cur)
+	}
 }
 
 // handleTurnInteraction is called by adapters (from a worker goroutine, never
@@ -181,28 +308,27 @@ func (s *Service) handleTurnInteraction(ctx context.Context, rt *runningTurn, w 
 		req.Kind = InteractionApproval
 	}
 	now := s.now().UTC()
+	turnID := t.ID
 
-	// Refresh latest worker flags (e.g. session_auto_approve toggled by human).
-	curWorker, err := s.store.GetWorker(w.ID)
-	if err == nil {
-		w.SessionAutoApprove = curWorker.SessionAutoApprove
-		w.ApprovalMode = curWorker.ApprovalMode
-		w.EffectiveApprovalMode = curWorker.EffectiveApprovalMode
+	// Read latest worker flags (e.g. session_auto_approve toggled by human) into a local snapshot.
+	effWorker := *w
+	if curWorker, err := s.store.GetWorker(w.ID); err == nil {
+		effWorker = curWorker
 	}
 
-	risk := EvaluateInteractionRisk(s.home, w.WorkspaceRoot, w.AccessMode, req)
+	risk := EvaluateInteractionRisk(s.home, effWorker.WorkspaceRoot, effWorker.AccessMode, req)
 
 	if req.Kind == InteractionApproval {
 		if risk.HardDeny {
-			s.appendInteractionLog(t.ID, "approval_denied", fmt.Sprintf("Blocked escalation (%s): %s", req.ToolName, strings.Join(risk.Reasons, "; ")))
+			s.appendInteractionLog(turnID, "approval_denied", fmt.Sprintf("Blocked escalation (%s): %s", req.ToolName, strings.Join(risk.Reasons, "; ")))
 			return InteractionDecision{Decision: DecisionDeny, Message: strings.Join(risk.Reasons, "; "), Actor: "policy"}, nil
 		}
-		if w.ApprovalMode == ApprovalModeStrictDeny {
-			s.appendInteractionLog(t.ID, "approval_denied", fmt.Sprintf("Strict-deny policy blocked approval request (%s)", firstNonEmptyStr(req.Summary, req.ToolName)))
+		if effWorker.ApprovalMode == ApprovalModeStrictDeny {
+			s.appendInteractionLog(turnID, "approval_denied", fmt.Sprintf("Strict-deny policy blocked approval request (%s)", firstNonEmptyStr(req.Summary, req.ToolName)))
 			return InteractionDecision{Decision: DecisionCancelTurn, Message: "Approval rejected under strict_deny approval_mode", Actor: "policy"}, nil
 		}
-		if w.SessionAutoApprove && !risk.HardRedline {
-			s.appendInteractionLog(t.ID, "approval_auto", fmt.Sprintf("Session auto-approved %s: %s", firstNonEmptyStr(req.ToolName, "action"), firstNonEmptyStr(req.Summary, truncateSummary(req.Command, 120))))
+		if effWorker.SessionAutoApprove && !risk.HardRedline {
+			s.appendInteractionLog(turnID, "approval_auto", fmt.Sprintf("Session auto-approved %s: %s", firstNonEmptyStr(req.ToolName, "action"), firstNonEmptyStr(req.Summary, truncateSummary(req.Command, 120))))
 			return InteractionDecision{Decision: DecisionAllowOnce, Actor: "policy"}, nil
 		}
 	}
@@ -217,15 +343,18 @@ func (s *Service) handleTurnInteraction(ctx context.Context, rt *runningTurn, w 
 		}
 	}
 
+	isSecretInput := req.Kind == InteractionInput && hasSecretQuestion(req.Questions)
+	visibleToHuman := req.Kind == InteractionApproval || isSecretInput
+
 	view := InteractionView{
 		RequestID:        reqID,
 		Kind:             req.Kind,
-		WorkerID:         w.ID,
-		WorkerAlias:      w.Alias,
-		WorkspaceID:      w.WorkspaceID,
-		WorkspaceRoot:    w.WorkspaceRoot,
-		HarnessID:        w.HarnessID,
-		TurnID:           t.ID,
+		WorkerID:         effWorker.ID,
+		WorkerAlias:      effWorker.Alias,
+		WorkspaceID:      effWorker.WorkspaceID,
+		WorkspaceRoot:    effWorker.WorkspaceRoot,
+		HarnessID:        effWorker.HarnessID,
+		TurnID:           turnID,
 		ToolName:         req.ToolName,
 		Summary:          summary,
 		Command:          req.Command,
@@ -236,7 +365,7 @@ func (s *Service) handleTurnInteraction(ctx context.Context, rt *runningTurn, w 
 		OutsideWorkspace: risk.OutsideWorkspace,
 		AllowSessionOK:   req.Kind == InteractionApproval && !risk.HardRedline,
 		Questions:        req.Questions,
-		VisibleToHuman:   req.Kind == InteractionApproval,
+		VisibleToHuman:   visibleToHuman,
 		CreatedAt:        now,
 	}
 	if len(risk.Reasons) > 0 && view.Reason == "" {
@@ -245,71 +374,79 @@ func (s *Service) handleTurnInteraction(ctx context.Context, rt *runningTurn, w 
 
 	pi := &pendingInteraction{
 		view:            view,
+		ctx:             ctx,
+		rt:              rt,
 		decisionCh:      make(chan InteractionDecision, 1),
 		escalateStop:    make(chan struct{}),
 		escalateResetCh: make(chan time.Duration, 1),
 	}
 
 	waitState := TurnWaitingApproval
-	progressMsg := "Waiting for human approval: " + truncateSummary(summary, 120)
+	progressMsg := defaultInteractionProgress(view)
+	var grace time.Duration
 	if req.Kind == InteractionInput {
 		waitState = TurnWaitingInput
-		progressMsg = "Waiting for input: " + truncateSummary(summary, 120)
-		grace := s.budgets.InputCallerGrace
-		if grace <= 0 {
-			grace = 15 * time.Second
+		if !isSecretInput {
+			grace = s.budgets.InputCallerGrace
+			if grace <= 0 {
+				grace = 15 * time.Second
+			}
+			escAt := now.Add(grace)
+			pi.view.EscalateAt = &escAt
 		}
-		escAt := now.Add(grace)
-		pi.view.EscalateAt = &escAt
-		view.EscalateAt = &escAt
 	}
 
 	s.mu.Lock()
 	s.interactions[reqID] = pi
-	rt.waitingSince = now
+	s.syncTurnInteractionStateLocked(turnID, rt, "", "", now, false)
 	s.mu.Unlock()
 
-	t.State = waitState
-	t.Progress = progressMsg
-	t.PendingInteraction = &view
-	t.UpdatedAt = now
-	_ = s.store.SaveTurn(*t)
-	s.appendInteractionLog(t.ID, waitState, progressMsg)
-	s.notifyWaiters(t.ID)
+	s.appendInteractionLog(turnID, waitState, progressMsg)
+	s.notifyWaiters(turnID)
+	s.notifyInteractionsChanged()
 
-	if req.Kind == InteractionApproval {
-		s.notifyInteractionsChanged()
-	} else {
-		grace := s.budgets.InputCallerGrace
-		if grace <= 0 {
-			grace = 15 * time.Second
-		}
-		s.notifyInteractionsChanged()
-		go func() {
-			timer := time.NewTimer(grace)
-			defer timer.Stop()
-			for {
-				select {
-				case <-timer.C:
-					s.escalateInteractionToHuman(reqID, t.ID, "")
-					return
-				case newDur := <-pi.escalateResetCh:
-					if !timer.Stop() {
-						select {
-						case <-timer.C:
-						default:
-						}
-					}
-					timer.Reset(newDur)
-				case <-pi.escalateStop:
-					return
-				case <-rt.cancelCh:
-					return
-				}
-			}
-		}()
+	if req.Kind == InteractionInput && !isSecretInput {
+		s.startEscalationTimer(reqID, turnID, pi, rt, grace)
 	}
 
+	dec := s.awaitInteractionDecision(ctx, rt, reqID, turnID, req, pi)
+	pi.stopEscalationTimer()
+
+	s.appendInteractionLog(turnID, "interaction_resolved", formatDecisionLog(req, dec))
+	s.notifyWaiters(turnID)
+	s.notifyInteractionsChanged()
+	return dec, nil
+}
+
+func (s *Service) startEscalationTimer(reqID, turnID string, pi *pendingInteraction, rt *runningTurn, grace time.Duration) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		timer := time.NewTimer(grace)
+		defer timer.Stop()
+		for {
+			select {
+			case <-timer.C:
+				s.escalateInteractionToHuman(reqID, turnID, "")
+				return
+			case newDur := <-pi.escalateResetCh:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(newDur)
+			case <-pi.escalateStop:
+				return
+			case <-rt.cancelCh:
+				return
+			}
+		}
+	}()
+}
+
+func (s *Service) awaitInteractionDecision(ctx context.Context, rt *runningTurn, reqID, turnID string, req InteractionRequest, pi *pendingInteraction) InteractionDecision {
 	waitTimeout := s.budgets.InteractionTimeout
 	if waitTimeout <= 0 {
 		waitTimeout = 30 * time.Minute
@@ -317,60 +454,47 @@ func (s *Service) handleTurnInteraction(ctx context.Context, rt *runningTurn, w 
 	timeoutTimer := time.NewTimer(waitTimeout)
 	defer timeoutTimer.Stop()
 
-	var dec InteractionDecision
+	var fallback InteractionDecision
 	select {
-	case dec = <-pi.decisionCh:
+	case dec := <-pi.decisionCh:
+		return dec
 	case <-rt.cancelCh:
-		dec = InteractionDecision{Decision: DecisionCancelTurn, Message: "Turn cancelled while waiting for interaction", Actor: "policy"}
+		fallback = InteractionDecision{Decision: DecisionCancelTurn, Message: "Turn cancelled while waiting for interaction", Actor: "policy"}
 	case <-ctx.Done():
-		dec = InteractionDecision{Decision: DecisionCancelTurn, Message: "Context cancelled while waiting for interaction", Actor: "policy"}
+		fallback = InteractionDecision{Decision: DecisionCancelTurn, Message: "Context cancelled while waiting for interaction", Actor: "policy"}
 	case <-timeoutTimer.C:
-		dec = InteractionDecision{Decision: DecisionDeny, Message: "Timed out waiting for user response", Actor: "timeout"}
+		fallback = InteractionDecision{Decision: DecisionDeny, Message: "Timed out waiting for user response", Actor: "timeout"}
 	}
-	pi.stopEscalationTimer()
 
-	resumedAt := s.now().UTC()
+	// Arbitrate fallback against DecideInteractionHuman / ReplyTurn under s.mu
+	// so only one winner can claim pi and commit any associated session grant.
+	now := s.now().UTC()
 	s.mu.Lock()
-	delete(s.interactions, reqID)
-	if !rt.waitingSince.IsZero() {
-		rt.pausedTotal += resumedAt.Sub(rt.waitingSince)
-		rt.waitingSince = time.Time{}
+	won := pi.claim()
+	if won {
+		delete(s.interactions, reqID)
+		s.syncTurnInteractionStateLocked(turnID, rt, "", resolvedInteractionProgress(req.Kind, fallback.Decision), now, fallback.Decision != DecisionCancelTurn)
 	}
-	rt.lastEventAt = resumedAt
 	s.mu.Unlock()
-
-	if dec.Decision == DecisionAllowSession && req.Kind == InteractionApproval && !risk.HardRedline {
-		s.updateWorkerState(w.ID, func(cur *Worker) {
-			cur.SessionAutoApprove = true
-			cur.UpdatedAt = resumedAt
-		})
-		w.SessionAutoApprove = true
+	if won {
+		return fallback
 	}
-
-	t.PendingInteraction = nil
-	if dec.Decision != DecisionCancelTurn {
-		t.State = TurnRunning
-		if req.Kind == InteractionApproval {
-			t.Progress = fmt.Sprintf("Approval resolved (%s); resuming...", dec.Decision)
-		} else {
-			t.Progress = "Input delivered; resuming..."
-		}
-		t.UpdatedAt = resumedAt
-		_ = s.store.SaveTurn(*t)
-	}
-	s.appendInteractionLog(t.ID, "interaction_resolved", formatDecisionLog(req, dec))
-	s.notifyWaiters(t.ID)
-	s.notifyInteractionsChanged()
-	return dec, nil
+	return <-pi.decisionCh
 }
 
-func (s *Service) markInputObservedByCaller(turnID string) {
+func (s *Service) markInputObservedByCaller(turnID, requestID string) {
 	s.mu.Lock()
 	var pi *pendingInteraction
-	for _, cand := range s.interactions {
-		if cand.snapshot().TurnID == turnID {
+	if requestID != "" {
+		if cand, ok := s.interactions[requestID]; ok && !cand.isResolved() && cand.snapshot().TurnID == turnID {
 			pi = cand
-			break
+		}
+	} else {
+		for _, cand := range s.pendingListForTurnLocked(turnID) {
+			if cand.snapshot().Kind == InteractionInput {
+				pi = cand
+				break
+			}
 		}
 	}
 	s.mu.Unlock()
@@ -400,15 +524,12 @@ func (s *Service) markInputObservedByCaller(turnID string) {
 	}
 	pi.view.ClaimedByCaller = true
 	pi.view.EscalateAt = &nextAt
-	snap := pi.view
 	pi.mu.Unlock()
 
 	pi.resetEscalationTimer(claimedGrace)
-	if t, err := s.store.GetTurn(turnID); err == nil && t.State == TurnWaitingInput {
-		t.PendingInteraction = &snap
-		t.UpdatedAt = now
-		_ = s.store.SaveTurn(t)
-	}
+	s.mu.Lock()
+	s.syncTurnInteractionStateLocked(turnID, nil, "", "", now, false)
+	s.mu.Unlock()
 	s.notifyInteractionsChanged()
 }
 
@@ -429,16 +550,14 @@ func (s *Service) escalateInteractionToHuman(requestID, turnID, note string) boo
 	if trimmed := truncateSummary(strings.TrimSpace(note), 1000); trimmed != "" {
 		pi.view.EscalationNote = trimmed
 	}
-	snap := pi.view
 	pi.mu.Unlock()
 	pi.stopEscalationTimer()
 
-	if t, err := s.store.GetTurn(turnID); err == nil && t.State == TurnWaitingInput {
-		t.PendingInteraction = &snap
-		t.UpdatedAt = s.now().UTC()
-		_ = s.store.SaveTurn(t)
-		s.notifyWaiters(turnID)
-	}
+	now := s.now().UTC()
+	s.mu.Lock()
+	s.syncTurnInteractionStateLocked(turnID, nil, "", "", now, false)
+	s.mu.Unlock()
+	s.notifyWaiters(turnID)
 	s.notifyInteractionsChanged()
 	return true
 }
@@ -453,8 +572,8 @@ func (s *Service) DecideInteractionHuman(requestID string, dec InteractionDecisi
 	}
 	s.mu.Lock()
 	pi, ok := s.interactions[requestID]
-	s.mu.Unlock()
 	if !ok {
+		s.mu.Unlock()
 		return InteractionView{}, automation.Fail("not_found", "Pending interaction not found or already resolved")
 	}
 	snap := pi.snapshot()
@@ -464,9 +583,11 @@ func (s *Service) DecideInteractionHuman(requestID string, dec InteractionDecisi
 		case DecisionAllowOnce, DecisionDeny, DecisionCancelTurn:
 		case DecisionAllowSession:
 			if !snap.AllowSessionOK || snap.HardRedline {
+				s.mu.Unlock()
 				return InteractionView{}, automation.Fail("forbidden", "Session auto-approve is not permitted for hard-redline requests")
 			}
 		default:
+			s.mu.Unlock()
 			return InteractionView{}, automation.Fail("invalid_parameters", "decision must be allow_once, allow_session, deny, or cancel_turn")
 		}
 	} else {
@@ -474,26 +595,47 @@ func (s *Service) DecideInteractionHuman(requestID string, dec InteractionDecisi
 		case DecisionAnswer, "":
 			dec.Decision = DecisionAnswer
 			if strings.TrimSpace(dec.Text) == "" && len(dec.Answers) == 0 {
+				s.mu.Unlock()
 				return InteractionView{}, automation.Fail("invalid_parameters", "answer text or answers map is required")
 			}
 		case DecisionCancelTurn:
 		default:
+			s.mu.Unlock()
 			return InteractionView{}, automation.Fail("invalid_parameters", "decision must be answer or cancel_turn")
 		}
 	}
-	if !pi.resolve(dec) {
+	if pi.isResolved() || (pi.ctx != nil && pi.ctx.Err() != nil) || (pi.rt != nil && (pi.rt.cancelled || pi.rt.revoked)) {
+		s.mu.Unlock()
+		return InteractionView{}, automation.Fail("conflict", "Interaction was already resolved or cancelled")
+	}
+	now := s.now().UTC()
+	if dec.Decision == DecisionAllowSession && snap.Kind == InteractionApproval && !snap.HardRedline && snap.AllowSessionOK {
+		cur, err := s.store.GetWorker(snap.WorkerID)
+		if err != nil {
+			s.mu.Unlock()
+			return InteractionView{}, err
+		}
+		if cur.State == WorkerClosed {
+			s.mu.Unlock()
+			return InteractionView{}, automation.Fail("conflict", "Worker is closed")
+		}
+		cur.SessionAutoApprove = true
+		cur.UpdatedAt = now
+		if err := s.store.SaveWorker(cur); err != nil {
+			s.mu.Unlock()
+			return InteractionView{}, err
+		}
+	}
+	if !pi.claim() {
+		s.mu.Unlock()
 		return InteractionView{}, automation.Fail("conflict", "Interaction was already resolved")
 	}
-	if dec.Decision == DecisionAllowSession && snap.Kind == InteractionApproval && !snap.HardRedline && snap.AllowSessionOK {
-		now := s.now().UTC()
-		s.updateWorkerState(snap.WorkerID, func(cur *Worker) {
-			cur.SessionAutoApprove = true
-			cur.UpdatedAt = now
-		})
-	}
-	s.mu.Lock()
 	delete(s.interactions, requestID)
+	s.syncTurnInteractionStateLocked(snap.TurnID, nil, "", resolvedInteractionProgress(snap.Kind, dec.Decision), now, dec.Decision != DecisionCancelTurn)
 	s.mu.Unlock()
+
+	pi.deliver(dec)
+	s.notifyWaiters(snap.TurnID)
 	s.notifyInteractionsChanged()
 	return snap, nil
 }
@@ -501,6 +643,7 @@ func (s *Service) DecideInteractionHuman(requestID string, dec InteractionDecisi
 type ReplyInput struct {
 	OperationID     string
 	TurnID          string
+	RequestID       string
 	WorkspaceID     string
 	Text            string
 	Answers         map[string][]string
@@ -509,52 +652,77 @@ type ReplyInput struct {
 	Note            string
 }
 
+type ReplyResult struct {
+	Turn       Turn
+	RequestID  string
+	Escalated  bool
+	Deferred   bool
+	EscalateAt *time.Time
+}
+
 // ReplyTurn lets caller A answer a waiting_input question via workers_reply,
 // defer escalation while verifying code, or explicitly escalate it to human UI
 // with an optional verification note. Caller A is strictly forbidden from
-// approving waiting_approval requests (EXEC-HARNESS-09).
+// approving waiting_approval requests (EXEC-HARNESS-09) or answering secret inputs.
 func (s *Service) ReplyTurn(in ReplyInput) (Turn, bool, error) {
+	res, err := s.ReplyTurnWithReceipt(in)
+	return res.Turn, res.Escalated, err
+}
+
+func (s *Service) ReplyTurnWithReceipt(in ReplyInput) (ReplyResult, error) {
 	turnID := strings.TrimSpace(in.TurnID)
 	if turnID == "" {
-		return Turn{}, false, automation.Fail("invalid_parameters", "turn_id is required")
+		return ReplyResult{}, automation.Fail("invalid_parameters", "turn_id is required")
 	}
 	t, err := s.store.GetTurn(turnID)
 	if err != nil {
-		return Turn{}, false, automation.Fail("not_found", "Turn not found")
+		return ReplyResult{}, automation.Fail("not_found", "Turn not found")
 	}
 	if in.WorkspaceID != "" && t.WorkspaceID != in.WorkspaceID {
-		return Turn{}, false, automation.Fail("workspace_mismatch", "Turn belongs to a different workspace")
+		return ReplyResult{}, automation.Fail("workspace_mismatch", "Turn belongs to a different workspace")
 	}
-	if t.State == TurnWaitingApproval {
-		return Turn{}, false, automation.Fail("forbidden", "Caller cannot approve waiting_approval requests; human confirmation is required in desktop or Web UI")
-	}
-	if t.State != TurnWaitingInput {
-		return Turn{}, false, automation.Fail("conflict", fmt.Sprintf("Turn is no longer waiting for input (current state: %s; it may have been answered already)", t.State))
+	reqID := strings.TrimSpace(in.RequestID)
+	if reqID == "" {
+		if t.State == TurnWaitingApproval {
+			return ReplyResult{}, automation.Fail("forbidden", "Caller cannot approve waiting_approval requests; human confirmation is required in desktop or Web UI")
+		}
+		if t.State != TurnWaitingInput {
+			return ReplyResult{}, automation.Fail("conflict", fmt.Sprintf("Turn is no longer waiting for input (current state: %s; it may have been answered already)", t.State))
+		}
+	} else if t.State != TurnWaitingInput && t.State != TurnWaitingApproval {
+		return ReplyResult{}, automation.Fail("conflict", fmt.Sprintf("Turn is no longer waiting for input (current state: %s; it may have been answered already)", t.State))
 	}
 
 	s.mu.Lock()
 	var pi *pendingInteraction
-	for _, cand := range s.interactions {
-		if cand.snapshot().TurnID == turnID {
+	if reqID != "" {
+		if cand, ok := s.interactions[reqID]; ok && !cand.isResolved() && cand.snapshot().TurnID == turnID {
 			pi = cand
-			break
+		}
+	} else {
+		ordered := s.pendingListForTurnLocked(turnID)
+		if len(ordered) > 0 {
+			pi = ordered[0]
 		}
 	}
 	s.mu.Unlock()
 	if pi == nil {
-		return Turn{}, false, automation.Fail("not_found", "Pending input request not found")
+		return ReplyResult{}, automation.Fail("not_found", "Pending input request not found")
 	}
 	snap := pi.snapshot()
 	if snap.Kind != InteractionInput {
-		return Turn{}, false, automation.Fail("forbidden", "Caller cannot approve waiting_approval requests; human confirmation is required in desktop or Web UI")
+		return ReplyResult{}, automation.Fail("forbidden", "Caller cannot approve waiting_approval requests; human confirmation is required in desktop or Web UI")
+	}
+	if hasSecretQuestion(snap.Questions) {
+		return ReplyResult{}, automation.Fail("forbidden", "Secret input questions require direct human entry in desktop or Web UI")
 	}
 
 	hasAnswer := strings.TrimSpace(in.Text) != "" || len(in.Answers) > 0
 	if in.EscalateToHuman && in.DeferSeconds > 0 {
-		return Turn{}, false, automation.Fail("invalid_parameters", "Cannot combine escalate_to_human=true with defer_seconds")
+		return ReplyResult{}, automation.Fail("invalid_parameters", "Cannot combine escalate_to_human=true with defer_seconds")
 	}
 	if in.DeferSeconds > 0 && hasAnswer {
-		return Turn{}, false, automation.Fail("invalid_parameters", "Cannot combine defer_seconds with answer text/answers")
+		return ReplyResult{}, automation.Fail("invalid_parameters", "Cannot combine defer_seconds with answer text/answers")
 	}
 
 	if in.EscalateToHuman {
@@ -567,12 +735,12 @@ func (s *Service) ReplyTurn(in ReplyInput) (Turn, bool, error) {
 		s.appendInteractionLog(turnID, "input_escalated", logMsg)
 		updated, _ := s.store.GetTurn(turnID)
 		updated.PendingInteraction = s.pendingForTurn(turnID)
-		return updated, true, nil
+		return ReplyResult{Turn: updated, RequestID: snap.RequestID, Escalated: true}, nil
 	}
 
 	if in.DeferSeconds > 0 {
 		if in.DeferSeconds < MinDeferSeconds || in.DeferSeconds > MaxDeferSeconds {
-			return Turn{}, false, automation.Fail("invalid_parameters", fmt.Sprintf("defer_seconds must be between %d and %d", MinDeferSeconds, MaxDeferSeconds))
+			return ReplyResult{}, automation.Fail("invalid_parameters", fmt.Sprintf("defer_seconds must be between %d and %d", MinDeferSeconds, MaxDeferSeconds))
 		}
 		now := s.now().UTC()
 		dur := time.Duration(in.DeferSeconds) * time.Second
@@ -581,11 +749,11 @@ func (s *Service) ReplyTurn(in ReplyInput) (Turn, bool, error) {
 		pi.mu.Lock()
 		if pi.resolved {
 			pi.mu.Unlock()
-			return Turn{}, false, automation.Fail("conflict", "Input request was already resolved")
+			return ReplyResult{}, automation.Fail("conflict", "Input request was already resolved")
 		}
 		if pi.view.VisibleToHuman {
 			pi.mu.Unlock()
-			return Turn{}, false, automation.Fail("conflict", "Question has already been escalated to human UI")
+			return ReplyResult{}, automation.Fail("conflict", "Question has already been escalated to human UI")
 		}
 		pi.view.ClaimedByCaller = true
 		pi.view.DeferCount++
@@ -593,7 +761,6 @@ func (s *Service) ReplyTurn(in ReplyInput) (Turn, bool, error) {
 		if note != "" {
 			pi.view.EscalationNote = note
 		}
-		updatedSnap := pi.view
 		pi.mu.Unlock()
 
 		pi.resetEscalationTimer(dur)
@@ -601,55 +768,86 @@ func (s *Service) ReplyTurn(in ReplyInput) (Turn, bool, error) {
 		if note != "" {
 			logMsg += " (" + truncateSummary(note, 160) + ")"
 		}
-		if curT, gErr := s.store.GetTurn(turnID); gErr == nil && curT.State == TurnWaitingInput {
-			curT.PendingInteraction = &updatedSnap
-			curT.Progress = logMsg
-			curT.UpdatedAt = now
-			_ = s.store.SaveTurn(curT)
+		s.mu.Lock()
+		waitProg := ""
+		if head := s.pendingForTurnLocked(turnID); head != nil && head.RequestID == snap.RequestID {
+			waitProg = logMsg
 		}
+		s.syncTurnInteractionStateLocked(turnID, nil, waitProg, "", now, false)
+		s.mu.Unlock()
 		s.appendInteractionLog(turnID, "input_deferred", logMsg)
 		s.notifyInteractionsChanged()
 		updated, _ := s.store.GetTurn(turnID)
 		updated.PendingInteraction = s.pendingForTurn(turnID)
-		return updated, false, nil
+		return ReplyResult{Turn: updated, RequestID: snap.RequestID, Deferred: true, EscalateAt: &nextAt}, nil
 	}
 
 	if !hasAnswer {
-		return Turn{}, false, automation.Fail("invalid_parameters", "Provide text/answers, defer_seconds, or set escalate_to_human=true")
+		return ReplyResult{}, automation.Fail("invalid_parameters", "Provide text/answers, defer_seconds, or set escalate_to_human=true")
 	}
-	if !pi.resolve(InteractionDecision{
+	dec := InteractionDecision{
 		Decision: DecisionAnswer,
 		Text:     strings.TrimSpace(in.Text),
 		Answers:  in.Answers,
 		Actor:    "caller",
-	}) {
-		return Turn{}, false, automation.Fail("conflict", "Input request was already resolved")
 	}
+	now := s.now().UTC()
 	s.mu.Lock()
+	if !pi.claim() {
+		s.mu.Unlock()
+		return ReplyResult{}, automation.Fail("conflict", "Input request was already resolved")
+	}
 	delete(s.interactions, snap.RequestID)
+	s.syncTurnInteractionStateLocked(turnID, nil, "", resolvedInteractionProgress(InteractionInput, DecisionAnswer), now, true)
 	s.mu.Unlock()
+
+	pi.deliver(dec)
+	s.notifyWaiters(turnID)
 	s.notifyInteractionsChanged()
 	updated, _ := s.store.GetTurn(turnID)
-	return updated, false, nil
+	updated.PendingInteraction = s.pendingForTurn(turnID)
+	return ReplyResult{Turn: updated, RequestID: snap.RequestID}, nil
 }
 
 // SetSessionAutoApproveHuman allows a human (Web UI) to enable or revoke the
-// per-worker session auto-approve policy. Never exposed to caller A MCP.
+// per-worker session auto-approve policy. Synchronized under s.mu with
+// DecideInteractionHuman so revokes can never be overwritten by a late grant.
 func (s *Service) SetSessionAutoApproveHuman(workerID string, enabled bool) (Worker, error) {
-	w, err := s.store.GetWorker(strings.TrimSpace(workerID))
+	id := strings.TrimSpace(workerID)
+	var toClose *residentProc
+	s.mu.Lock()
+	w, err := s.store.GetWorker(id)
 	if err != nil {
+		s.mu.Unlock()
 		return Worker{}, automation.Fail("not_found", "Worker not found")
 	}
 	if w.State == WorkerClosed {
+		s.mu.Unlock()
 		return Worker{}, automation.Fail("conflict", "Closed worker cannot be modified")
 	}
 	if enabled && w.AccessMode == harnesses.AccessReadOnly {
+		s.mu.Unlock()
 		return Worker{}, automation.Fail("forbidden", "read_only worker cannot enable session auto-approve")
 	}
 	w.SessionAutoApprove = enabled
 	w.UpdatedAt = s.now().UTC()
 	if err := s.store.SaveWorker(w); err != nil {
+		s.mu.Unlock()
 		return Worker{}, err
+	}
+	if !enabled {
+		if _, busy := s.workerTurn[w.ID]; !busy {
+			if rp, ok := s.residents[w.ID]; ok {
+				toClose = rp
+				delete(s.residents, w.ID)
+			}
+		}
+	}
+	s.mu.Unlock()
+	if toClose != nil {
+		if ad := s.adapters[toClose.harnessID]; ad != nil {
+			_ = ad.CloseThread(toClose.handle)
+		}
 	}
 	return w, nil
 }
@@ -672,6 +870,9 @@ func formatDecisionLog(req InteractionRequest, dec InteractionDecision) string {
 	if req.Kind == InteractionInput {
 		if dec.Decision == DecisionCancelTurn {
 			return fmt.Sprintf("Input cancelled (%s)", dec.Actor)
+		}
+		if hasSecretQuestion(req.Questions) {
+			return fmt.Sprintf("Input answered by %s (secret redacted)", firstNonEmptyStr(dec.Actor, "user"))
 		}
 		ans := strings.TrimSpace(dec.Text)
 		if ans == "" && len(dec.Answers) > 0 {

@@ -1,5 +1,6 @@
 import {$, localizeError, node, trapDialogWheel} from "./ui.mjs";
 import {t} from "./i18n.mjs";
+import {createWorkersInteractionsController} from "./workers-interactions.mjs";
 
 const TERMINAL_STATES = new Set([
   "completed",
@@ -90,8 +91,6 @@ function isPinnedToBottom(el) {
   return (el.scrollHeight - el.scrollTop - el.clientHeight) <= 24;
 }
 
-const INTERACTION_SWITCH_GUARD_MS = 400;
-
 export function workersPanel({api, post, listen, session, notice, now = () => Date.now()}) {
   const dialog = $("#coding-workers");
   const openBtn = $("#workers-open");
@@ -103,16 +102,6 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
   const detailEl = $("#workers-detail");
 
   let workers = [];
-  let interactions = [];
-  let activeInteractionID = "";
-  let interactionCmdExpanded = false;
-  let lastInteractionsSig = null;
-  let interactionGuardUntil = 0;
-  let interactionGuardTimer = null;
-  let countdownEl = null;
-  let countdownMeta = null;
-  let countdownTimer = null;
-  const interactionDrafts = new Map();
   let selectedWorkerID = "";
   let selectedWorker = null;
   let turns = [];
@@ -134,6 +123,14 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
   let renderedLogBox = null;
   let renderedLogCount = 0;
   const listButtons = new Map();
+
+  const interactionsCtrl = createWorkersInteractionsController({
+    interactionsEl,
+    dialog,
+    now,
+    getBusyAction: () => busyAction,
+    onDecide: payload => decideInteraction(payload),
+  });
 
   function resetTurnState() {
     selectedTurnID = "";
@@ -157,72 +154,11 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
     else delete statusEl.dataset.tone;
   }
 
-  function clearInteractionGuard() {
-    if (interactionGuardTimer !== null) {
-      clearTimeout(interactionGuardTimer);
-      interactionGuardTimer = null;
-    }
-    interactionGuardUntil = 0;
-  }
-
-  function isInteractionGuarded() {
-    return now() < interactionGuardUntil;
-  }
-
-  function armInteractionGuard() {
-    clearInteractionGuard();
-    interactionGuardUntil = now() + INTERACTION_SWITCH_GUARD_MS;
-    interactionGuardTimer = setTimeout(() => {
-      interactionGuardTimer = null;
-      if (dialog?.open && interactions.length) renderInteractions(true);
-    }, INTERACTION_SWITCH_GUARD_MS);
-  }
-
-  function clearCountdown() {
-    if (countdownTimer !== null) {
-      clearTimeout(countdownTimer);
-      countdownTimer = null;
-    }
-    countdownEl = null;
-    countdownMeta = null;
-  }
-
-  function paintCountdown() {
-    if (!countdownEl || !countdownMeta) return;
-    const secs = Math.max(0, Math.ceil((countdownMeta.dueMs - now()) / 1000));
-    const key = countdownMeta.claimed ? "web.workers.input_caller_verifying" : "web.workers.input_caller_grace";
-    countdownEl.textContent = t(key, {seconds: String(secs)});
-  }
-
-  function armCountdown(el, item) {
-    clearCountdown();
-    const dueMs = Date.parse(item.escalate_at);
-    if (!el || Number.isNaN(dueMs)) return;
-    countdownEl = el;
-    countdownMeta = {dueMs, claimed: Boolean(item.claimed_by_caller)};
-    paintCountdown();
-    const tick = () => {
-      countdownTimer = null;
-      if (!dialog?.open || !countdownEl || !countdownMeta) {
-        clearCountdown();
-        return;
-      }
-      paintCountdown();
-      if (countdownMeta.dueMs > now()) {
-        countdownTimer = setTimeout(tick, 1000);
-      }
-    };
-    if (dueMs > now()) {
-      countdownTimer = setTimeout(tick, 1000);
-    }
-  }
-
   function clearPoll() {
     if (pollTimer !== null) {
       clearTimeout(pollTimer);
       pollTimer = null;
     }
-    clearInteractionGuard();
   }
 
   function schedulePoll() {
@@ -231,7 +167,7 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
     const waitingFirstTurn = Boolean(selectedWorker && selectedWorker.state !== "closed" && turns.length === 0);
     const hasActive = (selectedTurn && !TERMINAL_STATES.has(selectedTurn.state))
       || workers.some(w => w.state === "running")
-      || interactions.length > 0
+      || interactionsCtrl.hasItems()
       || waitingFirstTurn;
     const delay = hasActive ? 2000 : 3000;
     pollTimer = setTimeout(() => {
@@ -247,27 +183,23 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
     }
   }
 
-  function getInteractionDraft(reqID) {
-    if (!interactionDrafts.has(reqID)) interactionDrafts.set(reqID, {text: "", selected: {}});
-    return interactionDrafts.get(reqID);
-  }
-
   async function decideInteraction(payload) {
-    if (busyAction || isInteractionGuarded()) return;
+    if (busyAction || interactionsCtrl.isGuarded()) return;
     const scope = session();
     busyAction = true;
-    renderInteractions(true);
+    interactionsCtrl.render(true);
     try {
       const res = await post("/api/workers/interactions/decide", payload);
       if (!scope?.active) return;
-      interactions = Array.isArray(res.interactions) ? res.interactions : [];
+      interactionsCtrl.setItems(res.interactions);
+      interactionsCtrl.render(true);
       await refresh();
     } catch (err) {
       if (!scope?.active) return;
       notice?.(localizeError(err));
     } finally {
       busyAction = false;
-      if (scope?.active) renderInteractions(true);
+      if (scope?.active) interactionsCtrl.render(true);
     }
   }
 
@@ -285,221 +217,6 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
     } finally {
       busyAction = false;
       if (scope?.active) renderDetail(true);
-    }
-  }
-
-  function renderInteractions(force = false) {
-    if (!interactionsEl) return;
-    const liveIDs = new Set(interactions.map(x => x.request_id));
-    for (const k of interactionDrafts.keys()) {
-      if (!liveIDs.has(k)) interactionDrafts.delete(k);
-    }
-    if (!interactions.length) {
-      interactionsEl.hidden = true;
-      interactionsEl.replaceChildren();
-      activeInteractionID = "";
-      lastInteractionsSig = "";
-      clearInteractionGuard();
-      clearCountdown();
-      return;
-    }
-    const prevActiveID = activeInteractionID;
-    const autoSwitched = Boolean(prevActiveID && !liveIDs.has(prevActiveID));
-    if (!liveIDs.has(activeInteractionID)) {
-      activeInteractionID = interactions[0].request_id;
-      interactionCmdExpanded = false;
-    }
-    if (autoSwitched && activeInteractionID && activeInteractionID !== prevActiveID) {
-      armInteractionGuard();
-    }
-    const idx = Math.max(0, interactions.findIndex(x => x.request_id === activeInteractionID));
-    const item = interactions[idx];
-    const actionDisabled = busyAction || isInteractionGuarded();
-    const sig = JSON.stringify({
-      locale: t("common.worker_action.badge_approval"),
-      ids: interactions.map(x => x.request_id),
-      active: item.request_id,
-      visible: Boolean(item.visible_to_human),
-      claimed: Boolean(item.claimed_by_caller),
-      escalateAt: item.escalate_at || "",
-      note: item.escalation_note || "",
-      expanded: interactionCmdExpanded,
-      busyAction,
-      guarded: isInteractionGuarded(),
-      selected: Object.fromEntries(Object.entries(getInteractionDraft(item.request_id).selected).map(([k, v]) => [k, Array.from(v)])),
-    });
-    if (!force && sig === lastInteractionsSig) {
-      paintCountdown();
-      return;
-    }
-    lastInteractionsSig = sig;
-    clearCountdown();
-
-    interactionsEl.hidden = false;
-    interactionsEl.replaceChildren();
-
-    const head = node("div", null, "workers-int-head");
-    const left = node("div", null, "workers-int-head-left");
-    const kindBadge = node("span", t(item.kind === "approval" ? "common.worker_action.badge_approval" : "common.worker_action.badge_input"), "badge");
-    kindBadge.dataset.tone = item.kind === "approval" ? "warn" : "ok";
-    const src = `${item.worker_alias || item.worker_id} · ${item.harness_id}`;
-    left.append(kindBadge, node("strong", src));
-    if (item.workspace_root) left.append(node("span", folderName(item.workspace_root), "worker-meta-line"));
-    head.append(left);
-
-    if (interactions.length > 1) {
-      const approvals = interactions.filter(x => x.kind === "approval").length;
-      const inputs = interactions.length - approvals;
-      const pager = node("div", null, "workers-int-pager");
-      const prev = node("button", "‹", "secondary");
-      prev.type = "button";
-      prev.setAttribute("aria-label", t("common.worker_action.prev"));
-      prev.addEventListener("click", () => {
-        activeInteractionID = interactions[(idx - 1 + interactions.length) % interactions.length].request_id;
-        interactionCmdExpanded = false;
-        renderInteractions(true);
-      });
-      const next = node("button", "›", "secondary");
-      next.type = "button";
-      next.setAttribute("aria-label", t("common.worker_action.next"));
-      next.addEventListener("click", () => {
-        activeInteractionID = interactions[(idx + 1) % interactions.length].request_id;
-        interactionCmdExpanded = false;
-        renderInteractions(true);
-      });
-      pager.append(
-        node("span", t("common.worker_action.queue_breakdown", {approvals, inputs})),
-        prev,
-        node("span", `${idx + 1} / ${interactions.length}`),
-        next,
-      );
-      head.append(pager);
-    }
-    interactionsEl.append(head);
-
-    if (item.kind === "approval") {
-      const meta = node("div", null, "workers-int-actions");
-      if (item.tool_name) meta.append(node("span", item.tool_name, "badge"));
-      const riskKey = item.hard_redline ? "common.worker_action.risk_critical" : (item.outside_workspace ? "common.worker_action.risk_outside" : "common.worker_action.risk_workspace");
-      const riskBadge = node("span", t(riskKey), "badge");
-      if (item.hard_redline) riskBadge.dataset.tone = "error";
-      else if (item.outside_workspace) riskBadge.dataset.tone = "warn";
-      meta.append(riskBadge);
-      interactionsEl.append(meta);
-
-      if (item.summary) interactionsEl.append(node("p", item.summary, "worker-meta-line"));
-      if (item.command) {
-        const pre = node("pre", item.command, interactionCmdExpanded ? "workers-int-cmd expanded" : "workers-int-cmd");
-        interactionsEl.append(pre);
-        if (item.command.length > 140 || item.command.includes("\n")) {
-          const toggle = node("button", t(interactionCmdExpanded ? "common.worker_action.cmd_collapse" : "common.worker_action.cmd_expand"), "secondary");
-          toggle.type = "button";
-          toggle.addEventListener("click", () => { interactionCmdExpanded = !interactionCmdExpanded; renderInteractions(true); });
-          interactionsEl.append(toggle);
-        }
-      }
-      const actions = node("div", null, "workers-int-actions");
-      const bOnce = node("button", t("common.worker_action.allow_once"));
-      bOnce.type = "button";
-      bOnce.disabled = actionDisabled;
-      bOnce.addEventListener("click", () => void decideInteraction({request_id: item.request_id, decision: "allow_once"}));
-      actions.append(bOnce);
-
-      if (item.allow_session_ok && !item.hard_redline) {
-        const bSess = node("button", t("common.worker_action.allow_session"), "secondary");
-        bSess.type = "button";
-        bSess.disabled = actionDisabled;
-        bSess.addEventListener("click", () => void decideInteraction({request_id: item.request_id, decision: "allow_session"}));
-        actions.append(bSess);
-      }
-
-      const bDeny = node("button", t("common.worker_action.deny"), "secondary");
-      bDeny.type = "button";
-      bDeny.disabled = actionDisabled;
-      bDeny.addEventListener("click", () => void decideInteraction({request_id: item.request_id, decision: "deny"}));
-      actions.append(bDeny);
-
-      const bCancel = node("button", t("common.worker_action.cancel_turn"), "danger");
-      bCancel.type = "button";
-      bCancel.disabled = actionDisabled;
-      bCancel.addEventListener("click", () => void decideInteraction({request_id: item.request_id, decision: "cancel_turn"}));
-      actions.append(bCancel);
-      interactionsEl.append(actions);
-    } else {
-      if (!item.visible_to_human && item.escalate_at) {
-        const waitBadge = node("span", "", "badge");
-        waitBadge.dataset.tone = "warn";
-        armCountdown(waitBadge, item);
-        interactionsEl.append(waitBadge);
-      }
-      if (item.escalation_note) {
-        interactionsEl.append(node("p", t("common.worker_action.escalation_note", {note: item.escalation_note}), "worker-meta-line"));
-      }
-      const draft = getInteractionDraft(item.request_id);
-      const qs = Array.isArray(item.questions) && item.questions.length ? item.questions : [{id: "q1", question: item.summary}];
-      for (const q of qs) {
-        interactionsEl.append(node("p", q.question || item.summary || "", "worker-meta-line"));
-        if (Array.isArray(q.options) && q.options.length) {
-          if (!draft.selected[q.id]) draft.selected[q.id] = new Set();
-          const optRow = node("div", null, "workers-int-opts");
-          for (const opt of q.options) {
-            const chip = node("button", opt.description ? `${opt.label} — ${opt.description}` : opt.label, "workers-int-opt");
-            chip.type = "button";
-            chip.setAttribute("aria-pressed", draft.selected[q.id].has(opt.label) ? "true" : "false");
-            chip.disabled = busyAction;
-            chip.addEventListener("click", () => {
-              const sel = draft.selected[q.id];
-              if (q.multi_select) {
-                if (sel.has(opt.label)) sel.delete(opt.label); else sel.add(opt.label);
-              } else {
-                const had = sel.has(opt.label);
-                sel.clear();
-                if (!had) sel.add(opt.label);
-              }
-              renderInteractions(true);
-            });
-            optRow.append(chip);
-          }
-          interactionsEl.append(optRow);
-        }
-      }
-      const textarea = node("textarea", null, "workers-int-input");
-      textarea.placeholder = t("common.worker_action.answer_placeholder");
-      textarea.value = draft.text || "";
-      textarea.disabled = busyAction;
-      let composing = false;
-      textarea.addEventListener("compositionstart", () => { composing = true; });
-      textarea.addEventListener("compositionend", () => { composing = false; draft.text = textarea.value; });
-      textarea.addEventListener("input", () => { draft.text = textarea.value; });
-      const submitAns = () => {
-        const text = (draft.text || "").trim();
-        const answers = {};
-        let hasSel = false;
-        for (const [qID, set] of Object.entries(draft.selected)) {
-          if (set && set.size > 0) { answers[qID] = Array.from(set); hasSel = true; }
-        }
-        if (!text && !hasSel) { textarea.focus(); return; }
-        void decideInteraction({request_id: item.request_id, decision: "answer", text, answers});
-      };
-      textarea.addEventListener("keydown", ev => {
-        if (ev.key === "Enter" && !ev.shiftKey && !composing && !ev.isComposing) {
-          ev.preventDefault();
-          submitAns();
-        }
-      });
-      interactionsEl.append(textarea);
-
-      const actions = node("div", null, "workers-int-actions");
-      const bSend = node("button", t("common.worker_action.send_answer"));
-      bSend.type = "button";
-      bSend.disabled = actionDisabled;
-      bSend.addEventListener("click", submitAns);
-      const bCancel = node("button", t("common.worker_action.cancel_turn"), "danger");
-      bCancel.type = "button";
-      bCancel.disabled = actionDisabled;
-      bCancel.addEventListener("click", () => void decideInteraction({request_id: item.request_id, decision: "cancel_turn"}));
-      actions.append(bSend, bCancel);
-      interactionsEl.append(actions);
     }
   }
 
@@ -908,12 +625,12 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
       const res = await api(`/api/workers/list?include_closed=${inc}`);
       if (!scope?.active) return;
       workers = Array.isArray(res.items) ? res.items : [];
-      interactions = Array.isArray(res.interactions) ? res.interactions : [];
+      interactionsCtrl.setItems(res.interactions);
       setStatus("");
       const nextWorkerID = workers.some(w => w.worker_id === selectedWorkerID)
         ? selectedWorkerID
         : (workers[0]?.worker_id || "");
-      renderInteractions();
+      interactionsCtrl.render();
       renderList();
       await selectWorker(nextWorkerID, {isPoll});
     } catch (err) {
@@ -970,7 +687,7 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
 
   function stop() {
     clearPoll();
-    clearCountdown();
+    interactionsCtrl.stop();
     if (dialog?.open) dialog.close();
   }
 
@@ -978,7 +695,7 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
   if (refreshBtn) listen(refreshBtn, "click", () => void refresh());
   if (includeClosedEl) listen(includeClosedEl, "change", () => void refresh());
   if (dialog) {
-    listen(dialog, "close", () => { clearPoll(); clearCountdown(); });
+    listen(dialog, "close", () => { clearPoll(); interactionsCtrl.stop(); });
     trapDialogWheel(dialog, listen);
   }
 
@@ -987,11 +704,11 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
     stop,
     refreshIfOpen: refreshSelectedTurnAndList,
     relocalize: () => {
-      lastInteractionsSig = null;
+      interactionsCtrl.invalidateLocale();
       lastWorkersSig = null;
       invalidateDetailCache();
       if (!dialog?.open) return;
-      renderInteractions(true);
+      interactionsCtrl.render(true);
       renderList(true);
       renderDetail(true);
     },

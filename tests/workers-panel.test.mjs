@@ -17,6 +17,13 @@ class FakeElement {
     this.scrollTop = 0;
     this.scrollHeight = 0;
     this.clientHeight = 200;
+    this.attrs = new Map();
+  }
+  setAttribute(k, v) {
+    this.attrs.set(k, String(v));
+  }
+  getAttribute(k) {
+    return this.attrs.get(k) ?? null;
   }
   get textContent() {
     if (this.children.length === 0) return this._text;
@@ -78,10 +85,12 @@ class FakeElement {
   }
   querySelectorAll(selector) {
     const cls = selector.startsWith(".") ? selector.slice(1) : "";
+    const tag = cls ? "" : selector.toUpperCase();
     const out = [];
     const walk = (el) => {
       for (const c of el.children) {
         if (cls && c.className.split(/\s+/).includes(cls)) out.push(c);
+        else if (tag && c.tagName === tag) out.push(c);
         walk(c);
       }
     };
@@ -493,4 +502,296 @@ test("Workers panel ticks pending input countdown in place every second without 
     globalThis.setTimeout = origSetTimeout;
     globalThis.clearTimeout = origClearTimeout;
   }
+});
+
+test("Workers panel preserves 400ms anti-misclick guard across refresh and schedulePoll after deciding card 1", async () => {
+  const byId = installFakeDOM();
+  const {workersPanel} = await import("../web/workers-panel.mjs");
+
+  const scheduled = [];
+  const origSetTimeout = globalThis.setTimeout;
+  const origClearTimeout = globalThis.clearTimeout;
+  globalThis.setTimeout = (fn, ms) => {
+    const token = {fn, ms, cleared: false};
+    scheduled.push(token);
+    return token;
+  };
+  globalThis.clearTimeout = (token) => {
+    if (token && typeof token === "object") token.cleared = true;
+  };
+
+  try {
+    let nowMs = 10_000;
+    const w1 = {worker_id: "w1", alias: "codex-1", harness_id: "codex", access_mode: "workspace_write", state: "running", workspace_root: "F:\\proj"};
+    const card1 = {
+      request_id: "wir_appr_1",
+      kind: "approval",
+      worker_id: "w1",
+      worker_alias: "codex-1",
+      harness_id: "codex",
+      workspace_root: "F:\\proj",
+      tool_name: "commandExecution",
+      summary: "First approval",
+      allow_session_ok: true,
+      visible_to_human: true,
+    };
+    const card2 = {
+      request_id: "wir_appr_2",
+      kind: "approval",
+      worker_id: "w1",
+      worker_alias: "codex-1",
+      harness_id: "codex",
+      workspace_root: "F:\\proj",
+      tool_name: "commandExecution",
+      summary: "Second approval",
+      allow_session_ok: true,
+      visible_to_human: true,
+    };
+    let liveInteractions = [card1, card2];
+    const posted = [];
+
+    const panel = workersPanel({
+      api: async (url) => {
+        if (url.startsWith("/api/workers/list")) return {items: [w1], interactions: liveInteractions};
+        if (url.includes("worker_id=w1")) return {worker: w1, turns: []};
+        throw new Error("unexpected url " + url);
+      },
+      post: async (url, body) => {
+        posted.push({url, body});
+        liveInteractions = liveInteractions.filter(x => x.request_id !== body.request_id);
+        return {interactions: liveInteractions};
+      },
+      listen: (t, e, cb) => t.addEventListener(e, cb),
+      session: () => ({active: true}),
+      notice: () => {},
+      now: () => nowMs,
+    });
+
+    await panel.open();
+    const intEl = byId.get("workers-interactions");
+    const firstActions = intEl.querySelectorAll(".workers-int-actions");
+    const allowBtn1 = firstActions[firstActions.length - 1].querySelectorAll("button")[0];
+    assert.equal(allowBtn1.disabled, false);
+
+    // Click allow_once on card1 WITHOUT advancing simulated clock.
+    allowBtn1.click();
+    await new Promise(r => origSetTimeout(r, 20));
+    assert.equal(posted.length, 1);
+    assert.equal(posted[0].body.request_id, "wir_appr_1");
+
+    // Even after refresh() -> selectWorker() -> schedulePoll(), card2 MUST remain guarded at +0ms!
+    const guardTimer = scheduled.find(t => !t.cleared && t.ms === 400);
+    assert.ok(guardTimer, "expected 400ms guard timer to remain active after schedulePoll()");
+
+    const secondActions = intEl.querySelectorAll(".workers-int-actions");
+    const allowBtn2 = secondActions[secondActions.length - 1].querySelectorAll("button")[0];
+    assert.equal(allowBtn2.disabled, true, "second approval card button must stay disabled before 400ms elapses");
+
+    // Attempting to click card2 immediately must be blocked.
+    allowBtn2.click();
+    await new Promise(r => origSetTimeout(r, 10));
+    assert.equal(posted.length, 1, "misclick during 400ms guard must not post decision");
+
+    // An ordinary background refresh must ALSO preserve the active guard.
+    await panel.refreshIfOpen();
+    assert.equal(guardTimer.cleared, false, "ordinary refresh must not cancel guard timer");
+    const afterRefreshActions = intEl.querySelectorAll(".workers-int-actions");
+    assert.equal(afterRefreshActions[afterRefreshActions.length - 1].querySelectorAll("button")[0].disabled, true);
+
+    // Advance 400ms and fire guard timer -> card2 button re-enables and succeeds.
+    nowMs += 400;
+    guardTimer.cleared = true;
+    guardTimer.fn();
+
+    const enabledActions = intEl.querySelectorAll(".workers-int-actions");
+    const enabledBtn2 = enabledActions[enabledActions.length - 1].querySelectorAll("button")[0];
+    assert.equal(enabledBtn2.disabled, false, "second approval card button must enable after 400ms");
+    enabledBtn2.click();
+    await new Promise(r => origSetTimeout(r, 20));
+    assert.equal(posted.length, 2);
+    assert.equal(posted[1].body.request_id, "wir_appr_2");
+
+    panel.stop();
+  } finally {
+    globalThis.setTimeout = origSetTimeout;
+    globalThis.clearTimeout = origClearTimeout;
+  }
+});
+
+test("Workers panel masks is_secret questions with password input and bypasses drafts", async () => {
+  const byId = installFakeDOM();
+  const {workersPanel} = await import("../web/workers-panel.mjs");
+
+  const w1 = {worker_id: "w1", alias: "codex-1", harness_id: "codex", access_mode: "workspace_write", state: "running", workspace_root: "F:\\proj"};
+  const secretCard = {
+    request_id: "wir_sec",
+    kind: "input",
+    worker_id: "w1",
+    worker_alias: "codex-1",
+    harness_id: "codex",
+    workspace_root: "F:\\proj",
+    summary: "Enter token",
+    questions: [{id: "tok", question: "Enter token", is_secret: true}],
+    visible_to_human: true,
+  };
+  const otherCard = {
+    request_id: "wir_norm",
+    kind: "input",
+    worker_id: "w1",
+    worker_alias: "codex-1",
+    harness_id: "codex",
+    workspace_root: "F:\\proj",
+    summary: "Pick port",
+    questions: [{id: "port", question: "Pick port"}],
+    visible_to_human: true,
+  };
+  const posted = [];
+  const panel = workersPanel({
+    api: async (url) => {
+      if (url.startsWith("/api/workers/list")) return {items: [w1], interactions: [secretCard, otherCard]};
+      if (url.includes("worker_id=w1")) return {worker: w1, turns: []};
+      throw new Error("unexpected url " + url);
+    },
+    post: async (url, body) => {
+      posted.push({url, body});
+      return {interactions: [otherCard]};
+    },
+    listen: (t, e, cb) => t.addEventListener(e, cb),
+    session: () => ({active: true}),
+    notice: () => {},
+  });
+
+  await panel.open();
+  const intEl = byId.get("workers-interactions");
+  const secretInputs = intEl.querySelectorAll(".workers-int-secret");
+  assert.equal(secretInputs.length, 1);
+  assert.equal(secretInputs[0].type, "password");
+  assert.equal(secretInputs[0].autocomplete, "new-password");
+  assert.equal(intEl.querySelectorAll(".workers-int-input").length, 0, "secret card must not render plaintext textarea");
+
+  // Type secret, page away to otherCard and page back -> secret MUST NOT persist in draft!
+  secretInputs[0].value = "secret-not-drafted";
+  const pagerBtns = intEl.querySelectorAll(".workers-int-pager")[0].querySelectorAll("button");
+  pagerBtns[1].click(); // next -> otherCard
+  assert.equal(secretInputs[0].value, "", "secret input value must be cleared when switching cards");
+  const pagerBtns2 = intEl.querySelectorAll(".workers-int-pager")[0].querySelectorAll("button");
+  pagerBtns2[0].click(); // prev -> secretCard
+  const secretInputsAgain = intEl.querySelectorAll(".workers-int-secret");
+  assert.equal(secretInputsAgain[0].value || "", "", "secret input must never be restored from drafts");
+
+  // Enter secret and submit -> sent via answers[tok] and input cleared.
+  secretInputsAgain[0].value = "tok-live-123";
+  const sendBtn = intEl.querySelectorAll(".workers-int-actions")[0].querySelectorAll("button")[0];
+  sendBtn.click();
+  await new Promise(r => setTimeout(r, 20));
+  assert.equal(posted.length, 1);
+  assert.deepEqual(posted[0].body, {
+    request_id: "wir_sec",
+    decision: "answer",
+    answers: {tok: ["tok-live-123"]},
+  });
+  assert.equal(secretInputsAgain[0].value, "", "secret input must be cleared on submit");
+  panel.stop();
+});
+
+test("Workers panel secret card survives reopen, clears on close, preserves live input on new queued request, and isolates secret options from drafts", async () => {
+  const byId = installFakeDOM();
+  const {workersPanel} = await import("../web/workers-panel.mjs");
+
+  const w1 = {worker_id: "w1", alias: "codex-1", harness_id: "codex", access_mode: "workspace_write", state: "running", workspace_root: "F:\\proj"};
+  const secretCard = {
+    request_id: "wir_sec_reopen",
+    kind: "input",
+    worker_id: "w1",
+    worker_alias: "codex-1",
+    harness_id: "codex",
+    workspace_root: "F:\\proj",
+    summary: "Enter secret",
+    questions: [{
+      id: "sec_q",
+      question: "Pick or enter secret",
+      is_secret: true,
+      options: [{label: "VaultA"}, {label: "VaultB"}],
+    }],
+    visible_to_human: true,
+  };
+  const extraCard = {
+    request_id: "wir_other_worker",
+    kind: "approval",
+    worker_id: "w2",
+    worker_alias: "claude-2",
+    harness_id: "claude-code",
+    workspace_root: "F:\\proj",
+    tool_name: "Bash",
+    summary: "Run check",
+    allow_session_ok: true,
+    visible_to_human: true,
+  };
+  let liveInteractions = [secretCard];
+  const posted = [];
+  const panel = workersPanel({
+    api: async (url) => {
+      if (url.startsWith("/api/workers/list")) return {items: [w1], interactions: liveInteractions};
+      if (url.includes("worker_id=w1")) return {worker: w1, turns: []};
+      throw new Error("unexpected url " + url);
+    },
+    post: async (url, body) => {
+      posted.push({url, body});
+      liveInteractions = liveInteractions.filter(x => x.request_id !== body.request_id);
+      return {interactions: liveInteractions};
+    },
+    listen: (t, e, cb) => t.addEventListener(e, cb),
+    session: () => ({active: true}),
+    notice: () => {},
+  });
+
+  // 1) Close and reopen same secret question -> DOM rebuilt, password input registered, submit posts!
+  await panel.open();
+  const intEl = byId.get("workers-interactions");
+  const firstInput = intEl.querySelectorAll(".workers-int-secret")[0];
+  firstInput.value = "stale-before-close";
+  panel.stop();
+  assert.equal(firstInput.value, "", "closing panel must wipe secret input value");
+  assert.equal(intEl.children.length, 0, "closing panel must destroy secret card DOM");
+
+  await panel.open();
+  const reopenedInput = intEl.querySelectorAll(".workers-int-secret")[0];
+  assert.ok(reopenedInput, "reopened panel must render fresh password input");
+  assert.equal(reopenedInput.value || "", "", "reopened secret input must be empty");
+
+  // 2) Another worker queues a new request while user is typing -> live input & DOM ref MUST stay intact!
+  reopenedInput.value = "typing-live-secret";
+  const optChip0 = intEl.querySelectorAll(".workers-int-opt")[0];
+  optChip0.click();
+  assert.equal(optChip0.getAttribute("aria-pressed"), "true");
+
+  liveInteractions = [secretCard, extraCard];
+  await panel.refreshIfOpen();
+  const afterQueueInput = intEl.querySelectorAll(".workers-int-secret")[0];
+  assert.equal(afterQueueInput, reopenedInput, "background queue addition must preserve active secret input node");
+  assert.equal(afterQueueInput.value, "typing-live-secret", "background queue addition must not wipe in-progress secret typing");
+  assert.match(intEl.textContent, /1 \/ 2/, "header pager must update in place");
+
+  // 3) Switch away to extraCard and back -> secret option selection MUST NOT persist in ordinary drafts!
+  const pagerBtns = intEl.querySelectorAll(".workers-int-pager")[0].querySelectorAll("button");
+  pagerBtns[1].click(); // -> extraCard
+  const pagerBtns2 = intEl.querySelectorAll(".workers-int-pager")[0].querySelectorAll("button");
+  pagerBtns2[0].click(); // -> secretCard
+  const optChipAfterReturn = intEl.querySelectorAll(".workers-int-opt")[0];
+  assert.equal(optChipAfterReturn.getAttribute("aria-pressed"), "false", "secret option selection must not persist across card switch");
+
+  // 4) Select secret option + type secret and submit after reopen -> POST succeeds and clears DOM!
+  optChipAfterReturn.click();
+  const finalInput = intEl.querySelectorAll(".workers-int-secret")[0];
+  finalInput.value = "final-secret-99";
+  const sendBtn = intEl.querySelectorAll(".workers-int-actions")[0].querySelectorAll("button")[0];
+  sendBtn.click();
+  await new Promise(r => setTimeout(r, 20));
+  assert.equal(posted.length, 1, "reopened secret card must submit successfully");
+  assert.deepEqual(posted[0].body, {
+    request_id: "wir_sec_reopen",
+    decision: "answer",
+    answers: {sec_q: ["VaultA", "final-secret-99"]},
+  });
+  panel.stop();
 });

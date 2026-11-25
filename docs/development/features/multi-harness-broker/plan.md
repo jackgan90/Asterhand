@@ -301,8 +301,8 @@
 ## 规模与拆分评估
 
 - 遵循 [代码风格](../../code-style.md) 单文件 ≤ 1000 物理行、单函数 ≤ 100 物理行软约束；
-- Milestone 1—2 全部新增与修改的手写 Go / JS / CSS 文件均控制在 1000 行以内：其中 `cmd/asterhand-mcp` 为独立入口（`main.go` 58 行）；`internal/workers` 按职责拆分为 `types.go`、`store.go`、`service.go`、`service_runner.go`、`service_query.go`、`codex_adapter.go`、`vcs.go`、`process_windows.go`（最大 621 行）；`internal/harnesses` 按职责拆分为 `types.go`、`path.go`、`discover.go`、`exec_windows.go`、`exec_other.go`、`mcp_antigravity.go`、`mcp_codex.go`、`mcp_claude.go`、`service.go`（最大 549 行）；前端拆分独立模块 `web/harnesses-settings.mjs`（395 行）、`web/workers-panel.mjs`（380 行）与独立样式 `web/workers.css`（47 行，保持 `web/style.css` 894 行不超 1000 行）；
-- 仅生成的 `web/i18n-catalog.mjs`（由 `scripts/sync-i18n.mjs` 生成）与既有扁平双语词典 `internal/i18n/locales/zh-CN.json` / `en-US.json`（各 1083 行，在原有结构上增量追加 M1/M2 词条）超过 1000 行；扁平词典拆分会增加单一词表校验与同步复杂度且降低检索可读性，按软约束保留现状。
+- 全部新增与修改的手写 Go / JS / CSS 文件均控制在 1000 行以内：其中 `cmd/asterhand-mcp` 与 `cmd/asterhand-cli` 为独立入口；`internal/workers` 按职责拆分为 `types.go`、`store.go`、`service.go`、`service_runner.go`、`service_query.go`、`interactions.go`、`adapter_interactions.go`、`policy.go`、`codex_adapter.go`/`codex_protocol.go`、`claude_adapter.go`/`claude_protocol.go`、`deepseek_adapter.go`/`deepseek_protocol.go`、`vcs.go`、`process_windows.go`；前端拆分独立模块 `web/harnesses-settings.mjs`、`web/workers-panel.mjs`、`web/workers-interactions.mjs`（拆出待处理审批/提问卡片、秘密输入遮蔽、倒计时与独立于轮询的 400ms 防误触控制器，避免 `workers-panel.mjs` 超过 1000 行）与独立样式 `web/workers.css`；
+- 仅生成的 `web/i18n-catalog.mjs`（由 `scripts/sync-i18n.mjs` 生成）与既有扁平双语词典 `internal/i18n/locales/zh-CN.json` / `en-US.json` 超过 1000 行；扁平词典拆分会增加单一词表校验与同步复杂度且降低检索可读性，按软约束保留现状。
 
 ---
 

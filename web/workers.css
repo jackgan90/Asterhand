@@ -23,6 +23,7 @@
 .workers-int-opt { padding: 4px 9px; border-radius: 7px; border: 1px solid var(--line-soft); background: var(--field); color: inherit; font-size: 12px; cursor: pointer; }
 .workers-int-opt[aria-pressed="true"] { border-color: var(--accent); font-weight: 600; }
 .workers-int-input { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 7px; border: 1px solid var(--line-soft); background: var(--field); color: inherit; resize: vertical; min-height: 44px; max-height: 110px; }
+.workers-int-secret { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 7px; border: 1px solid var(--line-soft); background: var(--field); color: inherit; }
 .workers-int-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .workers-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .workers-toolbar .dialog-lead { margin: 0; }

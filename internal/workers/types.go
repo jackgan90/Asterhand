@@ -3,6 +3,7 @@ package workers
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -11,6 +12,33 @@ import (
 // was transmitted to the underlying native session, allowing Service to fail
 // the turn cleanly without trapping the worker in reconciliation_required.
 var ErrPreStartFailed = errors.New("pre_start_failed")
+
+// ErrProcessStopUnconfirmed marks a ForceKill attempt where process termination
+// could not be confirmed, requiring reconciliation and write-lock retention.
+var ErrProcessStopUnconfirmed = errors.New("process_stop_unconfirmed")
+
+var errTurnStateStale = errors.New("turn_state_stale")
+
+type pendingReconcileInfo struct {
+	turnID       string
+	workerID     string
+	errCode      string
+	errMsg       string
+	retainLock   bool
+	lockRoot     string
+	lockKey      string
+	nativeTurnID string
+	revoked      bool
+	revokeReason string
+}
+
+type residentCommitAction int
+
+const (
+	residentActionNone residentCommitAction = iota
+	residentActionTouch
+	residentActionEvict
+)
 
 const (
 	WorkerIdle      = "idle"
@@ -251,6 +279,10 @@ type Turn struct {
 	StreamBytes         int64            `json:"stream_bytes,omitempty"`
 	LatestCommentarySeq int64            `json:"latest_commentary_seq,omitempty"`
 	PendingInteraction  *InteractionView `json:"pending_interaction,omitempty"`
+	WriteLockRetained   bool             `json:"write_lock_retained,omitempty"`
+	WriteLockRoot       string           `json:"write_lock_root,omitempty"`
+	WriteLockKey        string           `json:"write_lock_key,omitempty"`
+	WriteLockReason     string           `json:"write_lock_reason,omitempty"`
 }
 
 type LogEntry struct {
@@ -291,6 +323,8 @@ type TurnOutcome struct {
 	Items        []NativeItem
 	ErrorCode    string
 	ErrorMessage string
+	LocalClose   bool
+	StopErr      error
 }
 
 type ThreadOpenSpec struct {
@@ -323,6 +357,27 @@ type ThreadHandle struct {
 	Key             string
 	NativeSessionID string
 	ProcessRef      any
+	instanceID      uint64
+}
+
+func sameHandle(a, b ThreadHandle) bool {
+	if a.instanceID != 0 || b.instanceID != 0 {
+		return a.instanceID == b.instanceID
+	}
+	if a.Key != b.Key {
+		return false
+	}
+	if a.ProcessRef == nil && b.ProcessRef == nil {
+		return true
+	}
+	if a.ProcessRef == nil || b.ProcessRef == nil {
+		return false
+	}
+	va, vb := reflect.ValueOf(a.ProcessRef), reflect.ValueOf(b.ProcessRef)
+	if va.Type() != vb.Type() || !va.Comparable() || !vb.Comparable() {
+		return false
+	}
+	return va.Equal(vb)
 }
 
 type Adapter interface {

@@ -108,6 +108,7 @@ type workerSteerView struct {
 
 type workerReplyInput struct {
 	TurnID          string                 `json:"turn_id" description:"Turn identifier currently in waiting_input state"`
+	RequestID       string                 `json:"request_id,omitempty" description:"Optional specific pending interaction request_id when multiple questions are queued in the same turn"`
 	WorkspaceID     string                 `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
 	Text            string                 `json:"text,omitempty" description:"Plain-text answer to the worker's business question (omit if using answers, defer_seconds, or escalate_to_human)"`
 	Answers         map[string][]string    `json:"answers,omitempty" description:"Optional structured map of question_id to selected answer strings"`
@@ -118,6 +119,7 @@ type workerReplyInput struct {
 
 type workerReplyView struct {
 	Turn       workers.Turn `json:"turn"`
+	RequestID  string       `json:"request_id,omitempty"`
 	Escalated  bool         `json:"escalated,omitempty"`
 	Deferred   bool         `json:"deferred,omitempty"`
 	EscalateAt *time.Time   `json:"escalate_at,omitempty"`
@@ -570,9 +572,10 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			if err != nil {
 				return automation.Outcome{}, err
 			}
-			t, escalated, err := a.Workers.ReplyTurn(workers.ReplyInput{
+			res, err := a.Workers.ReplyTurnWithReceipt(workers.ReplyInput{
 				OperationID:     call.Identity.ID,
 				TurnID:          v.TurnID,
+				RequestID:       v.RequestID,
 				WorkspaceID:     v.WorkspaceID,
 				Text:            v.Text,
 				Answers:         v.Answers,
@@ -583,15 +586,27 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			if err != nil {
 				return automation.Outcome{}, err
 			}
-			deferred := deferSec > 0
-			var escAt *time.Time
-			if t.PendingInteraction != nil {
-				escAt = t.PendingInteraction.EscalateAt
+			summary := map[string]any{
+				"worker_id":  res.Turn.WorkerID,
+				"turn_id":    res.Turn.ID,
+				"request_id": res.RequestID,
+				"state":      res.Turn.State,
+				"escalated":  res.Escalated,
+				"deferred":   res.Deferred,
+			}
+			if res.EscalateAt != nil {
+				summary["escalate_at"] = res.EscalateAt.UTC()
 			}
 			return automation.Outcome{
 				Accepted: true,
-				Data:     workerReplyView{Turn: t, Escalated: escalated, Deferred: deferred, EscalateAt: escAt},
-				Summary:  map[string]any{"worker_id": t.WorkerID, "turn_id": t.ID, "state": t.State, "escalated": escalated, "deferred": deferred},
+				Data: workerReplyView{
+					Turn:       res.Turn,
+					RequestID:  res.RequestID,
+					Escalated:  res.Escalated,
+					Deferred:   res.Deferred,
+					EscalateAt: res.EscalateAt,
+				},
+				Summary: summary,
 			}, nil
 		})
 

@@ -33,7 +33,7 @@ func (a *App) wireWorkerNotifications() {
 					opts = append(opts, notifications.WorkerOption{Label: o.Label, Description: o.Description})
 				}
 				qs = append(qs, notifications.WorkerQuestion{
-					ID: q.ID, Header: q.Header, Question: q.Question, Multi: q.Multi, Options: opts,
+					ID: q.ID, Header: q.Header, Question: q.Question, Multi: q.Multi, IsSecret: q.IsSecret, Options: opts,
 				})
 			}
 			cmd := v.Command

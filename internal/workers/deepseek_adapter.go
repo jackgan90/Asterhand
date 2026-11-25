@@ -192,6 +192,9 @@ func (s *deepseekSession) spawnAndInit(ctx context.Context) error {
 }
 
 func (a *DeepSeekAdapter) StartTurn(ctx context.Context, handle ThreadHandle, spec TurnStartSpec, onEvent func(AdapterEvent)) (string, <-chan TurnOutcome, error) {
+	if err := ctx.Err(); err != nil {
+		return "", nil, fmt.Errorf("%w: %v", ErrPreStartFailed, err)
+	}
 	sess, ok := handle.ProcessRef.(*deepseekSession)
 	if !ok || sess == nil {
 		return "", nil, fmt.Errorf("%w: invalid deepseek handle", ErrPreStartFailed)
@@ -228,28 +231,107 @@ func (a *DeepSeekAdapter) StartTurn(ctx context.Context, handle ThreadHandle, sp
 	if sess.closed || sess.proc == nil {
 		sess.mu.Unlock()
 		turnCancel()
-		return "", nil, errors.New("deepseek session closed")
+		return "", nil, fmt.Errorf("%w: deepseek session closed", ErrPreStartFailed)
 	}
 	sess.active = active
 	promptText := spec.Prompt
+	injectedRole := false
 	if sess.roleHint != "" && !sess.roleInjected {
 		promptText = "[Role Instructions]\n" + sess.roleHint + "\n\n" + promptText
-		sess.roleInjected = true
+		injectedRole = true
 	}
 	sid := sess.sessionID
 	sess.mu.Unlock()
 
-	go sess.runPrompt(sid, promptText, active)
+	replyCh, err := sess.dispatchPrompt(ctx, sid, promptText)
+	if err != nil {
+		sess.mu.Lock()
+		if sess.active == active {
+			sess.active = nil
+		}
+		sess.mu.Unlock()
+		turnCancel()
+		return "", nil, err
+	}
+	if injectedRole {
+		sess.mu.Lock()
+		sess.roleInjected = true
+		sess.mu.Unlock()
+	}
+
+	go sess.awaitPromptResponse(replyCh, active)
 	return turnID, active.done, nil
 }
 
-func (s *deepseekSession) runPrompt(sid, promptText string, active *deepseekActiveTurn) {
-	raw, err := s.request(context.Background(), "session/prompt", map[string]any{
-		"sessionId": sid,
-		"prompt": []map[string]any{
-			{"type": "text", "text": promptText},
+func (s *deepseekSession) dispatchPrompt(ctx context.Context, sid, promptText string) (<-chan rpcReply, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrPreStartFailed, err)
+		}
+	}
+	s.nextID++
+	id := s.nextID
+	msg := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"method":  "session/prompt",
+		"params": map[string]any{
+			"sessionId": sid,
+			"prompt": []map[string]any{
+				{"type": "text", "text": promptText},
+			},
 		},
-	})
+	}
+	b, err := json.Marshal(msg)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrPreStartFailed, err)
+	}
+	b = append(b, '\n')
+
+	ch := make(chan rpcReply, 1)
+	s.mu.Lock()
+	if s.closed || s.proc == nil {
+		err := s.closeErr
+		if err == nil {
+			err = errors.New("deepseek session closed")
+		}
+		s.mu.Unlock()
+		return nil, fmt.Errorf("%w: %v", ErrPreStartFailed, err)
+	}
+	// Check cancellation after acquiring session lock before registering pending.
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("%w: %v", ErrPreStartFailed, err)
+		}
+	}
+	proc := s.proc
+	s.pending[id] = ch
+	s.mu.Unlock()
+
+	// Final arbitration point immediately before writing to stdin (zero locking or marshaling left).
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			s.mu.Lock()
+			delete(s.pending, id)
+			s.mu.Unlock()
+			return nil, fmt.Errorf("%w: %v", ErrPreStartFailed, err)
+		}
+	}
+	if _, err := proc.Stdin().Write(b); err != nil {
+		s.mu.Lock()
+		delete(s.pending, id)
+		s.mu.Unlock()
+		return nil, err
+	}
+	return ch, nil
+}
+
+func (s *deepseekSession) awaitPromptResponse(ch <-chan rpcReply, active *deepseekActiveTurn) {
+	rep := <-ch
+	raw, err, localClose := rep.result, rep.err, rep.localClose
 
 	s.mu.Lock()
 	if s.active == active {
@@ -270,6 +352,7 @@ func (s *deepseekSession) runPrompt(sid, promptText string, active *deepseekActi
 			Items:        items,
 			ErrorCode:    blockedCode,
 			ErrorMessage: blockedMsg,
+			LocalClose:   localClose,
 		})
 		return
 	}
@@ -282,6 +365,7 @@ func (s *deepseekSession) runPrompt(sid, promptText string, active *deepseekActi
 				Items:        items,
 				ErrorCode:    "cancelled",
 				ErrorMessage: "Interrupted",
+				LocalClose:   localClose,
 			})
 			return
 		}
@@ -291,6 +375,7 @@ func (s *deepseekSession) runPrompt(sid, promptText string, active *deepseekActi
 			Items:        items,
 			ErrorCode:    "deepseek_turn_failed",
 			ErrorMessage: err.Error(),
+			LocalClose:   localClose,
 		})
 		return
 	}
@@ -488,7 +573,7 @@ func (s *deepseekSession) readLoop(proc workerProcess) {
 		stderrText = s.stderr.String()
 	}
 	for id, ch := range s.pending {
-		ch <- rpcReply{err: fmt.Errorf("deepseek acp exited: %v (%s)", err, stderrText)}
+		ch <- rpcReply{err: fmt.Errorf("deepseek acp exited: %v (%s)", err, stderrText), localClose: true}
 		delete(s.pending, id)
 	}
 	s.mu.Unlock()
@@ -568,11 +653,11 @@ func (s *deepseekSession) handleServerRequest(rawID json.RawMessage, method stri
 	}
 	s.mu.Unlock()
 	if handler != nil && active != nil {
-		ireq, allowOpts, rejectOpts := parseDeepSeekPermissionRequest(params, fallbackRaw, detail, fallbackKind)
+		ireq, permOpts := parseDeepSeekPermissionRequest(params, fallbackRaw, detail, fallbackKind)
 		if turnCtx == nil {
 			turnCtx = context.Background()
 		}
-		go resolveDeepSeekPermission(s, idVal, sid, active, handler, turnCtx, ireq, allowOpts, rejectOpts)
+		go resolveDeepSeekPermission(s, idVal, sid, active, handler, turnCtx, ireq, permOpts)
 		return
 	}
 	rejectDeepSeekLegacyPermission(s, idVal, sid, active, detail)

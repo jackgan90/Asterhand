@@ -211,6 +211,9 @@ func (s *claudeSession) ensureReady(ctx context.Context, wantModel, wantEffort s
 }
 
 func (a *ClaudeAdapter) StartTurn(ctx context.Context, handle ThreadHandle, spec TurnStartSpec, onEvent func(AdapterEvent)) (string, <-chan TurnOutcome, error) {
+	if err := ctx.Err(); err != nil {
+		return "", nil, fmt.Errorf("%w: %v", ErrPreStartFailed, err)
+	}
 	sess, ok := handle.ProcessRef.(*claudeSession)
 	if !ok || sess == nil {
 		return "", nil, fmt.Errorf("%w: invalid claude handle", ErrPreStartFailed)
@@ -248,12 +251,13 @@ func (a *ClaudeAdapter) StartTurn(ctx context.Context, handle ThreadHandle, spec
 			"content": spec.Prompt,
 		},
 	}
-	if err := sess.writeJSON(payload); err != nil {
+	if err := sess.writeJSONCtx(ctx, payload); err != nil {
 		sess.mu.Lock()
 		if sess.active == active {
 			sess.active = nil
 		}
 		sess.mu.Unlock()
+		turnCancel()
 		return "", nil, fmt.Errorf("claude send turn failed: %w", err)
 	}
 	sess.mu.Lock()
@@ -339,18 +343,34 @@ func (a *ClaudeAdapter) CloseThread(handle ThreadHandle) error {
 }
 
 func (s *claudeSession) writeJSON(v any) error {
+	return s.writeJSONCtx(nil, v)
+}
+
+func (s *claudeSession) writeJSONCtx(ctx context.Context, v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrPreStartFailed, err)
 	}
 	b = append(b, '\n')
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	s.mu.Lock()
+	closed := s.closed
 	proc := s.proc
 	s.mu.Unlock()
-	if proc == nil {
-		return errors.New("claude process is not running")
+	if closed || proc == nil {
+		if ctx != nil {
+			if cErr := ctx.Err(); cErr != nil {
+				return fmt.Errorf("%w: %v", ErrPreStartFailed, cErr)
+			}
+		}
+		return fmt.Errorf("%w: claude process is not running", ErrPreStartFailed)
+	}
+	// Final arbitration point after all locking and marshaling, immediately before Write.
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("%w: %v", ErrPreStartFailed, err)
+		}
 	}
 	_, err = proc.Stdin().Write(b)
 	return err
@@ -452,6 +472,7 @@ func (s *claudeSession) onProcessExit(proc workerProcess, readErr error) {
 			Items:        active.items,
 			ErrorCode:    code,
 			ErrorMessage: msg,
+			LocalClose:   true,
 		})
 	}
 }

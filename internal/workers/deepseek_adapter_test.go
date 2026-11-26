@@ -687,3 +687,212 @@ func TestDeepSeekAdapterMultiStageCommentaryAndParagraphSeparation(t *testing.T)
 		t.Fatalf("expected pre-tool transitions logged as commentary, got %+v", commentaryLogs)
 	}
 }
+
+func TestDeepSeekAdapterPerTurnConfigOverridesDoNotLeakAcrossTurns(t *testing.T) {
+	const (
+		flashTuple = `["deepseek-official","deepseek-v4-flash"]`
+		proTuple   = `["deepseek-official","deepseek-v4-pro"]`
+	)
+
+	type turnObserved struct {
+		model  string
+		effort string
+	}
+
+	newPeer := func(resetEffortOnModelSwitch bool) (*DeepSeekAdapter, *sync.Mutex, *[]turnObserved, *[]map[string]any) {
+		var mu sync.Mutex
+		var observed []turnObserved
+		var setCalls []map[string]any
+		adapter := &DeepSeekAdapter{
+			spawn: func(exe string, args []string, workdir string, env []string) (workerProcess, error) {
+				p := newPipeFakeProc()
+				go func() {
+					defer p.finish()
+					activeModel := flashTuple
+					activeEffort := "high"
+					sc := bufio.NewScanner(p.inR)
+					for sc.Scan() {
+						var msg struct {
+							ID     json.RawMessage `json:"id"`
+							Method string          `json:"method"`
+							Params map[string]any  `json:"params"`
+						}
+						if json.Unmarshal(sc.Bytes(), &msg) != nil {
+							continue
+						}
+						switch msg.Method {
+						case "initialize":
+							writeJSONLine(p.outW, map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]any{"protocolVersion": 1}})
+						case "session/new":
+							writeJSONLine(p.outW, map[string]any{
+								"jsonrpc": "2.0", "id": msg.ID,
+								"result": map[string]any{
+									"sessionId":     "dsh-cfg-sess",
+									"configOptions": sampleACPConfigOptions(),
+								},
+							})
+						case "session/set_config_option":
+							cfgID, _ := msg.Params["configId"].(string)
+							val, _ := msg.Params["value"].(string)
+							if cfgID == "model" {
+								activeModel = val
+								if resetEffortOnModelSwitch {
+									activeEffort = "off"
+								}
+							} else if cfgID == "reasoning_effort" {
+								activeEffort = val
+							}
+							mu.Lock()
+							setCalls = append(setCalls, map[string]any{"configId": cfgID, "value": val})
+							mu.Unlock()
+							res := map[string]any{}
+							if resetEffortOnModelSwitch {
+								opts := sampleACPConfigOptions()
+								opts[0]["currentValue"] = activeModel
+								opts[1]["currentValue"] = activeEffort
+								res["configOptions"] = opts
+							}
+							writeJSONLine(p.outW, map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": res})
+						case "session/prompt":
+							mu.Lock()
+							observed = append(observed, turnObserved{model: activeModel, effort: activeEffort})
+							mu.Unlock()
+							writeJSONLine(p.outW, map[string]any{
+								"jsonrpc": "2.0", "method": "session/update",
+								"params": map[string]any{"update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "ok"}}},
+							})
+							writeJSONLine(p.outW, map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]any{"stopReason": "end_turn"}})
+						case "session/close":
+							writeJSONLine(p.outW, map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]any{}})
+						}
+					}
+				}()
+				return p, nil
+			},
+		}
+		return adapter, &mu, &observed, &setCalls
+	}
+
+	runTurn := func(t *testing.T, adapter *DeepSeekAdapter, h ThreadHandle, spec TurnStartSpec) {
+		t.Helper()
+		_, done, err := adapter.StartTurn(context.Background(), h, spec, nil)
+		if err != nil {
+			t.Fatalf("StartTurn(%+v): %v", spec, err)
+		}
+		out := <-done
+		if out.State != TurnCompleted {
+			t.Fatalf("expected completed, got %s (%s)", out.State, out.ErrorMessage)
+		}
+	}
+
+	t.Run("native_default_restored_after_turn_override", func(t *testing.T) {
+		adapter, mu, observed, setCalls := newPeer(false)
+		h, err := adapter.OpenThread(context.Background(), ThreadOpenSpec{
+			WorkerID: "wkr_dsh_nat", Executable: "dsh.cmd", WorkspaceRoot: t.TempDir(), AccessMode: harnesses.AccessReadOnly,
+		})
+		if err != nil {
+			t.Fatalf("OpenThread: %v", err)
+		}
+		defer func() { _ = adapter.CloseThread(h) }()
+
+		// Turn 1: omit both -> native Flash/high, 0 set_config_option calls.
+		runTurn(t, adapter, h, TurnStartSpec{Prompt: "turn 1"})
+		mu.Lock()
+		n1 := len(*setCalls)
+		mu.Unlock()
+		if n1 != 0 {
+			t.Fatalf("expected 0 config frames for default turn 1, got %d", n1)
+		}
+
+		// Turn 2: override both -> Pro/low, 2 set_config_option calls.
+		runTurn(t, adapter, h, TurnStartSpec{Prompt: "turn 2", Model: "deepseek-v4-pro", ReasoningEffort: "low"})
+		mu.Lock()
+		n2 := len(*setCalls)
+		mu.Unlock()
+		if n2 != 2 {
+			t.Fatalf("expected 2 config frames after turn 2 override, got %d", n2)
+		}
+
+		// Turn 3: omit both -> MUST restore native Flash/high (+2 frames).
+		runTurn(t, adapter, h, TurnStartSpec{Prompt: "turn 3"})
+		mu.Lock()
+		n3 := len(*setCalls)
+		mu.Unlock()
+		if n3 != 4 {
+			t.Fatalf("expected +2 config frames to restore native defaults on turn 3, got total %d", n3)
+		}
+
+		// Turn 4: override effort only -> Flash/max (+1 frame only).
+		runTurn(t, adapter, h, TurnStartSpec{Prompt: "turn 4", ReasoningEffort: "max"})
+		mu.Lock()
+		n4 := len(*setCalls)
+		mu.Unlock()
+		if n4 != 5 {
+			t.Fatalf("expected +1 config frame for effort-only override on turn 4, got total %d", n4)
+		}
+
+		// Turn 5: omit both -> restores effort to high (+1 frame only).
+		runTurn(t, adapter, h, TurnStartSpec{Prompt: "turn 5"})
+		mu.Lock()
+		n5 := len(*setCalls)
+		mu.Unlock()
+		if n5 != 6 {
+			t.Fatalf("expected +1 config frame to restore effort on turn 5, got total %d", n5)
+		}
+
+		// Turn 6: omit both again -> already at Flash/high (0 extra frames).
+		runTurn(t, adapter, h, TurnStartSpec{Prompt: "turn 6"})
+		mu.Lock()
+		n6 := len(*setCalls)
+		got := append([]turnObserved(nil), (*observed)...)
+		mu.Unlock()
+		if n6 != 6 {
+			t.Fatalf("expected 0 extra config frames when turn 6 stays at native defaults, got total %d", n6)
+		}
+
+		want := []turnObserved{
+			{model: flashTuple, effort: "high"},
+			{model: proTuple, effort: "low"},
+			{model: flashTuple, effort: "high"},
+			{model: flashTuple, effort: "max"},
+			{model: flashTuple, effort: "high"},
+			{model: flashTuple, effort: "high"},
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("observed per-turn configs mismatch:\ngot:  %+v\nwant: %+v", got, want)
+		}
+	})
+
+	t.Run("worker_default_restored_over_native_default", func(t *testing.T) {
+		adapter, mu, observed, setCalls := newPeer(true)
+		h, err := adapter.OpenThread(context.Background(), ThreadOpenSpec{
+			WorkerID: "wkr_dsh_def", Executable: "dsh.cmd", WorkspaceRoot: t.TempDir(), AccessMode: harnesses.AccessReadOnly,
+			Model: "deepseek-v4-pro", ReasoningEffort: "low",
+		})
+		if err != nil {
+			t.Fatalf("OpenThread: %v", err)
+		}
+		defer func() { _ = adapter.CloseThread(h) }()
+
+		// Turn 1: omit both -> Worker default Pro/low.
+		runTurn(t, adapter, h, TurnStartSpec{Prompt: "turn 1"})
+		// Turn 2: temporary override to native model Flash (peer resets effort to "off" on model switch;
+		// adapter MUST detect returned configOptions and re-apply Worker default effort "low"!).
+		runTurn(t, adapter, h, TurnStartSpec{Prompt: "turn 2", Model: "deepseek-v4-flash"})
+		// Turn 3: omit both -> MUST restore Worker default Pro/low (NOT native Flash/high).
+		runTurn(t, adapter, h, TurnStartSpec{Prompt: "turn 3"})
+
+		mu.Lock()
+		got := append([]turnObserved(nil), (*observed)...)
+		calls := len(*setCalls)
+		mu.Unlock()
+		want := []turnObserved{
+			{model: proTuple, effort: "low"},
+			{model: flashTuple, effort: "low"},
+			{model: proTuple, effort: "low"},
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("observed per-turn configs mismatch:\ngot:  %+v\nwant: %+v (set_config_option calls=%d)", got, want, calls)
+		}
+	})
+}

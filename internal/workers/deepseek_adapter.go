@@ -36,10 +36,13 @@ type deepseekSession struct {
 	proc          workerProcess
 	stderr        *tailBuffer
 	sessionID     string
-	modelOptions  map[string]string // normalized key -> exact ACP option value
-	effortOptions map[string]string // normalized key -> exact ACP option value
-	currentModel  string
-	currentEffort string
+	modelOptions   map[string]string // normalized key -> exact ACP option value
+	effortOptions  map[string]string // normalized key -> exact ACP option value
+	nativeCaptured bool              // true once initial ACP defaults were captured (or seeded)
+	nativeModel    string            // ACP session initial default model
+	nativeEffort   string            // ACP session initial default reasoning_effort
+	currentModel   string            // ACP session current active model
+	currentEffort  string            // ACP session current active reasoning_effort
 	roleHint      string
 	roleInjected  bool
 	pending       map[int64]chan rpcReply
@@ -82,23 +85,35 @@ func (a *DeepSeekAdapter) OpenThread(ctx context.Context, spec ThreadOpenSpec) (
 	if strings.TrimSpace(spec.Executable) == "" {
 		return ThreadHandle{}, errors.New("deepseek-harness executable not found")
 	}
+	seededDefaults := spec.NativeDefaultsCaptured || strings.TrimSpace(spec.NativeDefaultModel) != "" || strings.TrimSpace(spec.NativeDefaultReasoningEffort) != ""
 	sess := &deepseekSession{
-		adapter:       a,
-		openSpec:      spec,
-		sessionID:     strings.TrimSpace(spec.NativeSessionID),
-		modelOptions:  map[string]string{},
-		effortOptions: map[string]string{},
-		roleHint:      strings.TrimSpace(spec.RoleHint),
-		roleInjected:  strings.TrimSpace(spec.NativeSessionID) != "",
-		pending:       map[int64]chan rpcReply{},
+		adapter:        a,
+		openSpec:       spec,
+		sessionID:      strings.TrimSpace(spec.NativeSessionID),
+		modelOptions:   map[string]string{},
+		effortOptions:  map[string]string{},
+		nativeCaptured: seededDefaults,
+		nativeModel:    strings.TrimSpace(spec.NativeDefaultModel),
+		nativeEffort:   strings.TrimSpace(spec.NativeDefaultReasoningEffort),
+		roleHint:       strings.TrimSpace(spec.RoleHint),
+		roleInjected:   strings.TrimSpace(spec.NativeSessionID) != "",
+		pending:        map[int64]chan rpcReply{},
 	}
 	if err := sess.spawnAndInit(ctx); err != nil {
 		return ThreadHandle{}, err
 	}
+	sess.mu.Lock()
+	nativeCaptured := sess.nativeCaptured
+	nativeModel := sess.nativeModel
+	nativeEffort := sess.nativeEffort
+	sess.mu.Unlock()
 	return ThreadHandle{
-		Key:             spec.WorkerID + ":" + sess.sessionID,
-		NativeSessionID: sess.sessionID,
-		ProcessRef:      sess,
+		Key:                          spec.WorkerID + ":" + sess.sessionID,
+		NativeSessionID:              sess.sessionID,
+		NativeDefaultsCaptured:       nativeCaptured,
+		NativeDefaultModel:           nativeModel,
+		NativeDefaultReasoningEffort: nativeEffort,
+		ProcessRef:                   sess,
 	}, nil
 }
 
@@ -147,7 +162,8 @@ func (s *deepseekSession) spawnAndInit(ctx context.Context) error {
 	}
 
 	var rawSession json.RawMessage
-	if s.sessionID != "" {
+	freshSession := s.sessionID == ""
+	if !freshSession {
 		rawSession, err = s.request(initCtx, "session/resume", map[string]any{
 			"sessionId":  s.sessionID,
 			"cwd":        s.openSpec.WorkspaceRoot,
@@ -175,16 +191,16 @@ func (s *deepseekSession) spawnAndInit(ctx context.Context) error {
 		_ = proc.Kill()
 		return fmt.Errorf("invalid deepseek session response: %w", err)
 	}
-	if s.sessionID == "" {
+	if freshSession {
 		if strings.TrimSpace(sessResp.SessionID) == "" {
 			_ = proc.Kill()
 			return errors.New("deepseek acp session/new returned empty sessionId")
 		}
 		s.sessionID = strings.TrimSpace(sessResp.SessionID)
 	}
-	s.indexConfigOptions(sessResp.ConfigOptions)
+	s.indexConfigOptions(sessResp.ConfigOptions, freshSession)
 
-	if err := s.applyConfigOverrides(initCtx, s.openSpec.Model, s.openSpec.ReasoningEffort); err != nil {
+	if err := s.applyConfigOverrides(initCtx, "", ""); err != nil {
 		_ = proc.Kill()
 		return err
 	}

@@ -12,6 +12,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -76,13 +77,20 @@ func RunMCP(ctx context.Context, args []string, stderr io.Writer, definitions []
 	if cliPath == "" {
 		cliPath = resolveLocalCLIPath(*home)
 	}
-	if liveDefs, ok := fetchLiveDefinitions(ctx, client); ok && len(liveDefs) > 0 {
+	defsSynced := false
+	if _, liveDefs, ok := fetchLiveDefinitions(ctx, client); ok && len(liveDefs) > 0 {
 		definitions = liveDefs
+		defsSynced = true
 	}
 
 	host := NewMCPHostWithCLIPath(client, principal, definitions, cliPath)
 	host.mu.Lock()
-	host.lastInstanceID = initialInstance
+	if defsSynced {
+		host.lastInstanceID = initialInstance
+	} else {
+		host.lastRev = ""
+		host.lastPermKey = ""
+	}
 	host.mu.Unlock()
 
 	syncCtx, cancelSync := context.WithCancel(ctx)
@@ -112,6 +120,7 @@ type MCPHost struct {
 	definitions    map[string]Definition
 	activeDigests  map[string]string
 	lastRev        string
+	lastPermKey    string
 	lastInstanceID string
 	cliPath        string
 }
@@ -161,6 +170,7 @@ func NewMCPHostWithCLIPath(client Caller, principal Principal, definitions []Def
 		definitions:   byName,
 		activeDigests: map[string]string{},
 		lastRev:       principal.PolicyRevision,
+		lastPermKey:   principalPermissionKey(principal),
 		cliPath:       cliPath,
 	}
 	host.SyncPrincipal(principal)
@@ -174,11 +184,15 @@ func (h *MCPHost) SyncPrincipal(principal Principal) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.syncLocked(principal)
+	h.lastRev = principal.PolicyRevision
+	h.lastPermKey = principalPermissionKey(principal)
 }
 
-// SyncFromDaemon checks the daemon's current capabilities and instance_id. When
-// the daemon restarts/upgrades (instance_id changes), it refreshes tool
-// definitions & schemas in-place and emits tools/list_changed with zero disconnect.
+// SyncFromDaemon checks the daemon's current capabilities, instance_id, and
+// policy_revision. When the daemon restarts/upgrades or caller authorization
+// changes, it refreshes filtered tool definitions & schemas in-place and emits
+// tools/list_changed with zero disconnect. Synced revision markers advance only
+// after definitions are successfully fetched so transient failures retry cleanly.
 func (h *MCPHost) SyncFromDaemon(ctx context.Context, callerID string) {
 	if h.client == nil {
 		return
@@ -194,32 +208,58 @@ func (h *MCPHost) SyncFromDaemon(ctx context.Context, callerID string) {
 		}
 		h.mu.Lock()
 		h.syncLocked(p)
+		h.lastPermKey = principalPermissionKey(p)
 		h.mu.Unlock()
 		return
 	}
 
+	permKey := principalPermissionKey(p)
 	h.mu.Lock()
 	if cliPath != "" {
 		h.cliPath = cliPath
 	}
 	instanceChanged := instID != "" && instID != h.lastInstanceID
+	policyChanged := p.PolicyRevision != "" && p.PolicyRevision != h.lastRev
+	permChanged := permKey != h.lastPermKey
 	h.mu.Unlock()
 
-	if instanceChanged {
-		if defs, fetched := fetchLiveDefinitions(ctx, h.client); fetched && len(defs) > 0 {
-			h.mu.Lock()
-			updated := make(map[string]Definition, len(defs))
-			for _, d := range defs {
-				if prev, exists := h.definitions[d.Name]; exists && d.normalize == nil {
-					// Keep local normalizer only when schema is identical; newer schemas validate on daemon.
-					if definitionDigest(prev) == definitionDigest(d) {
-						d.normalize = prev.normalize
+	if instanceChanged || policyChanged || permChanged {
+		if _, canFetch := h.client.(DefinitionProvider); canFetch {
+			fetchedInst, defs, fetched := fetchLiveDefinitions(ctx, h.client)
+			if fetched && (len(defs) > 0 || !p.AllowsToolset(ToolsetCore)) {
+				h.mu.Lock()
+				updated := make(map[string]Definition, len(defs))
+				for _, d := range defs {
+					if prev, exists := h.definitions[d.Name]; exists && d.normalize == nil {
+						// Keep local normalizer only when schema is identical; newer schemas validate on daemon.
+						if definitionDigest(prev) == definitionDigest(d) {
+							d.normalize = prev.normalize
+						}
 					}
+					updated[d.Name] = d
 				}
-				updated[d.Name] = d
+				h.definitions = updated
+				if fetchedInst == "" || instID == "" || fetchedInst == instID {
+					if instID != "" {
+						h.lastInstanceID = instID
+					} else if fetchedInst != "" {
+						h.lastInstanceID = fetchedInst
+					}
+					if p.PolicyRevision != "" {
+						h.lastRev = p.PolicyRevision
+					}
+					h.lastPermKey = permKey
+				} else {
+					h.lastInstanceID = fetchedInst
+				}
+				h.syncLocked(p)
+				h.mu.Unlock()
+				return
 			}
-			h.definitions = updated
-			h.lastInstanceID = instID
+			// Enforce any immediate permission revocations fail-closed, while
+			// keeping lastInstanceID/lastRev/lastPermKey unchanged so the next
+			// poll retries fetching the updated definitions.
+			h.mu.Lock()
 			h.syncLocked(p)
 			h.mu.Unlock()
 			return
@@ -230,6 +270,10 @@ func (h *MCPHost) SyncFromDaemon(ctx context.Context, callerID string) {
 	if instID != "" {
 		h.lastInstanceID = instID
 	}
+	if p.PolicyRevision != "" {
+		h.lastRev = p.PolicyRevision
+	}
+	h.lastPermKey = permKey
 	h.syncLocked(p)
 	h.mu.Unlock()
 }
@@ -259,7 +303,28 @@ func (h *MCPHost) syncLocked(principal Principal) {
 		h.addDefinition(h.definitions[name])
 		h.activeDigests[name] = digest
 	}
-	h.lastRev = principal.PolicyRevision
+}
+
+func principalPermissionKey(p Principal) string {
+	var b strings.Builder
+	roles := append([]string(nil), p.Roles...)
+	slices.Sort(roles)
+	b.WriteString("r:")
+	b.WriteString(strings.Join(roles, ","))
+	b.WriteString("|t:")
+	if p.Toolsets == nil {
+		b.WriteString("*")
+	} else {
+		enabled := make([]string, 0, len(p.Toolsets))
+		for name, ok := range p.Toolsets {
+			if ok {
+				enabled = append(enabled, name)
+			}
+		}
+		slices.Sort(enabled)
+		b.WriteString(strings.Join(enabled, ","))
+	}
+	return b.String()
 }
 
 func definitionDigest(d Definition) string {
@@ -375,18 +440,18 @@ func (h *MCPHost) watchDaemon(ctx context.Context, callerID string, interval tim
 	}
 }
 
-func fetchLiveDefinitions(ctx context.Context, client Caller) ([]Definition, bool) {
+func fetchLiveDefinitions(ctx context.Context, client Caller) (string, []Definition, bool) {
 	dp, ok := client.(DefinitionProvider)
 	if !ok {
-		return nil, false
+		return "", nil, false
 	}
 	qCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	_, defs, err := dp.FetchDefinitions(qCtx)
+	instID, defs, err := dp.FetchDefinitions(qCtx)
 	if err != nil {
-		return nil, false
+		return "", nil, false
 	}
-	return defs, true
+	return instID, defs, true
 }
 
 type principalFetchStatus int

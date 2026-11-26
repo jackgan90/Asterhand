@@ -78,20 +78,15 @@ func (s *Service) runTurn(rt *runningTurn, w Worker, t Turn, exe, prompt string)
 	rt.handle = &handle
 	s.mu.Unlock()
 
-	if w.NativeSessionID == "" && handle.NativeSessionID != "" {
-		now := s.now().UTC()
-		w.NativeSessionID = handle.NativeSessionID
-		t.NativeSessionID = handle.NativeSessionID
-		w.UpdatedAt = now
-		t.UpdatedAt = now
-		s.updateWorkerState(w.ID, func(cur *Worker) {
-			cur.NativeSessionID = handle.NativeSessionID
-			cur.UpdatedAt = now
-		})
-		s.updateTurnState(t.ID, func(cur *Turn) {
-			cur.NativeSessionID = handle.NativeSessionID
-			cur.UpdatedAt = now
-		})
+	now := s.now().UTC()
+	if workerChanged, sessionBound := applyOpenedHandle(&w, &t, handle, now); workerChanged {
+		s.updateWorkerState(w.ID, func(cur *Worker) { applyOpenedHandle(cur, nil, handle, now) })
+		if sessionBound {
+			s.updateTurnState(t.ID, func(cur *Turn) {
+				cur.NativeSessionID = handle.NativeSessionID
+				cur.UpdatedAt = now
+			})
+		}
 	}
 
 	// Re-check Window 1 immediately before issuing native turn/start.
@@ -842,16 +837,19 @@ func (s *Service) acquireHandle(ctx context.Context, adapter Adapter, w Worker, 
 	}
 
 	h, err := adapter.OpenThread(ctx, ThreadOpenSpec{
-		WorkerID:           w.ID,
-		Executable:         exe,
-		WorkspaceRoot:      w.WorkspaceRoot,
-		AccessMode:         w.AccessMode,
-		ApprovalMode:       w.EffectiveApprovalMode,
-		SessionAutoApprove: w.SessionAutoApprove,
-		Model:              w.Model,
-		ReasoningEffort:    w.ReasoningEffort,
-		RoleHint:           w.RoleHint,
-		NativeSessionID:    w.NativeSessionID,
+		WorkerID:                     w.ID,
+		Executable:                   exe,
+		WorkspaceRoot:                w.WorkspaceRoot,
+		AccessMode:                   w.AccessMode,
+		ApprovalMode:                 w.EffectiveApprovalMode,
+		SessionAutoApprove:           w.SessionAutoApprove,
+		Model:                        w.Model,
+		ReasoningEffort:              w.ReasoningEffort,
+		NativeDefaultsCaptured:       w.NativeDefaultsCaptured,
+		NativeDefaultModel:           w.NativeDefaultModel,
+		NativeDefaultReasoningEffort: w.NativeDefaultReasoningEffort,
+		RoleHint:                     w.RoleHint,
+		NativeSessionID:              w.NativeSessionID,
 	})
 	if err != nil {
 		return ThreadHandle{}, err

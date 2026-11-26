@@ -22,13 +22,22 @@ type acpSelectOptionAny struct {
 	Options []acpSelectOptionAny `json:"options"`
 }
 
-func (s *deepseekSession) indexConfigOptions(opts []acpConfigOption) {
+func (s *deepseekSession) indexConfigOptions(opts []acpConfigOption, captureNative bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.indexConfigOptionsLocked(opts, captureNative)
+}
+
+func (s *deepseekSession) indexConfigOptionsLocked(opts []acpConfigOption, captureNative bool) {
+	capturedAny := false
 	for _, opt := range opts {
 		switch opt.ID {
 		case "model":
 			s.currentModel = opt.CurrentValue
+			if captureNative && !s.nativeCaptured {
+				s.nativeModel = opt.CurrentValue
+				capturedAny = true
+			}
 			s.modelOptions = map[string]string{}
 			flattenACPOptions(opt.Options, func(val, name string) {
 				s.modelOptions[val] = val
@@ -44,6 +53,10 @@ func (s *deepseekSession) indexConfigOptions(opts []acpConfigOption) {
 			})
 		case "reasoning_effort":
 			s.currentEffort = opt.CurrentValue
+			if captureNative && !s.nativeCaptured {
+				s.nativeEffort = opt.CurrentValue
+				capturedAny = true
+			}
 			s.effortOptions = map[string]string{}
 			flattenACPOptions(opt.Options, func(val, name string) {
 				s.effortOptions[val] = val
@@ -53,6 +66,9 @@ func (s *deepseekSession) indexConfigOptions(opts []acpConfigOption) {
 				}
 			})
 		}
+	}
+	if captureNative && !s.nativeCaptured && capturedAny {
+		s.nativeCaptured = true
 	}
 }
 
@@ -100,44 +116,94 @@ func (s *deepseekSession) resolveEffortOption(want string) string {
 	return strings.ToLower(want)
 }
 
+func (s *deepseekSession) resolveEffectiveModel(turnOverride string) string {
+	if want := strings.TrimSpace(turnOverride); want != "" {
+		return s.resolveModelOption(want)
+	}
+	if want := strings.TrimSpace(s.openSpec.Model); want != "" {
+		return s.resolveModelOption(want)
+	}
+	s.mu.Lock()
+	native := s.nativeModel
+	s.mu.Unlock()
+	return s.resolveModelOption(native)
+}
+
+func (s *deepseekSession) resolveEffectiveEffort(turnOverride string) string {
+	if want := strings.TrimSpace(turnOverride); want != "" {
+		return s.resolveEffortOption(want)
+	}
+	if want := strings.TrimSpace(s.openSpec.ReasoningEffort); want != "" {
+		return s.resolveEffortOption(want)
+	}
+	s.mu.Lock()
+	native := s.nativeEffort
+	s.mu.Unlock()
+	return s.resolveEffortOption(native)
+}
+
 func (s *deepseekSession) applyConfigOverrides(ctx context.Context, modelReq, effortReq string) error {
-	if resolvedModel := s.resolveModelOption(modelReq); resolvedModel != "" {
+	if resolvedModel := s.resolveEffectiveModel(modelReq); resolvedModel != "" {
 		s.mu.Lock()
 		changed := resolvedModel != s.currentModel
 		sid := s.sessionID
 		s.mu.Unlock()
 		if changed {
-			if _, err := s.request(ctx, "session/set_config_option", map[string]any{
+			raw, err := s.request(ctx, "session/set_config_option", map[string]any{
 				"sessionId": sid,
 				"configId":  "model",
 				"value":     resolvedModel,
-			}); err != nil {
+			})
+			if err != nil {
 				return fmt.Errorf("deepseek set model failed: %w", err)
 			}
-			s.mu.Lock()
-			s.currentModel = resolvedModel
-			s.mu.Unlock()
+			s.syncConfigAfterSet("model", resolvedModel, raw)
 		}
 	}
-	if resolvedEffort := s.resolveEffortOption(effortReq); resolvedEffort != "" {
+	if resolvedEffort := s.resolveEffectiveEffort(effortReq); resolvedEffort != "" {
 		s.mu.Lock()
 		changed := resolvedEffort != s.currentEffort
 		sid := s.sessionID
 		s.mu.Unlock()
 		if changed {
-			if _, err := s.request(ctx, "session/set_config_option", map[string]any{
+			raw, err := s.request(ctx, "session/set_config_option", map[string]any{
 				"sessionId": sid,
 				"configId":  "reasoning_effort",
 				"value":     resolvedEffort,
-			}); err != nil {
+			})
+			if err != nil {
 				return fmt.Errorf("deepseek set reasoning_effort failed: %w", err)
 			}
-			s.mu.Lock()
-			s.currentEffort = resolvedEffort
-			s.mu.Unlock()
+			s.syncConfigAfterSet("reasoning_effort", resolvedEffort, raw)
 		}
 	}
 	return nil
+}
+
+func (s *deepseekSession) syncConfigAfterSet(configID, appliedValue string, raw json.RawMessage) {
+	var resp struct {
+		ConfigOptions []acpConfigOption `json:"configOptions"`
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	seenTarget := false
+	if len(raw) > 0 && json.Unmarshal(raw, &resp) == nil && len(resp.ConfigOptions) > 0 {
+		s.indexConfigOptionsLocked(resp.ConfigOptions, false)
+		for _, opt := range resp.ConfigOptions {
+			if opt.ID == configID && opt.CurrentValue != "" {
+				seenTarget = true
+				break
+			}
+		}
+	}
+	if !seenTarget {
+		switch configID {
+		case "model":
+			s.currentModel = appliedValue
+		case "reasoning_effort":
+			s.currentEffort = appliedValue
+		}
+	}
 }
 
 func buildDeepSeekItems(commentary []NativeItem, turnID, text, phase string) []NativeItem {

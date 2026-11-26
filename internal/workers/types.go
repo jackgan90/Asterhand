@@ -115,10 +115,13 @@ type Worker struct {
 	RoleHint              string     `json:"role_hint,omitempty"`
 	Model                 string     `json:"model,omitempty"`
 	ReasoningEffort       string     `json:"reasoning_effort,omitempty"`
-	State                 string     `json:"state"`
-	SessionEpoch          int        `json:"session_epoch"`
-	NativeSessionID       string     `json:"native_session_id,omitempty"`
-	ActiveTurnID          string     `json:"active_turn_id,omitempty"`
+	State                        string     `json:"state"`
+	SessionEpoch                 int        `json:"session_epoch"`
+	NativeSessionID              string     `json:"native_session_id,omitempty"`
+	NativeDefaultsCaptured       bool       `json:"native_defaults_captured,omitempty"`
+	NativeDefaultModel           string     `json:"native_default_model,omitempty"`
+	NativeDefaultReasoningEffort string     `json:"native_default_reasoning_effort,omitempty"`
+	ActiveTurnID                 string     `json:"active_turn_id,omitempty"`
 	OperationID           string     `json:"operation_id,omitempty"`
 	OperationKey          string     `json:"-"`
 	ActorID               string     `json:"actor_id,omitempty"`
@@ -425,16 +428,19 @@ type TurnOutcome struct {
 }
 
 type ThreadOpenSpec struct {
-	WorkerID           string
-	Executable         string
-	WorkspaceRoot      string
-	AccessMode         string
-	ApprovalMode       string
-	SessionAutoApprove bool
-	Model              string
-	ReasoningEffort    string
-	RoleHint           string
-	NativeSessionID    string
+	WorkerID                     string
+	Executable                   string
+	WorkspaceRoot                string
+	AccessMode                   string
+	ApprovalMode                 string
+	SessionAutoApprove           bool
+	Model                        string
+	ReasoningEffort              string
+	NativeDefaultsCaptured       bool
+	NativeDefaultModel           string
+	NativeDefaultReasoningEffort string
+	RoleHint                     string
+	NativeSessionID              string
 }
 
 type TurnStartSpec struct {
@@ -451,10 +457,35 @@ type TurnStartSpec struct {
 }
 
 type ThreadHandle struct {
-	Key             string
-	NativeSessionID string
-	ProcessRef      any
-	instanceID      uint64
+	Key                          string
+	NativeSessionID              string
+	NativeDefaultsCaptured       bool
+	NativeDefaultModel           string
+	NativeDefaultReasoningEffort string
+	ProcessRef                   any
+	instanceID                   uint64
+}
+
+func applyOpenedHandle(w *Worker, t *Turn, handle ThreadHandle, now time.Time) (workerChanged, sessionBound bool) {
+	if w.NativeSessionID == "" && handle.NativeSessionID != "" {
+		w.NativeSessionID = handle.NativeSessionID
+		if t != nil {
+			t.NativeSessionID = handle.NativeSessionID
+			t.UpdatedAt = now
+		}
+		workerChanged = true
+		sessionBound = true
+	}
+	if !w.NativeDefaultsCaptured && handle.NativeDefaultsCaptured {
+		w.NativeDefaultsCaptured = true
+		w.NativeDefaultModel = handle.NativeDefaultModel
+		w.NativeDefaultReasoningEffort = handle.NativeDefaultReasoningEffort
+		workerChanged = true
+	}
+	if workerChanged {
+		w.UpdatedAt = now
+	}
+	return workerChanged, sessionBound
 }
 
 func sameHandle(a, b ThreadHandle) bool {

@@ -654,3 +654,205 @@ func TestMCPWriteAutoGeneratesOptionalOperationIDAndTextFormatting(t *testing.T)
 		t.Fatalf("over-budget text projection lost essential cursor metadata: %s", waitText)
 	}
 }
+
+type policyChangeCaller struct {
+	registry   *automation.Registry
+	token      string
+	instanceID string
+	failDefs   bool
+	fetchCalls int
+}
+
+func (c *policyChangeCaller) Call(ctx context.Context, op, id string, args json.RawMessage) (automation.Response, error) {
+	if op == "capabilities" {
+		p, err := c.registry.Authorize(c.token)
+		if err != nil {
+			return automation.Response{Version: automation.APIVersion, Instance: c.instanceID, Error: automation.PublicError(err)}, nil
+		}
+		return automation.Response{
+			Version:  automation.APIVersion,
+			Instance: c.instanceID,
+			Data: map[string]any{
+				"instance_id":     c.instanceID,
+				"caller_id":       p.CallerID,
+				"policy_revision": p.PolicyRevision,
+				"roles":           p.Roles,
+				"toolsets":        p.Toolsets,
+			},
+		}, nil
+	}
+	return c.registry.Dispatch(ctx, c.token, automation.Request{
+		Version:   automation.APIVersion,
+		Node:      c.registry.Node,
+		Operation: op,
+		ID:        id,
+		Arguments: args,
+	}), nil
+}
+
+func (c *policyChangeCaller) FetchDefinitions(ctx context.Context) (string, []automation.Definition, error) {
+	c.fetchCalls++
+	if c.failDefs {
+		return "", nil, automation.Fail("node_unavailable", "Transient definitions fetch failure")
+	}
+	p, err := c.registry.Authorize(c.token)
+	if err != nil {
+		return "", nil, err
+	}
+	return c.instanceID, c.registry.Definitions(p), nil
+}
+
+func TestMCPHostRefreshesDefinitionsOnPolicyRevisionGrantAndRevoke(t *testing.T) {
+	r := automation.NewRegistry("node", "inst_same", nil)
+	policyRev := "rev_1"
+	generalEnabled := true
+	collabEnabled := false
+	r.Authorize = func(token string) (automation.Principal, error) {
+		if token != "caller-tok" {
+			return automation.Principal{}, automation.Fail("forbidden", "bad token")
+		}
+		ts := map[string]bool{}
+		if generalEnabled {
+			ts[automation.ToolsetGeneral] = true
+		}
+		if collabEnabled {
+			ts[automation.ToolsetCollab] = true
+		}
+		return automation.Principal{
+			ID:             "harness:antigravity",
+			CallerID:       "antigravity",
+			PolicyRevision: policyRev,
+			Roles:          []string{"read", "edit", "execute"},
+			Scopes:         map[string][]string{"commands": {"*"}, "workers": {"*"}, "node": {"*"}},
+			Toolsets:       ts,
+		}, nil
+	}
+	automation.Register(r, automation.Definition{Name: "commands_list", Role: "read", Toolset: automation.ToolsetGeneral}, nil, nil,
+		func(ctx context.Context, c automation.Call, _ automation.Empty) (automation.Outcome, error) {
+			return automation.Outcome{Data: map[string]any{"items": []any{}}}, nil
+		})
+	automation.Register(r, automation.Definition{Name: "workers_list", Role: "read", Toolset: automation.ToolsetCollab}, nil, nil,
+		func(ctx context.Context, c automation.Call, _ automation.Empty) (automation.Outcome, error) {
+			return automation.Outcome{Data: map[string]any{"items": []any{}}}, nil
+		})
+
+	caller := &policyChangeCaller{registry: r, token: "caller-tok", instanceID: "inst_same"}
+	pInit, err := r.Authorize("caller-tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Start with daemon-filtered definitions matching initial general-only policy.
+	host := automation.NewMCPHost(caller, pInit, r.Definitions(pInit))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	t1, t2 := mcp.NewInMemoryTransports()
+	serverSession, err := host.Server.Connect(ctx, t1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+
+	listChangedCh := make(chan struct{}, 8)
+	client := mcp.NewClient(&mcp.Implementation{Name: "policy-sync-client", Version: "1.0"}, &mcp.ClientOptions{
+		ToolListChangedHandler: func(ctx context.Context, req *mcp.ToolListChangedRequest) {
+			select {
+			case listChangedCh <- struct{}{}:
+			default:
+			}
+		},
+	})
+	clientSession, err := client.Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	listNames := func() map[string]bool {
+		t.Helper()
+		res, err := clientSession.ListTools(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]bool{}
+		for _, tool := range res.Tools {
+			out[tool.Name] = true
+		}
+		return out
+	}
+
+	// Initial sync locks in instance_id="inst_same", policy_revision="rev_1".
+	host.SyncFromDaemon(ctx, "antigravity")
+	if names := listNames(); !names["commands_list"] || names["workers_list"] {
+		t.Fatalf("expected initial general-only tools=[commands_list], got %+v", names)
+	}
+	fetchesAfterInit := caller.fetchCalls
+	// Unchanged poll must NOT refetch definitions.
+	host.SyncFromDaemon(ctx, "antigravity")
+	if caller.fetchCalls != fetchesAfterInit {
+		t.Fatalf("unchanged steady-state sync refetched definitions (%d -> %d)", fetchesAfterInit, caller.fetchCalls)
+	}
+	for len(listChangedCh) > 0 {
+		<-listChangedCh
+	}
+
+	// 1. Grant collab (rev_2, SAME instance_id), with first FetchDefinitions failing transiently.
+	collabEnabled = true
+	policyRev = "rev_2"
+	caller.failDefs = true
+	host.SyncFromDaemon(ctx, "antigravity")
+	if caller.fetchCalls != fetchesAfterInit+1 {
+		t.Fatalf("expected policy_revision change to attempt FetchDefinitions, calls=%d", caller.fetchCalls)
+	}
+	if names := listNames(); !names["commands_list"] || names["workers_list"] {
+		t.Fatalf("expected existing general tool preserved during transient fetch failure, got %+v", names)
+	}
+
+	// Next poll MUST retry FetchDefinitions because rev_2 was NOT committed on failure.
+	caller.failDefs = false
+	host.SyncFromDaemon(ctx, "antigravity")
+	if caller.fetchCalls != fetchesAfterInit+2 {
+		t.Fatalf("expected retry of FetchDefinitions after transient failure, calls=%d", caller.fetchCalls)
+	}
+	select {
+	case <-listChangedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected notifications/tools/list_changed after collab grant")
+	}
+	if names := listNames(); !names["commands_list"] || !names["workers_list"] {
+		t.Fatalf("expected [commands_list, workers_list] after collab grant on same connection, got %+v", names)
+	}
+	if res, err := clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "workers_list", Arguments: map[string]any{}}); err != nil || res.IsError {
+		t.Fatalf("expected newly exposed workers_list to succeed on existing connection, err=%v res=%+v", err, res)
+	}
+
+	// Steady-state poll after successful sync must NOT refetch again.
+	fetchesAfterGrant := caller.fetchCalls
+	host.SyncFromDaemon(ctx, "antigravity")
+	if caller.fetchCalls != fetchesAfterGrant {
+		t.Fatalf("steady-state poll after rev_2 commit refetched definitions (%d -> %d)", fetchesAfterGrant, caller.fetchCalls)
+	}
+
+	// 2. Revoke collab (rev_3, SAME instance_id) while FetchDefinitions transiently fails:
+	// workers_list MUST still be removed immediately (fail-closed), and the next poll retries definitions sync.
+	collabEnabled = false
+	policyRev = "rev_3"
+	caller.failDefs = true
+	host.SyncFromDaemon(ctx, "antigravity")
+	select {
+	case <-listChangedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected immediate notifications/tools/list_changed on collab revoke")
+	}
+	if names := listNames(); !names["commands_list"] || names["workers_list"] {
+		t.Fatalf("expected workers_list immediately removed on collab revoke even if FetchDefinitions failed, got %+v", names)
+	}
+	caller.failDefs = false
+	host.SyncFromDaemon(ctx, "antigravity")
+	if caller.fetchCalls != fetchesAfterGrant+2 {
+		t.Fatalf("expected retry of FetchDefinitions after revoke transient failure, calls=%d", caller.fetchCalls)
+	}
+	if names := listNames(); !names["commands_list"] || names["workers_list"] {
+		t.Fatalf("expected [commands_list] after rev_3 sync completes, got %+v", names)
+	}
+}

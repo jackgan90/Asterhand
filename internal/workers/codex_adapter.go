@@ -14,24 +14,34 @@ import (
 	"github.com/jackgan90/Asterhand/internal/harnesses"
 )
 
-type CodexAdapter struct{}
+type CodexAdapter struct {
+	spawn spawnProcessFunc
+}
 
-func NewCodexAdapter() *CodexAdapter { return &CodexAdapter{} }
+func NewCodexAdapter() *CodexAdapter { return &CodexAdapter{spawn: defaultSpawnWorkerProcess} }
 
 func (a *CodexAdapter) HarnessID() string { return harnesses.HarnessCodex }
 
 type codexSession struct {
-	proc     *managedProc
+	proc     workerProcess
+	openSpec ThreadOpenSpec
 	threadID string
 
 	writeMu sync.Mutex
 	nextID  int64
 
-	mu       sync.Mutex
-	pending  map[int64]chan rpcReply
-	active   *codexActiveTurn
-	closed   bool
-	closeErr error
+	mu                    sync.Mutex
+	nativeCaptured        bool
+	nativeModel           string
+	nativeEffort          string
+	currentModel          string
+	currentEffort         string
+	collabMode            string
+	collabDevInstructions *string
+	pending               map[int64]chan rpcReply
+	active                *codexActiveTurn
+	closed                bool
+	closeErr              error
 }
 
 type rpcReply struct {
@@ -63,13 +73,18 @@ func (a *CodexAdapter) OpenThread(ctx context.Context, spec ThreadOpenSpec) (Thr
 		"app-server",
 		"-c", `mcp_servers.asterhand={command='disabled',enabled=false}`,
 	}
-	mp, err := spawnManagedProcess(spec.Executable, args, spec.WorkspaceRoot, sanitizedWorkerEnv())
+	spawnFn := a.spawn
+	if spawnFn == nil {
+		spawnFn = defaultSpawnWorkerProcess
+	}
+	mp, err := spawnFn(spec.Executable, args, spec.WorkspaceRoot, sanitizedWorkerEnv())
 	if err != nil {
 		return ThreadHandle{}, err
 	}
 	sess := &codexSession{
-		proc:    mp,
-		pending: map[int64]chan rpcReply{},
+		proc:     mp,
+		openSpec: spec,
+		pending:  map[int64]chan rpcReply{},
 	}
 	go sess.readLoop()
 	go func() {
@@ -79,7 +94,8 @@ func (a *CodexAdapter) OpenThread(ctx context.Context, spec ThreadOpenSpec) (Thr
 	initCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	if _, err := sess.request(initCtx, "initialize", map[string]any{
-		"clientInfo": map[string]any{"name": "asterhand", "version": "1.0"},
+		"clientInfo":   map[string]any{"name": "asterhand", "version": "1.0"},
+		"capabilities": map[string]any{"experimentalApi": true},
 	}); err != nil {
 		_ = mp.Kill()
 		return ThreadHandle{}, fmt.Errorf("codex initialize failed: %w", err)
@@ -91,8 +107,24 @@ func (a *CodexAdapter) OpenThread(ctx context.Context, spec ThreadOpenSpec) (Thr
 
 	sandbox, _, approvalPolicy, reviewer := codexTurnPolicies(spec.AccessMode, spec.ApprovalMode, spec.SessionAutoApprove, spec.WorkspaceRoot)
 
-	var threadID string
-	if spec.NativeSessionID != "" {
+	type codexCollabMode struct {
+		Mode     string `json:"mode"`
+		Settings struct {
+			Model                 string  `json:"model"`
+			ReasoningEffort       *string `json:"reasoning_effort"`
+			DeveloperInstructions *string `json:"developer_instructions"`
+		} `json:"settings"`
+	}
+
+	var (
+		threadID       string
+		resModel       string
+		resEffort      string
+		collabMode     = "default"
+		collabDevInstr *string
+		freshThread    = spec.NativeSessionID == ""
+	)
+	if !freshThread {
 		params := map[string]any{
 			"threadId":          spec.NativeSessionID,
 			"cwd":               spec.WorkspaceRoot,
@@ -112,12 +144,28 @@ func (a *CodexAdapter) OpenThread(ctx context.Context, spec ThreadOpenSpec) (Thr
 			Thread struct {
 				ID string `json:"id"`
 			} `json:"thread"`
+			Model             string           `json:"model"`
+			ReasoningEffort   *string          `json:"reasoningEffort"`
+			CollaborationMode *codexCollabMode `json:"collaborationMode"`
 		}
 		if err := json.Unmarshal(raw, &res); err != nil || res.Thread.ID == "" {
 			_ = mp.Kill()
 			return ThreadHandle{}, errors.New("native_session_unrecoverable: invalid thread/resume response")
 		}
 		threadID = res.Thread.ID
+		resModel = strings.TrimSpace(res.Model)
+		if res.ReasoningEffort != nil {
+			resEffort = strings.ToLower(strings.TrimSpace(*res.ReasoningEffort))
+		}
+		if res.CollaborationMode != nil {
+			if m := strings.TrimSpace(res.CollaborationMode.Mode); m != "" {
+				collabMode = m
+			}
+			if res.CollaborationMode.Settings.DeveloperInstructions != nil {
+				v := *res.CollaborationMode.Settings.DeveloperInstructions
+				collabDevInstr = &v
+			}
+		}
 	} else {
 		params := map[string]any{
 			"cwd":               spec.WorkspaceRoot,
@@ -140,18 +188,47 @@ func (a *CodexAdapter) OpenThread(ctx context.Context, spec ThreadOpenSpec) (Thr
 			Thread struct {
 				ID string `json:"id"`
 			} `json:"thread"`
+			Model           string  `json:"model"`
+			ReasoningEffort *string `json:"reasoningEffort"`
 		}
 		if err := json.Unmarshal(raw, &res); err != nil || res.Thread.ID == "" {
 			_ = mp.Kill()
 			return ThreadHandle{}, errors.New("codex thread/start returned empty thread id")
 		}
 		threadID = res.Thread.ID
+		resModel = strings.TrimSpace(res.Model)
+		if res.ReasoningEffort != nil {
+			resEffort = strings.ToLower(strings.TrimSpace(*res.ReasoningEffort))
+		}
 	}
+
+	seededDefaults := spec.NativeDefaultsCaptured || strings.TrimSpace(spec.NativeDefaultModel) != "" || strings.TrimSpace(spec.NativeDefaultReasoningEffort) != ""
+	sess.mu.Lock()
 	sess.threadID = threadID
+	sess.currentModel = resModel
+	sess.currentEffort = resEffort
+	sess.collabMode = collabMode
+	sess.collabDevInstructions = collabDevInstr
+	if seededDefaults {
+		sess.nativeCaptured = true
+		sess.nativeModel = strings.TrimSpace(spec.NativeDefaultModel)
+		sess.nativeEffort = strings.ToLower(strings.TrimSpace(spec.NativeDefaultReasoningEffort))
+	} else if freshThread {
+		sess.nativeCaptured = true
+		sess.nativeModel = resModel
+		sess.nativeEffort = resEffort
+	}
+	nativeCaptured := sess.nativeCaptured
+	nativeModel := sess.nativeModel
+	nativeEffort := sess.nativeEffort
+	sess.mu.Unlock()
 	return ThreadHandle{
-		Key:             spec.WorkerID + ":" + threadID,
-		NativeSessionID: threadID,
-		ProcessRef:      sess,
+		Key:                          spec.WorkerID + ":" + threadID,
+		NativeSessionID:              threadID,
+		NativeDefaultsCaptured:       nativeCaptured,
+		NativeDefaultModel:           nativeModel,
+		NativeDefaultReasoningEffort: nativeEffort,
+		ProcessRef:                   sess,
 	}, nil
 }
 
@@ -179,6 +256,18 @@ func (a *CodexAdapter) StartTurn(ctx context.Context, handle ThreadHandle, spec 
 		return "", nil, fmt.Errorf("%w: codex session closed", ErrPreStartFailed)
 	}
 	sess.active = at
+	wantModel := firstNonEmpty(spec.Model, sess.openSpec.Model, sess.nativeModel)
+	wantEffort := strings.ToLower(firstNonEmpty(spec.ReasoningEffort, sess.openSpec.ReasoningEffort, sess.nativeEffort))
+	resetEffortToAuto := sess.nativeCaptured && wantEffort == "" && sess.currentEffort != ""
+	resetModel := firstNonEmpty(wantModel, sess.currentModel)
+	useCollabReset := resetEffortToAuto && resetModel != ""
+	sendModel := !useCollabReset && wantModel != "" && wantModel != sess.currentModel
+	sendEffort := !useCollabReset && wantEffort != "" && wantEffort != sess.currentEffort
+	collabMode := firstNonEmpty(sess.collabMode, "default")
+	var collabDevInstr any
+	if sess.collabDevInstructions != nil {
+		collabDevInstr = *sess.collabDevInstructions
+	}
 	sess.mu.Unlock()
 
 	_, sandboxPolicy, approvalPolicy, reviewer := codexTurnPolicies(spec.AccessMode, spec.ApprovalMode, spec.SessionAutoApprove, spec.WorkspaceRoot)
@@ -193,11 +282,25 @@ func (a *CodexAdapter) StartTurn(ctx context.Context, handle ThreadHandle, spec 
 			{"type": "text", "text": spec.Prompt},
 		},
 	}
-	if spec.Model != "" {
-		params["model"] = spec.Model
-	}
-	if spec.ReasoningEffort != "" {
-		params["effort"] = spec.ReasoningEffort
+	if useCollabReset {
+		// In codex-cli 0.171.0, omitting or sending effort:null preserves the
+		// previous turn's effort override. CollaborationMode resets
+		// reasoning_effort to null while preserving active mode & instructions.
+		params["collaborationMode"] = map[string]any{
+			"mode": collabMode,
+			"settings": map[string]any{
+				"model":                  resetModel,
+				"reasoning_effort":       nil,
+				"developer_instructions": collabDevInstr,
+			},
+		}
+	} else {
+		if sendModel {
+			params["model"] = wantModel
+		}
+		if sendEffort {
+			params["effort"] = wantEffort
+		}
 	}
 	raw, err := sess.request(ctx, "turn/start", params)
 	if err != nil {
@@ -216,6 +319,17 @@ func (a *CodexAdapter) StartTurn(ctx context.Context, handle ThreadHandle, spec 
 	}
 	sess.mu.Lock()
 	at.turnID = res.Turn.ID
+	if useCollabReset {
+		sess.currentModel = resetModel
+		sess.currentEffort = ""
+	} else {
+		if sendModel {
+			sess.currentModel = wantModel
+		}
+		if sendEffort {
+			sess.currentEffort = wantEffort
+		}
+	}
 	sess.mu.Unlock()
 	return res.Turn.ID, at.done, nil
 }

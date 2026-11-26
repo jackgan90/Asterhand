@@ -198,6 +198,8 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			}
 			w, err := a.Workers.Create(ctx, workers.CreateInput{
 				OperationID:     call.Identity.ID,
+				OperationKey:    call.Identity.NativeID(),
+				ActorID:         call.Principal.ID,
 				HarnessID:       v.HarnessID,
 				WorkspaceRoot:   v.WorkspaceRoot,
 				Alias:           v.Alias,
@@ -282,6 +284,8 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			}
 			t, err := a.Workers.Send(ctx, workers.SendInput{
 				OperationID:         call.Identity.ID,
+				OperationKey:        call.Identity.NativeID(),
+				ActorID:             call.Principal.ID,
 				CallerID:            call.Principal.CallerID,
 				WorkerID:            v.WorkerID,
 				ExpectedWorkspaceID: v.WorkspaceID,

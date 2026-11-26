@@ -588,25 +588,22 @@ func (s *Service) RevokeWorkerWriteHarness(harnessID string) {
 // OperationLookup supports reconcileAutomationOperation when a crash occurred
 // after a worker/turn record was persisted and before the public receipt finished.
 func (s *Service) OperationLookup(opName, opID string) (any, bool, error) {
+	if opID == "" {
+		return nil, false, nil
+	}
 	switch opName {
 	case "workers_create":
-		w, err := s.store.WorkerByOperationID(opID)
-		if errors.Is(err, ErrNotFound) {
-			return nil, false, nil
-		}
-		if err != nil {
+		ws, err := s.store.ListWorkersByOperationID(opID, 2)
+		if err != nil || len(ws) != 1 {
 			return nil, false, err
 		}
-		return map[string]any{"worker_id": w.ID, "workspace_id": w.WorkspaceID, "alias": w.Alias, "state": w.State}, true, nil
+		return workerOpSummary(ws[0]), true, nil
 	case "workers_send":
-		t, err := s.store.TurnByOperationID(opID)
-		if errors.Is(err, ErrNotFound) {
-			return nil, false, nil
-		}
-		if err != nil {
+		ts, err := s.store.ListTurnsByOperationID(opID, 2)
+		if err != nil || len(ts) != 1 {
 			return nil, false, err
 		}
-		return map[string]any{"worker_id": t.WorkerID, "turn_id": t.ID, "workspace_id": t.WorkspaceID, "state": t.State}, true, nil
+		return turnOpSummary(ts[0]), true, nil
 	default:
 		return nil, false, nil
 	}

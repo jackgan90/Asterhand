@@ -16,10 +16,12 @@ func TestRestrictedCallerNodeStartRequiresGeneralToolset(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(Response{
-			Version: APIVersion,
-			Node:    "node-test",
+			Version:  APIVersion,
+			Node:     "node-test",
+			Instance: "inst_1",
 			Data: map[string]any{
 				"caller_id": "antigravity",
+				"roles":     []string{"read", "edit", "execute"},
 				"toolsets":  map[string]bool{ToolsetCore: true, ToolsetCollab: true},
 			},
 		})
@@ -45,8 +47,8 @@ func TestRestrictedCallerNodeStartRequiresGeneralToolset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected transport error: %v", err)
 	}
-	if resp.Error == nil || resp.Error.Code != "forbidden" {
-		t.Fatalf("expected node_start rejected with forbidden for collab-only caller, got %+v", resp)
+	if resp.Error == nil || resp.Error.Code != "toolset_disabled" || ErrorExit(resp.Error.Code) != 3 {
+		t.Fatalf("expected node_start rejected with toolset_disabled (exit 3) for collab-only caller, got %+v", resp)
 	}
 }
 

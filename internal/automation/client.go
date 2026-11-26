@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -69,40 +70,61 @@ func (c *Client) Close() { c.http.CloseIdleConnections() }
 
 func (c *Client) Call(ctx context.Context, operation, id string, arguments json.RawMessage) (Response, error) {
 	if operation == "node_start" {
-		if c.callerID != "" {
-			if err := c.requireCallerToolset(ctx, ToolsetGeneral); err != nil {
-				return Response{Version: APIVersion, Node: c.Profile.Node, ID: id, Error: PublicError(err)}, nil
-			}
-		}
 		return c.startNode(ctx, id, arguments)
 	}
-	if operation == "operations_get" && c.home != "" && c.callerID == "" {
+	if operation == "operations_get" && c.home != "" {
 		if id != "" {
 			return Response{}, Fail("invalid_parameters", "Read operations do not accept an operation identity")
 		}
-		if result, handled, err := c.startReceipt(arguments); handled {
+		if result, handled, err := c.startReceipt(ctx, arguments); handled {
 			return result, err
 		}
 	}
 	return c.remoteCall(ctx, operation, id, arguments)
 }
 
-func (c *Client) requireCallerToolset(ctx context.Context, toolset string) error {
+func (c *Client) verifyManagedCaller(ctx context.Context, requiredRole, requiredToolset string) (string, error) {
 	resp, err := c.remoteCall(ctx, "capabilities", "", json.RawMessage("{}"))
 	if err != nil {
-		return Fail("forbidden", "Managed caller cannot invoke local node_start without verified general toolset permission")
+		return "", err
 	}
 	if resp.Error != nil {
-		return resp.Error
+		return "", resp.Error
 	}
-	b, _ := json.Marshal(resp.Data)
+	b, err := json.Marshal(resp.Data)
+	if err != nil {
+		return "", Fail("invalid_response", "The node returned unreadable capabilities")
+	}
 	var capData struct {
+		CallerID string          `json:"caller_id"`
+		Roles    []string        `json:"roles"`
 		Toolsets map[string]bool `json:"toolsets"`
 	}
-	if json.Unmarshal(b, &capData) != nil || !capData.Toolsets[toolset] {
-		return Fail("toolset_disabled", "This toolset is disabled for the current caller")
+	if json.Unmarshal(b, &capData) != nil || capData.CallerID == "" || capData.Roles == nil || capData.Toolsets == nil {
+		return "", Fail("invalid_response", "The node capabilities response omitted required authorization fields")
 	}
-	return nil
+	if capData.CallerID != c.callerID {
+		return "", Fail("forbidden", "Managed caller identity could not be verified")
+	}
+	if requiredToolset != "" && !capData.Toolsets[requiredToolset] {
+		return "", Fail("toolset_disabled", "This toolset is disabled for the current caller")
+	}
+	if requiredRole != "" && !slices.Contains(capData.Roles, requiredRole) {
+		return "", Fail("forbidden", "Managed caller lacks required permission")
+	}
+	return "harness:" + capData.CallerID, nil
+}
+
+func isManagedAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch PublicError(err).Code {
+	case "forbidden", "authorization_required", "toolset_disabled":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Client) currentToken() string {

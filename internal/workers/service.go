@@ -454,35 +454,6 @@ func (s *Service) Close(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-type CreateInput struct {
-	OperationID     string
-	HarnessID       string
-	WorkspaceRoot   string
-	Alias           string
-	AccessMode      string
-	ApprovalMode    string
-	RoleHint        string
-	Model           string
-	ReasoningEffort string
-}
-
-func validateReasoningEffort(raw string) (string, error) {
-	v := strings.ToLower(strings.TrimSpace(raw))
-	if v == "" {
-		return "", nil
-	}
-	if len(v) > 32 {
-		return "", automation.Fail("invalid_parameters", "reasoning_effort must be at most 32 characters")
-	}
-	for i := 0; i < len(v); i++ {
-		c := v[i]
-		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
-			return "", automation.Fail("invalid_parameters", "reasoning_effort contains unsupported characters")
-		}
-	}
-	return v, nil
-}
-
 func (s *Service) Create(ctx context.Context, in CreateInput) (Worker, error) {
 	if in.AccessMode == "" {
 		in.AccessMode = harnesses.AccessReadOnly
@@ -531,8 +502,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Worker, error) {
 	if s.stopping || s.closed {
 		return Worker{}, automation.Fail("unavailable", "Node is stopping")
 	}
-	if in.OperationID != "" {
-		if existing, err := s.store.WorkerByOperationID(in.OperationID); err == nil {
+	opKey := dedupKey(in.OperationKey, in.OperationID)
+	if opKey != "" {
+		if existing, err := s.store.WorkerByOperationID(opKey); err == nil {
 			return existing, nil
 		}
 	}
@@ -559,6 +531,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Worker, error) {
 		State:                 WorkerIdle,
 		SessionEpoch:          1,
 		OperationID:           in.OperationID,
+		OperationKey:          opKey,
+		ActorID:               in.ActorID,
 		CreatedAt:             now,
 		UpdatedAt:             now,
 	}
@@ -720,21 +694,6 @@ func (s *Service) selectCommentaries(turnID string, afterSeq int64, defaultTail 
 	return append([]CommentaryEntry(nil), src[len(src)-defaultTail:]...), latest
 }
 
-type SendInput struct {
-	OperationID         string
-	CallerID            string
-	WorkerID            string
-	ExpectedWorkspaceID string
-	Prompt              string
-	Model               string
-	ReasoningEffort     string
-	ArtifactPaths       []string
-	GitRef              string
-	DiffBase            string
-	OutputContract      string
-	WallClockSeconds    int
-}
-
 func (s *Service) validateSendLocked(in SendInput) (Worker, string, []string, error) {
 	w, err := s.store.GetWorker(in.WorkerID)
 	if errors.Is(err, ErrNotFound) {
@@ -824,8 +783,9 @@ func (s *Service) Send(ctx context.Context, in SendInput) (Turn, error) {
 		s.mu.Unlock()
 		return Turn{}, automation.Fail("unavailable", "Node is stopping")
 	}
-	if in.OperationID != "" {
-		if existing, err := s.store.TurnByOperationID(in.OperationID); err == nil {
+	opKey := dedupKey(in.OperationKey, in.OperationID)
+	if opKey != "" {
+		if existing, err := s.store.TurnByOperationID(opKey); err == nil {
 			s.mu.Unlock()
 			return existing, nil
 		}
@@ -853,6 +813,8 @@ func (s *Service) Send(ctx context.Context, in SendInput) (Turn, error) {
 		HarnessID:           w.HarnessID,
 		SessionEpoch:        w.SessionEpoch,
 		OperationID:         in.OperationID,
+		OperationKey:        opKey,
+		ActorID:             in.ActorID,
 		CallerID:            in.CallerID,
 		ClientCorrelationID: "corr_" + turnID,
 		NativeSessionID:     w.NativeSessionID,
@@ -913,6 +875,31 @@ func (s *Service) Send(ctx context.Context, in SendInput) (Turn, error) {
 	prompt := composePrompt(in.Prompt, resolvedArtifacts, t.GitRef, t.DiffBase, in.OutputContract)
 	go s.runTurn(rt, w, t, exe, prompt)
 	return t, nil
+}
+
+// LegacyOperationLookup reconciles a pre-migration worker/turn row keyed by
+// bare operation_id ONLY when the domain record itself carries durable
+// ownership proof matching actor and target.
+func (s *Service) LegacyOperationLookup(opName, rawOpID, actor, target string) (any, bool, error) {
+	if rawOpID == "" {
+		return nil, false, nil
+	}
+	switch opName {
+	case "workers_create":
+		ws, err := s.store.ListWorkersByOperationID(rawOpID, 2)
+		if err != nil || len(ws) != 1 || !legacyWorkerMatchesActor(ws[0], actor, target) {
+			return nil, false, err
+		}
+		return workerOpSummary(ws[0]), true, nil
+	case "workers_send":
+		ts, err := s.store.ListTurnsByOperationID(rawOpID, 2)
+		if err != nil || len(ts) != 1 || !legacyTurnMatchesActor(ts[0], actor, target) {
+			return nil, false, err
+		}
+		return turnOpSummary(ts[0]), true, nil
+	default:
+		return nil, false, nil
+	}
 }
 
 func (s *Service) Cancel(ctx context.Context, turnID, expectedWorkspaceID string) (Turn, error) {

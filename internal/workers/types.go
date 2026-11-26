@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"time"
+
+	"github.com/jackgan90/Asterhand/internal/automation"
 )
 
 // ErrPreStartFailed marks an adapter failure that occurred before any prompt
@@ -118,6 +120,8 @@ type Worker struct {
 	NativeSessionID       string     `json:"native_session_id,omitempty"`
 	ActiveTurnID          string     `json:"active_turn_id,omitempty"`
 	OperationID           string     `json:"operation_id,omitempty"`
+	OperationKey          string     `json:"-"`
+	ActorID               string     `json:"actor_id,omitempty"`
 	CreatedAt             time.Time  `json:"created_at"`
 	UpdatedAt             time.Time  `json:"updated_at"`
 	ClosedAt              *time.Time `json:"closed_at,omitempty"`
@@ -170,6 +174,97 @@ type CommentaryEntry struct {
 	Seq       int64     `json:"seq"`
 	Timestamp time.Time `json:"timestamp"`
 	Text      string    `json:"text"`
+}
+
+type CreateInput struct {
+	OperationID     string
+	OperationKey    string
+	ActorID         string
+	HarnessID       string
+	WorkspaceRoot   string
+	Alias           string
+	AccessMode      string
+	ApprovalMode    string
+	RoleHint        string
+	Model           string
+	ReasoningEffort string
+}
+
+type SendInput struct {
+	OperationID         string
+	OperationKey        string
+	ActorID             string
+	CallerID            string
+	WorkerID            string
+	ExpectedWorkspaceID string
+	Prompt              string
+	Model               string
+	ReasoningEffort     string
+	ArtifactPaths       []string
+	GitRef              string
+	DiffBase            string
+	OutputContract      string
+	WallClockSeconds    int
+}
+
+func validateReasoningEffort(raw string) (string, error) {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	if v == "" {
+		return "", nil
+	}
+	if len(v) > 32 {
+		return "", automation.Fail("invalid_parameters", "reasoning_effort must be at most 32 characters")
+	}
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+			return "", automation.Fail("invalid_parameters", "reasoning_effort contains unsupported characters")
+		}
+	}
+	return v, nil
+}
+
+func workerOpSummary(w Worker) map[string]any {
+	return map[string]any{
+		"worker_id":               w.ID,
+		"workspace_id":            w.WorkspaceID,
+		"alias":                   w.Alias,
+		"state":                   w.State,
+		"approval_mode":           w.ApprovalMode,
+		"effective_approval_mode": w.EffectiveApprovalMode,
+	}
+}
+
+func turnOpSummary(t Turn) map[string]any {
+	return map[string]any{"worker_id": t.WorkerID, "turn_id": t.ID, "workspace_id": t.WorkspaceID, "state": t.State}
+}
+
+func dedupKey(key, fallback string) string {
+	if key != "" {
+		return key
+	}
+	return fallback
+}
+
+func legacyWorkerMatchesActor(w Worker, actor, target string) bool {
+	if target != "" && w.HarnessID != target {
+		return false
+	}
+	return w.ActorID != "" && w.ActorID == actor
+}
+
+func legacyTurnMatchesActor(t Turn, actor, target string) bool {
+	if target != "" && t.WorkerID != target {
+		return false
+	}
+	if t.ActorID != "" {
+		return t.ActorID == actor
+	}
+	if strings.HasPrefix(actor, "harness:") {
+		expected := strings.TrimPrefix(actor, "harness:")
+		return expected != "" && t.CallerID == expected
+	}
+	return false
 }
 
 type SteerInput struct {
@@ -249,6 +344,8 @@ type Turn struct {
 	HarnessID           string       `json:"harness_id"`
 	SessionEpoch        int          `json:"session_epoch"`
 	OperationID         string       `json:"operation_id"`
+	OperationKey        string       `json:"-"`
+	ActorID             string       `json:"actor_id,omitempty"`
 	CallerID            string       `json:"caller_id,omitempty"`
 	ClientCorrelationID string       `json:"client_correlation_id"`
 	NativeSessionID     string       `json:"native_session_id,omitempty"`

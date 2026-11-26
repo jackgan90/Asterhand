@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackgan90/Asterhand/internal/operations"
@@ -52,9 +53,15 @@ func (a *App) reconcileAutomationOperation(receipt operations.Receipt) (operatio
 		if a.Workers == nil {
 			return receipt, nil
 		}
-		s, found, err := a.Workers.OperationLookup(receipt.Name, receipt.ID)
+		s, found, err := a.Workers.OperationLookup(receipt.Name, receipt.NativeID())
 		if err != nil {
 			return receipt, err
+		}
+		if !found && strings.Contains(receipt.ID, "_") {
+			s, found, err = a.Workers.LegacyOperationLookup(receipt.Name, receipt.ID, receipt.Actor, receipt.Target)
+			if err != nil {
+				return receipt, err
+			}
 		}
 		if !found {
 			return receipt, nil

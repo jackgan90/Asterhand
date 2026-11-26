@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -11,6 +12,13 @@ import (
 	"github.com/jackgan90/Asterhand/internal/config"
 	"github.com/jackgan90/Asterhand/internal/operations"
 )
+
+// ErrStartReceiptRollback indicates that the pre-launch permission check failed
+// before spawning the node, AND rolling back the newly written prepared receipt
+// on disk also failed.
+var ErrStartReceiptRollback = errors.New("start_receipt_rollback_failed")
+
+var writeStartReceipts = saveStartReceipts
 
 // FindInstallation binds an installed node to its existing fixed launcher
 // record. Development binaries do not acquire an arbitrary executable override.
@@ -114,11 +122,15 @@ func StartOperation(ctx context.Context, path, home string, identity operations.
 	receipt := operations.Receipt{Identity: identity, State: "prepared", Created: time.Now().UnixMilli(), Updated: time.Now().UnixMilli()}
 	book.Items = append(book.Items, receipt)
 	index = len(book.Items) - 1
-	if err = saveStartReceipts(home, book); err != nil {
-		return receipt, err
+	if err = writeStartReceipts(home, book); err != nil {
+		return operations.Receipt{}, err
 	}
 	if err = check(); err != nil {
-		return receipt, err
+		book.Items = book.Items[:index]
+		if rbErr := writeStartReceipts(home, book); rbErr != nil {
+			return receipt, fmt.Errorf("%w: %v (pre-launch check failed: %w)", ErrStartReceiptRollback, rbErr, err)
+		}
+		return operations.Receipt{}, err
 	}
 	r := runner{timeout: 20 * time.Second, poll: 200 * time.Millisecond, start: startNode}
 	if _, err = r.launchLocked(path, installation); err != nil {

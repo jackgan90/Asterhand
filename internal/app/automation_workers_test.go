@@ -247,19 +247,22 @@ func TestM1EndToEndWorkerFlowHotSwitchMidFlightReceiptRevocationAndStopChain(t *
 		t.Fatalf("expected mid-flight revocation to reject collab receipt before returning, got %+v", midResp)
 	}
 
-	// 6. Crash window recovery: worker turn persisted, public receipt still prepared -> operations_get repairs receipt!
+	// 6. Crash window recovery: worker turn persisted with NativeID, public receipt still prepared -> operations_get repairs receipt!
 	crashOpID := operations.NewID(time.Now())
+	pCur, _, _ := a.Harnesses.AuthenticateCaller(tok)
+	ident := operations.Identity{Actor: pCur.ID, Node: a.Config.Get().NodeID, ID: crashOpID, Name: "workers_send", Target: w.ID, Digest: "d"}
 	crashTurn, err := a.Workers.Send(context.Background(), workers.SendInput{
-		OperationID: crashOpID,
-		WorkerID:    w.ID,
-		Prompt:      "hold for stop test",
+		OperationID:  crashOpID,
+		OperationKey: ident.NativeID(),
+		ActorID:      pCur.ID,
+		CallerID:     pCur.CallerID,
+		WorkerID:     w.ID,
+		Prompt:       "hold for stop test",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	<-started
-	pCur, _, _ := a.Harnesses.AuthenticateCaller(tok)
-	ident := operations.Identity{Actor: pCur.ID, Node: a.Config.Get().NodeID, ID: crashOpID, Name: "workers_send", Target: w.ID, Digest: "d"}
 	if _, _, err := a.Store.Begin(ident, time.Now()); err != nil {
 		t.Fatal(err)
 	}

@@ -13,6 +13,155 @@ import (
 	"github.com/jackgan90/Asterhand/internal/harnesses"
 )
 
+func (s *Service) List(workspaceRoot, workspaceID string, includeClosed bool, limit int) ([]Worker, error) {
+	wsID := workspaceID
+	if wsID == "" && strings.TrimSpace(workspaceRoot) != "" {
+		ws, _, err := s.harnesses.ResolveWorkspace(workspaceRoot, harnesses.AccessReadOnly)
+		if err != nil {
+			return nil, err
+		}
+		wsID = ws.ID
+	}
+	return s.store.ListWorkers(wsID, includeClosed, limit)
+}
+
+func (s *Service) Get(workerID, expectedWorkspaceID string) (Worker, []Turn, error) {
+	w, err := s.store.GetWorker(workerID)
+	if errors.Is(err, ErrNotFound) {
+		return Worker{}, nil, automation.Fail("not_found", "Worker not found")
+	}
+	if err != nil {
+		return Worker{}, nil, err
+	}
+	if expectedWorkspaceID != "" && w.WorkspaceID != expectedWorkspaceID {
+		return Worker{}, nil, automation.Fail("workspace_mismatch", "Worker does not belong to the expected workspace")
+	}
+	turns, err := s.store.ListTurnsByWorker(w.ID, 10)
+	return w, turns, err
+}
+
+func (s *Service) GetTurn(turnID, expectedWorkspaceID string) (Turn, error) {
+	t, err := s.store.GetTurn(turnID)
+	if errors.Is(err, ErrNotFound) {
+		return Turn{}, automation.Fail("not_found", "Turn not found")
+	}
+	if err != nil {
+		return Turn{}, err
+	}
+	if expectedWorkspaceID != "" && t.WorkspaceID != expectedWorkspaceID {
+		return Turn{}, automation.Fail("workspace_mismatch", "Turn does not belong to the expected workspace")
+	}
+	s.populateTurnActivity(&t)
+	if t.State == TurnWaitingApproval || t.State == TurnWaitingInput {
+		t.PendingInteraction = s.pendingForTurn(t.ID)
+	}
+	return t, nil
+}
+
+func (s *Service) populateTurnActivity(t *Turn) {
+	now := s.now().UTC()
+	if t.FinishedAt != nil {
+		if sec := int(t.FinishedAt.Sub(t.StartedAt).Seconds()); sec >= 0 {
+			t.ElapsedSeconds = sec
+		}
+		return
+	}
+	if !t.StartedAt.IsZero() {
+		if sec := int(now.Sub(t.StartedAt).Seconds()); sec >= 0 {
+			t.ElapsedSeconds = sec
+		}
+	}
+	s.mu.Lock()
+	if rt, ok := s.activeTurns[t.ID]; ok {
+		if !rt.lastEventAt.IsZero() {
+			if idle := int(now.Sub(rt.lastEventAt).Seconds()); idle >= 0 {
+				t.IdleSeconds = idle
+			}
+		}
+		t.StreamEvents = rt.streamEvents
+		t.StreamBytes = rt.streamBytes
+		t.LatestCommentarySeq = rt.commentarySeq
+	} else if hist := s.turnCommentaries[t.ID]; len(hist) > 0 {
+		t.LatestCommentarySeq = hist[len(hist)-1].Seq
+	}
+	s.mu.Unlock()
+}
+
+func (s *Service) recordCommentary(rt *runningTurn, text string, now time.Time) int64 {
+	txt := truncateSummary(strings.TrimSpace(text), maxCommentaryBytes)
+	if txt == "" {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rt.commentarySeq++
+	entry := CommentaryEntry{
+		Seq:       rt.commentarySeq,
+		Timestamp: now,
+		Text:      txt,
+	}
+	rt.commentaries = append(rt.commentaries, entry)
+	if len(rt.commentaries) > maxBufferedComments {
+		rt.commentaries = append([]CommentaryEntry(nil), rt.commentaries[len(rt.commentaries)-maxBufferedComments:]...)
+	}
+	return rt.commentarySeq
+}
+
+func (s *Service) archiveTurnCommentaries(rt *runningTurn, finalAnswer string) {
+	if rt == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(rt.commentaries) == 0 {
+		return
+	}
+	cp := append([]CommentaryEntry(nil), rt.commentaries...)
+	if normFinal := truncateSummary(strings.TrimSpace(finalAnswer), maxCommentaryBytes); normFinal != "" && len(cp) > 0 && cp[len(cp)-1].Text == normFinal {
+		cp = cp[:len(cp)-1]
+	}
+	if len(cp) == 0 {
+		return
+	}
+	if _, exists := s.turnCommentaries[rt.turnID]; !exists {
+		s.turnCommentaryOrder = append(s.turnCommentaryOrder, rt.turnID)
+		if len(s.turnCommentaryOrder) > 64 {
+			evict := s.turnCommentaryOrder[0]
+			s.turnCommentaryOrder = s.turnCommentaryOrder[1:]
+			delete(s.turnCommentaries, evict)
+		}
+	}
+	s.turnCommentaries[rt.turnID] = cp
+}
+
+func (s *Service) selectCommentaries(turnID string, afterSeq int64, defaultTail int) ([]CommentaryEntry, int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var src []CommentaryEntry
+	if rt, ok := s.activeTurns[turnID]; ok {
+		src = rt.commentaries
+	} else {
+		src = s.turnCommentaries[turnID]
+	}
+	if len(src) == 0 {
+		return nil, 0
+	}
+	latest := src[len(src)-1].Seq
+	if afterSeq > 0 {
+		var out []CommentaryEntry
+		for _, e := range src {
+			if e.Seq > afterSeq {
+				out = append(out, e)
+			}
+		}
+		return out, latest
+	}
+	if defaultTail <= 0 || len(src) <= defaultTail {
+		return append([]CommentaryEntry(nil), src...), latest
+	}
+	return append([]CommentaryEntry(nil), src[len(src)-defaultTail:]...), latest
+}
+
 func shouldWakeCaller(t Turn) bool {
 	if IsTurnTerminal(t.State) || t.State == TurnReconcile {
 		return true
@@ -345,270 +494,6 @@ func (s *Service) ReadLogsTail(turnID, expectedWorkspaceID string, limit int) (T
 	return t, entries, hasMore, err
 }
 
-// ReconcileTurn attempts exact correlation recovery via client_correlation_id.
-// Never guesses by prompt equality; if revocation_requested was persisted, late
-// native completion only appends audit facts and never promotes to completed.
-func (s *Service) ReconcileTurn(ctx context.Context, turnID string) (Turn, error) {
-	if _, _, fErr := s.flushPendingReconcile(turnID); fErr != nil {
-		return Turn{}, fErr
-	}
-	t, err := s.store.GetTurn(turnID)
-	if errors.Is(err, ErrNotFound) {
-		return Turn{}, automation.Fail("not_found", "Turn not found")
-	}
-	if err != nil {
-		return Turn{}, err
-	}
-	if t.State != TurnReconcile {
-		return t, nil
-	}
-	w, err := s.store.GetWorker(t.WorkerID)
-	if err != nil {
-		return Turn{}, err
-	}
-	if w.NativeSessionID == "" {
-		return t, nil
-	}
-	adapter := s.adapters[w.HarnessID]
-	if adapter == nil {
-		return t, nil
-	}
-	_, exe := s.harnesses.IsWorkerEnabled(w.HarnessID)
-	handle, err := s.acquireHandle(ctx, adapter, w, exe, t.ID, true)
-	if errors.Is(err, errTurnStateStale) {
-		if latest, gErr := s.store.GetTurn(turnID); gErr == nil {
-			return latest, nil
-		}
-		return t, nil
-	}
-	if err != nil {
-		return t, nil
-	}
-	nativeTurns, err := adapter.InspectThreadTurns(ctx, handle)
-	if err != nil {
-		return t, nil
-	}
-	var matches []NativeTurnRecord
-	for _, nt := range nativeTurns {
-		for _, it := range nt.Items {
-			if it.Type == "userMessage" && it.ClientID != "" && it.ClientID == t.ClientCorrelationID {
-				matches = append(matches, nt)
-				break
-			}
-		}
-	}
-	if len(matches) != 1 {
-		return t, nil
-	}
-	matched := matches[0]
-	now := s.now().UTC()
-	t.NativeTurnID = matched.NativeTurnID
-
-	// Never auto-finalize or release write locks while the native turn is still
-	// non-terminal (even when revocation was requested): only record the
-	// confirmed native_turn_id and keep reconciliation_required + retained locks.
-	if !IsTurnTerminal(matched.Status) {
-		curTurn, _, _, err := s.commitTurnAndWorker(t.ID, "", residentActionNone, requireReconcileState, func(cur *Turn) {
-			cur.NativeTurnID = matched.NativeTurnID
-			cur.UpdatedAt = now
-		}, nil)
-		if errors.Is(err, errTurnStateStale) {
-			return curTurn, nil
-		}
-		if err != nil {
-			return Turn{}, err
-		}
-		return curTurn, nil
-	}
-
-	if t.RevocationRequested {
-		curTurn, _, evicted, err := s.commitTurnAndWorker(t.ID, w.ID, residentActionEvict, requireReconcileState, func(cur *Turn) {
-			cur.NativeTurnID = matched.NativeTurnID
-			cur.State = TurnCancelledRevoked
-			cur.AnswerAvailable = false
-			cur.AnswerSource = AnswerSourceNone
-			cur.ErrorCode = "authorization_revoked"
-			if cur.RevocationReason != "" {
-				cur.ErrorMessage = cur.RevocationReason
-			}
-			cur.WriteLockRetained = false
-			cur.WriteLockRoot = ""
-			cur.WriteLockKey = ""
-			cur.WriteLockReason = ""
-			cur.UpdatedAt = now
-			cur.FinishedAt = &now
-		}, func(cur *Worker) bool {
-			if cur.ActiveTurnID != t.ID {
-				return false
-			}
-			cur.State = WorkerIdle
-			cur.ActiveTurnID = ""
-			cur.UpdatedAt = now
-			return true
-		})
-		if errors.Is(err, errTurnStateStale) {
-			return curTurn, nil
-		}
-		if err != nil {
-			return Turn{}, err
-		}
-		s.releaseRetainedWriteLock(t.ID)
-		s.closeDetachedResident(evicted)
-		s.notifyWaiters(t.ID)
-		return curTurn, nil
-	}
-
-	applied, err := s.finalizeTurn(nil, &w, &t, matched.Status, matched.Items, "", "")
-	if err != nil {
-		return Turn{}, err
-	}
-	if applied {
-		s.releaseRetainedWriteLock(t.ID)
-	}
-	return t, nil
-}
-
-// ResolveTurn lets an operator explicitly close a reconciliation_required turn
-// with an audit reason without faking success, unblocking the worker.
-func (s *Service) ResolveTurn(turnID, actor, reason string) (Turn, error) {
-	if strings.TrimSpace(reason) == "" {
-		return Turn{}, automation.Fail("invalid_parameters", "Resolution reason is required")
-	}
-	if _, _, fErr := s.flushPendingReconcile(turnID); fErr != nil {
-		return Turn{}, fErr
-	}
-	t, err := s.store.GetTurn(turnID)
-	if errors.Is(err, ErrNotFound) {
-		return Turn{}, automation.Fail("not_found", "Turn not found")
-	}
-	if err != nil {
-		return Turn{}, err
-	}
-	if t.State != TurnReconcile {
-		return Turn{}, automation.Fail("conflict", "Only reconciliation_required turns can be manually resolved")
-	}
-	now := s.now().UTC()
-	curTurn, _, _, err := s.commitTurnAndWorker(turnID, t.WorkerID, residentActionNone, func(cur Turn) error {
-		if cur.State != TurnReconcile {
-			return automation.Fail("conflict", "Only reconciliation_required turns can be manually resolved")
-		}
-		return nil
-	}, func(cur *Turn) {
-		cur.State = TurnFailed
-		cur.AnswerAvailable = false
-		cur.AnswerSource = AnswerSourceNone
-		cur.ErrorCode = "reconciled_manually_closed"
-		cur.ErrorMessage = fmt.Sprintf("Resolved by %s: %s", actor, strings.TrimSpace(reason))
-		cur.WriteLockRetained = false
-		cur.WriteLockRoot = ""
-		cur.WriteLockKey = ""
-		cur.WriteLockReason = ""
-		cur.UpdatedAt = now
-		cur.FinishedAt = &now
-	}, func(cur *Worker) bool {
-		if cur.ActiveTurnID != turnID || cur.State != WorkerReconcile {
-			return false
-		}
-		cur.State = WorkerIdle
-		cur.ActiveTurnID = ""
-		cur.UpdatedAt = now
-		return true
-	})
-	if err != nil {
-		return Turn{}, err
-	}
-	s.releaseRetainedWriteLock(curTurn.ID)
-	s.notifyWaiters(curTurn.ID)
-	return curTurn, nil
-}
-
-// RevokeWorkspace aborts pending or in-flight turns whose workspace was removed
-// or whose access_mode now exceeds newMaxAccess.
-func (s *Service) RevokeWorkspace(workspaceID, newMaxAccess string) {
-	newRank := harnesses.AccessModeRank(newMaxAccess)
-	reason := "Workspace authorization was revoked"
-	if newRank > 0 {
-		reason = "Workspace access mode was downgraded below turn requirement"
-	}
-	s.mu.Lock()
-	targets := []*runningTurn{}
-	for _, rt := range s.activeTurns {
-		if rt.workspaceID == workspaceID && (newRank == 0 || harnesses.AccessModeRank(rt.accessMode) > newRank) {
-			rt.revoked = true
-			rt.cancelled = true
-			rt.revokeReason = reason
-			targets = append(targets, rt)
-		}
-	}
-	s.mu.Unlock()
-	for _, rt := range targets {
-		rt.signalCancel()
-	}
-}
-
-// RevokeWorkerHarness aborts pending or in-flight turns running on harnessID.
-func (s *Service) RevokeWorkerHarness(harnessID string) {
-	reason := "Worker harness collaboration authorization was disabled"
-	s.mu.Lock()
-	targets := []*runningTurn{}
-	for _, rt := range s.activeTurns {
-		if rt.harnessID == harnessID {
-			rt.revoked = true
-			rt.cancelled = true
-			rt.revokeReason = reason
-			targets = append(targets, rt)
-		}
-	}
-	s.mu.Unlock()
-	for _, rt := range targets {
-		rt.signalCancel()
-	}
-}
-
-// RevokeWorkerWriteHarness aborts only workspace_write turns on harnessID when
-// write permission is disabled while read_only worker collaboration remains on.
-func (s *Service) RevokeWorkerWriteHarness(harnessID string) {
-	reason := "Worker harness workspace_write authorization was disabled"
-	s.mu.Lock()
-	targets := []*runningTurn{}
-	for _, rt := range s.activeTurns {
-		if rt.harnessID == harnessID && rt.accessMode == harnesses.AccessWorkspaceWrite {
-			rt.revoked = true
-			rt.cancelled = true
-			rt.revokeReason = reason
-			targets = append(targets, rt)
-		}
-	}
-	s.mu.Unlock()
-	for _, rt := range targets {
-		rt.signalCancel()
-	}
-}
-
-// OperationLookup supports reconcileAutomationOperation when a crash occurred
-// after a worker/turn record was persisted and before the public receipt finished.
-func (s *Service) OperationLookup(opName, opID string) (any, bool, error) {
-	if opID == "" {
-		return nil, false, nil
-	}
-	switch opName {
-	case "workers_create":
-		ws, err := s.store.ListWorkersByOperationID(opID, 2)
-		if err != nil || len(ws) != 1 {
-			return nil, false, err
-		}
-		return workerOpSummary(ws[0]), true, nil
-	case "workers_send":
-		ts, err := s.store.ListTurnsByOperationID(opID, 2)
-		if err != nil || len(ts) != 1 {
-			return nil, false, err
-		}
-		return turnOpSummary(ts[0]), true, nil
-	default:
-		return nil, false, nil
-	}
-}
-
 func (s *Service) ActiveTurnsSnapshot() []Turn {
 	s.mu.Lock()
 	ids := make([]string, 0, len(s.activeTurns))
@@ -634,242 +519,6 @@ func (s *Service) ActiveTurnsSnapshot() []Turn {
 		}
 	}
 	return out
-}
-
-func (s *Service) recordPersistFailure(rt *runningTurn, w *Worker, t *Turn, errCode, errMsg string, retainLock bool, lockRoot, lockKey, nativeTurnID string, revoked bool, revokeReason string, persistErr error) {
-	if rt == nil {
-		return
-	}
-	shouldRetain := retainLock && w.AccessMode == harnesses.AccessWorkspaceWrite
-	if lockRoot == "" {
-		lockRoot = rt.workspaceRoot
-	}
-	if lockKey == "" {
-		lockKey = rt.worktreeKey
-	}
-	s.recordTurnPersistErr(rt, persistErr)
-	if shouldRetain {
-		s.retainWriteLock(rt.turnID)
-	}
-	s.mu.Lock()
-	s.pendingReconcile[t.ID] = pendingReconcileInfo{
-		turnID: t.ID, workerID: w.ID, errCode: errCode, errMsg: errMsg,
-		retainLock: shouldRetain,
-		lockRoot: lockRoot, lockKey: lockKey, nativeTurnID: nativeTurnID,
-		revoked: revoked, revokeReason: revokeReason,
-	}
-	s.mu.Unlock()
-}
-
-func (s *Service) hasPendingOrRetainedForWorkerLocked(workerID string) bool {
-	for _, pr := range s.pendingReconcile {
-		if pr.workerID == workerID {
-			return true
-		}
-	}
-	for _, lk := range s.writeLocks {
-		if lk.workerID == workerID && lk.retained {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *Service) flushPendingReconcile(turnID string) (Turn, bool, error) {
-	now := s.now().UTC()
-	s.mu.Lock()
-	pr, ok := s.pendingReconcile[turnID]
-	if !ok {
-		s.mu.Unlock()
-		return Turn{}, false, nil
-	}
-	curTurn, _, _, err := s.commitTurnAndWorkerLocked(pr.turnID, pr.workerID, residentActionNone, func(cur Turn) error {
-		if IsTurnTerminal(cur.State) || cur.State == TurnReconcile {
-			return errTurnStateStale
-		}
-		return nil
-	}, func(cur *Turn) {
-		cur.State = TurnReconcile
-		cur.PendingInteraction = nil
-		cur.AnswerAvailable = false
-		cur.AnswerSource = AnswerSourceNone
-		cur.ErrorCode = pr.errCode
-		cur.ErrorMessage = pr.errMsg
-		if pr.nativeTurnID != "" && cur.NativeTurnID == "" {
-			cur.NativeTurnID = pr.nativeTurnID
-		}
-		if pr.revoked {
-			cur.RevocationRequested = true
-			cur.RevocationReason = pr.revokeReason
-		}
-		if pr.retainLock && cur.AccessMode == harnesses.AccessWorkspaceWrite {
-			cur.WriteLockRetained = true
-			if cur.WriteLockRoot == "" {
-				cur.WriteLockRoot = pr.lockRoot
-			}
-			if cur.WriteLockKey == "" {
-				cur.WriteLockKey = pr.lockKey
-			}
-			cur.WriteLockReason = pr.errCode
-		} else {
-			cur.WriteLockRetained = false
-			cur.WriteLockRoot = ""
-			cur.WriteLockKey = ""
-			cur.WriteLockReason = ""
-		}
-		cur.UpdatedAt = now
-	}, func(cur *Worker) bool {
-		if cur.State == WorkerClosed || (cur.ActiveTurnID != pr.turnID && cur.ActiveTurnID != "") {
-			return false
-		}
-		cur.State = WorkerReconcile
-		cur.ActiveTurnID = pr.turnID
-		cur.UpdatedAt = now
-		return true
-	})
-	if errors.Is(err, errTurnStateStale) {
-		delete(s.pendingReconcile, turnID)
-		s.mu.Unlock()
-		return curTurn, true, nil
-	}
-	if err != nil {
-		s.mu.Unlock()
-		return Turn{}, true, err
-	}
-	delete(s.pendingReconcile, turnID)
-	s.mu.Unlock()
-	s.notifyWaiters(turnID)
-	return curTurn, true, nil
-}
-
-func requireReconcileState(cur Turn) error {
-	if cur.State != TurnReconcile {
-		return errTurnStateStale
-	}
-	return nil
-}
-
-func (s *Service) recordTurnPersistErr(rt *runningTurn, err error) {
-	if rt == nil || err == nil {
-		return
-	}
-	s.mu.Lock()
-	if rt.persistErr == nil {
-		rt.persistErr = err
-	}
-	s.mu.Unlock()
-}
-
-func (s *Service) commitTurnAndWorker(
-	turnID, workerID string,
-	resAction residentCommitAction,
-	checkTurn func(Turn) error,
-	mutateTurn func(*Turn),
-	mutateWorker func(*Worker) bool,
-) (Turn, bool, *residentProc, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.commitTurnAndWorkerLocked(turnID, workerID, resAction, checkTurn, mutateTurn, mutateWorker)
-}
-
-func (s *Service) commitTurnAndWorkerLocked(
-	turnID, workerID string,
-	resAction residentCommitAction,
-	checkTurn func(Turn) error,
-	mutateTurn func(*Turn),
-	mutateWorker func(*Worker) bool,
-) (Turn, bool, *residentProc, error) {
-	curTurn, err := s.store.GetTurn(turnID)
-	if err != nil {
-		return Turn{}, false, nil, err
-	}
-	if checkTurn != nil {
-		if err := checkTurn(curTurn); err != nil {
-			return curTurn, false, nil, err
-		}
-	}
-	mutateTurn(&curTurn)
-	var workerPtr *Worker
-	workerUpdated := false
-	if workerID != "" && mutateWorker != nil {
-		curWorker, wErr := s.store.GetWorker(workerID)
-		if wErr != nil {
-			return Turn{}, false, nil, wErr
-		}
-		if mutateWorker(&curWorker) {
-			workerPtr = &curWorker
-			workerUpdated = true
-		}
-	}
-	if err := s.store.SaveTurnAndWorker(curTurn, workerPtr); err != nil {
-		return Turn{}, false, nil, err
-	}
-	if IsTurnTerminal(curTurn.State) && !curTurn.WriteLockRetained {
-		if lk, ok := s.writeLocks[turnID]; ok && lk.retained {
-			delete(s.writeLocks, turnID)
-		}
-	}
-	var evicted *residentProc
-	if workerUpdated && resAction != residentActionNone {
-		active, hasActive := s.workerTurn[workerID]
-		if !hasActive || active == "" || active == turnID {
-			if rp, ok := s.residents[workerID]; ok {
-				switch resAction {
-				case residentActionTouch:
-					rp.lastUsedAt = curTurn.UpdatedAt
-				case residentActionEvict:
-					evicted = rp
-					delete(s.residents, workerID)
-				}
-			}
-		}
-	}
-	return curTurn, workerUpdated, evicted, nil
-}
-
-func (s *Service) checkRevoked(rt *runningTurn) (bool, string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return rt.revoked, rt.revokeReason
-}
-
-func (s *Service) checkCancelOrRevoked(rt *runningTurn) (cancelled bool, revoked bool, reason string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if rt.revoked {
-		return true, true, rt.revokeReason
-	}
-	if rt.cancelled || (rt.turnCtx != nil && rt.turnCtx.Err() != nil) {
-		return true, false, ""
-	}
-	return false, false, ""
-}
-
-func (s *Service) retainWriteLock(turnID string) {
-	s.mu.Lock()
-	if lk, ok := s.writeLocks[turnID]; ok {
-		lk.retained = true
-		s.writeLocks[turnID] = lk
-	}
-	s.mu.Unlock()
-}
-
-func (s *Service) releaseRetainedWriteLock(turnID string) {
-	s.mu.Lock()
-	delete(s.writeLocks, turnID)
-	s.mu.Unlock()
-}
-
-func (s *Service) releaseTurnLocks(rt *runningTurn) {
-	s.mu.Lock()
-	delete(s.activeTurns, rt.turnID)
-	if s.workerTurn[rt.workerID] == rt.turnID {
-		delete(s.workerTurn, rt.workerID)
-	}
-	if lk, ok := s.writeLocks[rt.turnID]; ok && !lk.retained {
-		delete(s.writeLocks, rt.turnID)
-	}
-	s.mu.Unlock()
 }
 
 func (s *Service) subscribeWaiter(turnID string) chan struct{} {
@@ -907,84 +556,4 @@ func (s *Service) notifyWaiters(turnID string) {
 		default:
 		}
 	}
-}
-
-// SteerTurn injects mid-turn guidance into an actively running turn when the
-// underlying harness adapter implements SteerAdapter (e.g. Codex turn/steer,
-// Claude Code stream-json stdin). Never silently cancels or restarts turns on
-// harnesses without native steering support.
-func (s *Service) SteerTurn(ctx context.Context, in SteerInput) (Turn, error) {
-	turnID := strings.TrimSpace(in.TurnID)
-	if turnID == "" {
-		return Turn{}, automation.Fail("invalid_parameters", "turn_id is required")
-	}
-	text := strings.TrimSpace(in.Text)
-	if text == "" {
-		return Turn{}, automation.Fail("invalid_parameters", "text is required")
-	}
-	if len(text) > maxSteerBytes {
-		return Turn{}, automation.Fail("invalid_parameters", fmt.Sprintf("text exceeds %d bytes limit", maxSteerBytes))
-	}
-
-	t, err := s.GetTurn(turnID, in.WorkspaceID)
-	if err != nil {
-		return Turn{}, err
-	}
-	switch t.State {
-	case TurnWaitingApproval:
-		return Turn{}, automation.Fail("turn_not_running", "Turn is waiting for human permission approval; wait for approval to finish before steering")
-	case TurnWaitingInput:
-		return Turn{}, automation.Fail("turn_not_running", "Turn is waiting for input; use workers_reply instead of workers_steer")
-	case TurnRunning:
-	default:
-		return Turn{}, automation.Fail("turn_not_running", fmt.Sprintf("Turn is in %s state; wait or use workers_send to start a new turn instead", t.State))
-	}
-
-	s.mu.Lock()
-	rt, ok := s.activeTurns[turnID]
-	var adapter Adapter
-	var handle ThreadHandle
-	var nativeTurnID string
-	if ok && rt != nil && rt.handle != nil {
-		adapter = s.adapters[rt.harnessID]
-		handle = *rt.handle
-		nativeTurnID = rt.nativeTurnID
-	}
-	s.mu.Unlock()
-
-	if !ok || rt == nil || adapter == nil || nativeTurnID == "" {
-		return Turn{}, automation.Fail("turn_not_running", "Turn is not actively executing yet; wait briefly and retry")
-	}
-	steerer, ok := adapter.(SteerAdapter)
-	if !ok {
-		return Turn{}, automation.Fail("unsupported_steer", fmt.Sprintf("Harness %s does not support mid-turn steering; wait for this turn to finish (or cancel it) and call workers_send", t.HarnessID))
-	}
-
-	steerCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	if err := steerer.SteerTurn(steerCtx, handle, nativeTurnID, text); err != nil {
-		return Turn{}, automation.Fail("steer_failed", fmt.Sprintf("Failed to steer running turn: %v", err))
-	}
-
-	now := s.now().UTC()
-	s.mu.Lock()
-	if cur, exists := s.activeTurns[turnID]; exists {
-		cur.lastEventAt = now
-	}
-	s.mu.Unlock()
-
-	_, _ = s.store.AppendLog(turnID, LogEntry{
-		Timestamp: now,
-		Kind:      "steer",
-		Summary:   truncateSummary("Steer: "+text, 500),
-	})
-	if latest, gErr := s.store.GetTurn(turnID); gErr == nil && latest.State == TurnRunning {
-		latest.Progress = "Steer delivered: " + truncateSummary(text, 120)
-		latest.UpdatedAt = now
-		_ = s.store.SaveTurn(latest)
-		t = latest
-	}
-	s.populateTurnActivity(&t)
-	s.notifyWaiters(turnID)
-	return t, nil
 }

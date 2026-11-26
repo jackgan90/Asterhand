@@ -106,76 +106,80 @@ func (s *Service) runTurn(rt *runningTurn, w Worker, t Turn, exe, prompt string)
 	s.awaitTurnExecution(rt, &w, &t, adapter, handle, sr)
 }
 
-func (s *Service) awaitTurnStart(rt *runningTurn, w *Worker, t *Turn, adapter Adapter, handle ThreadHandle, prompt string) (turnStartResult, bool) {
-	onEvent := func(ev AdapterEvent) {
-		now := s.now().UTC()
-		sz := ev.Bytes
-		if sz <= 0 {
-			sz = len(ev.Summary)
-		}
-		s.mu.Lock()
-		rt.lastEventAt = now
-		rt.streamEvents++
-		if sz > 0 {
-			rt.streamBytes += int64(sz)
-		}
-		s.mu.Unlock()
-		if ev.Kind != "delta" && ev.Kind != "progress" {
-			_, _ = s.store.AppendLog(t.ID, LogEntry{
-				Timestamp: now,
-				Kind:      ev.Kind,
-				ItemID:    ev.ItemID,
-				Phase:     ev.Phase,
-				Summary:   ev.Summary,
+func (s *Service) handleTurnAdapterEvent(rt *runningTurn, w *Worker, t *Turn, ev AdapterEvent) {
+	now := s.now().UTC()
+	sz := ev.Bytes
+	if sz <= 0 {
+		sz = len(ev.Summary)
+	}
+	s.mu.Lock()
+	rt.lastEventAt = now
+	rt.streamEvents++
+	if sz > 0 {
+		rt.streamBytes += int64(sz)
+	}
+	s.mu.Unlock()
+	if ev.Kind != "delta" && ev.Kind != "progress" {
+		_, _ = s.store.AppendLog(t.ID, LogEntry{
+			Timestamp: now,
+			Kind:      ev.Kind,
+			ItemID:    ev.ItemID,
+			Phase:     ev.Phase,
+			Summary:   ev.Summary,
+		})
+	}
+	switch ev.Kind {
+	case "approval_mode":
+		// Only reflect runtime fallback when worker was created with approval_mode="auto";
+		// never let runtime init overwrite explicit strict_deny or read_only deny_escalation.
+		if mode := strings.TrimSpace(ev.Summary); mode != "" && w.ApprovalMode == ApprovalModeAuto && w.EffectiveApprovalMode != mode {
+			w.EffectiveApprovalMode = mode
+			w.UpdatedAt = now
+			s.updateWorkerState(w.ID, func(cur *Worker) {
+				if cur.ApprovalMode == ApprovalModeAuto {
+					cur.EffectiveApprovalMode = mode
+					cur.UpdatedAt = now
+				}
 			})
 		}
-		switch ev.Kind {
-		case "approval_mode":
-			// Only reflect runtime fallback when worker was created with approval_mode="auto";
-			// never let runtime init overwrite explicit strict_deny or read_only deny_escalation.
-			if mode := strings.TrimSpace(ev.Summary); mode != "" && w.ApprovalMode == ApprovalModeAuto && w.EffectiveApprovalMode != mode {
-				w.EffectiveApprovalMode = mode
-				w.UpdatedAt = now
-				s.updateWorkerState(w.ID, func(cur *Worker) {
-					if cur.ApprovalMode == ApprovalModeAuto {
-						cur.EffectiveApprovalMode = mode
-						cur.UpdatedAt = now
-					}
-				})
-			}
-		case "commentary":
-			fullText := ""
-			if ev.Item != nil {
-				fullText = strings.TrimSpace(ev.Item.Text)
-			}
-			if fullText == "" {
-				fullText = strings.TrimSpace(ev.Summary)
-			}
-			seq := s.recordCommentary(rt, fullText, now)
-			prog := firstNonEmptyStr(ev.Summary, truncateSummary(fullText, 160))
-			if seq > 0 || prog != "" {
-				s.updateTurnState(t.ID, func(cur *Turn) {
-					if seq > cur.LatestCommentarySeq {
-						cur.LatestCommentarySeq = seq
-					}
-					if prog != "" && cur.State != TurnWaitingApproval && cur.State != TurnWaitingInput {
-						cur.Progress = prog
-					}
-					cur.UpdatedAt = now
-				})
-				s.notifyWaiters(t.ID)
-			}
-		case "progress", "command", "edit", "mcp", "search", "plan", "tool", "system", "approval_auto":
-			if ev.Summary != "" {
-				s.updateTurnState(t.ID, func(cur *Turn) {
-					if cur.State != TurnWaitingApproval && cur.State != TurnWaitingInput {
-						cur.Progress = ev.Summary
-					}
-					cur.UpdatedAt = now
-				})
-				s.notifyWaiters(t.ID)
-			}
+	case "commentary":
+		fullText := ""
+		if ev.Item != nil {
+			fullText = strings.TrimSpace(ev.Item.Text)
 		}
+		if fullText == "" {
+			fullText = strings.TrimSpace(ev.Summary)
+		}
+		seq := s.recordCommentary(rt, fullText, now)
+		prog := firstNonEmptyStr(ev.Summary, truncateSummary(fullText, 160))
+		if seq > 0 || prog != "" {
+			s.updateTurnState(t.ID, func(cur *Turn) {
+				if seq > cur.LatestCommentarySeq {
+					cur.LatestCommentarySeq = seq
+				}
+				if prog != "" && cur.State != TurnWaitingApproval && cur.State != TurnWaitingInput {
+					cur.Progress = prog
+				}
+				cur.UpdatedAt = now
+			})
+			s.notifyWaiters(t.ID)
+		}
+	case "progress", "command", "edit", "mcp", "search", "plan", "tool", "system", "approval_auto":
+		if ev.Summary != "" {
+			s.updateTurnState(t.ID, func(cur *Turn) {
+				if cur.State != TurnWaitingApproval && cur.State != TurnWaitingInput {
+					cur.Progress = ev.Summary
+				}
+				cur.UpdatedAt = now
+			})
+			s.notifyWaiters(t.ID)
+		}
+	}
+}
+
+func (s *Service) awaitTurnStart(rt *runningTurn, w *Worker, t *Turn, adapter Adapter, handle ThreadHandle, prompt string) (turnStartResult, bool) {
+	onEvent := func(ev AdapterEvent) {
+		s.handleTurnAdapterEvent(rt, w, t, ev)
 	}
 
 	onInteraction := func(ictx context.Context, req InteractionRequest) (InteractionDecision, error) {
@@ -774,186 +778,34 @@ func (s *Service) enterReconciliationInternal(rt *runningTurn, w *Worker, t *Tur
 	return nil
 }
 
-func (s *Service) updateTurnState(turnID string, mutate func(*Turn)) error {
+func (s *Service) checkRevoked(rt *runningTurn) (bool, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cur, err := s.store.GetTurn(turnID)
-	if err != nil {
-		return err
-	}
-	mutate(&cur)
-	return s.store.SaveTurn(cur)
+	return rt.revoked, rt.revokeReason
 }
 
-// updateWorkerState reloads the latest persisted Worker row before applying
-// narrow lifecycle mutations so concurrent human changes (e.g. revoking
-// session_auto_approve via Web UI) are never clobbered by a stale turn snapshot.
-func (s *Service) updateWorkerState(workerID string, mutate func(*Worker)) error {
+func (s *Service) checkCancelOrRevoked(rt *runningTurn) (cancelled bool, revoked bool, reason string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cur, err := s.store.GetWorker(workerID)
-	if err != nil {
-		return err
+	if rt.revoked {
+		return true, true, rt.revokeReason
 	}
-	mutate(&cur)
-	return s.store.SaveWorker(cur)
+	if rt.cancelled || (rt.turnCtx != nil && rt.turnCtx.Err() != nil) {
+		return true, false, ""
+	}
+	return false, false, ""
 }
 
-func (s *Service) acquireHandle(ctx context.Context, adapter Adapter, w Worker, exe, ownerTurnID string, forReconcile bool) (ThreadHandle, error) {
-	if err := ctx.Err(); err != nil {
-		return ThreadHandle{}, err
-	}
+func (s *Service) releaseTurnLocks(rt *runningTurn) {
 	s.mu.Lock()
-	if rp, ok := s.residents[w.ID]; ok {
-		rp.lastUsedAt = s.now().UTC()
-		h := rp.handle
-		s.mu.Unlock()
-		return h, nil
+	delete(s.activeTurns, rt.turnID)
+	if s.workerTurn[rt.workerID] == rt.turnID {
+		delete(s.workerTurn, rt.workerID)
 	}
-	if len(s.residents) >= s.budgets.MaxResidentProcs {
-		var oldestKey string
-		var oldestTime time.Time
-		for k, rp := range s.residents {
-			if _, active := s.workerTurn[k]; active {
-				continue
-			}
-			if oldestKey == "" || rp.lastUsedAt.Before(oldestTime) {
-				oldestKey = k
-				oldestTime = rp.lastUsedAt
-			}
-		}
-		if oldestKey != "" {
-			evicted := s.residents[oldestKey]
-			delete(s.residents, oldestKey)
-			s.mu.Unlock()
-			if ad := s.adapters[evicted.harnessID]; ad != nil {
-				_ = ad.CloseThread(evicted.handle)
-			}
-		} else {
-			s.mu.Unlock()
-		}
-	} else {
-		s.mu.Unlock()
-	}
-
-	h, err := adapter.OpenThread(ctx, ThreadOpenSpec{
-		WorkerID:                     w.ID,
-		Executable:                   exe,
-		WorkspaceRoot:                w.WorkspaceRoot,
-		AccessMode:                   w.AccessMode,
-		ApprovalMode:                 w.EffectiveApprovalMode,
-		SessionAutoApprove:           w.SessionAutoApprove,
-		Model:                        w.Model,
-		ReasoningEffort:              w.ReasoningEffort,
-		NativeDefaultsCaptured:       w.NativeDefaultsCaptured,
-		NativeDefaultModel:           w.NativeDefaultModel,
-		NativeDefaultReasoningEffort: w.NativeDefaultReasoningEffort,
-		RoleHint:                     w.RoleHint,
-		NativeSessionID:              w.NativeSessionID,
-	})
-	if err != nil {
-		return ThreadHandle{}, err
-	}
-	s.mu.Lock()
-	chosen, redundant, regErr := s.registerResidentLocked(ctx, w, h, ownerTurnID, forReconcile)
-	s.mu.Unlock()
-	if redundant != nil {
-		_ = adapter.CloseThread(*redundant)
-	}
-	if regErr != nil {
-		return ThreadHandle{}, regErr
-	}
-	return chosen, nil
-}
-
-func (s *Service) registerResidentLocked(ctx context.Context, w Worker, h ThreadHandle, ownerTurnID string, forReconcile bool) (ThreadHandle, *ThreadHandle, error) {
-	if ctx.Err() != nil {
-		return ThreadHandle{}, &h, ctx.Err()
-	}
-	if s.stopping || s.closed {
-		return ThreadHandle{}, &h, errors.New("service stopping")
-	}
-	now := s.now().UTC()
-	if curW, err := s.store.GetWorker(w.ID); err != nil || curW.State == WorkerClosed {
-		return ThreadHandle{}, &h, errTurnStateStale
-	}
-	if forReconcile {
-		if activeTID, busy := s.workerTurn[w.ID]; busy && activeTID != ownerTurnID {
-			return ThreadHandle{}, &h, errTurnStateStale
-		}
-		if curTurn, err := s.store.GetTurn(ownerTurnID); err != nil || curTurn.State != TurnReconcile {
-			return ThreadHandle{}, &h, errTurnStateStale
-		}
-	} else if activeTID, ok := s.workerTurn[w.ID]; !ok || activeTID != ownerTurnID {
-		return ThreadHandle{}, &h, errTurnStateStale
-	}
-	if existing, exists := s.residents[w.ID]; exists {
-		existing.lastUsedAt = now
-		return existing.handle, &h, nil
-	}
-	s.nextResidentID++
-	h.instanceID = s.nextResidentID
-	s.residents[w.ID] = &residentProc{
-		workerID:   w.ID,
-		harnessID:  w.HarnessID,
-		handle:     h,
-		lastUsedAt: now,
-	}
-	return h, nil, nil
-}
-
-func (s *Service) closeDetachedResident(rp *residentProc) {
-	if rp == nil {
-		return
-	}
-	if ad := s.adapters[rp.harnessID]; ad != nil {
-		_ = ad.CloseThread(rp.handle)
-	}
-}
-
-func (s *Service) evictResidentByHandle(h ThreadHandle) {
-	s.mu.Lock()
-	for k, rp := range s.residents {
-		if sameHandle(rp.handle, h) {
-			delete(s.residents, k)
-		}
+	if lk, ok := s.writeLocks[rt.turnID]; ok && !lk.retained {
+		delete(s.writeLocks, rt.turnID)
 	}
 	s.mu.Unlock()
-}
-
-func (s *Service) idleReaperLoop() {
-	defer s.wg.Done()
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-s.reaperStop:
-			return
-		case <-ticker.C:
-			s.reapIdleResidents()
-		}
-	}
-}
-
-func (s *Service) reapIdleResidents() {
-	now := s.now().UTC()
-	var toClose []*residentProc
-	s.mu.Lock()
-	for k, rp := range s.residents {
-		if _, active := s.workerTurn[k]; active {
-			continue
-		}
-		if now.Sub(rp.lastUsedAt) >= s.budgets.IdleRecycleTimeout {
-			toClose = append(toClose, rp)
-			delete(s.residents, k)
-		}
-	}
-	s.mu.Unlock()
-	for _, rp := range toClose {
-		if ad := s.adapters[rp.harnessID]; ad != nil {
-			_ = ad.CloseThread(rp.handle)
-		}
-	}
 }
 
 func composePrompt(prompt string, artifacts []string, gitRef, diffBase, outputContract string) string {

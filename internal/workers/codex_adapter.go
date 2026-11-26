@@ -106,125 +106,44 @@ func (a *CodexAdapter) OpenThread(ctx context.Context, spec ThreadOpenSpec) (Thr
 	}
 
 	sandbox, _, approvalPolicy, reviewer := codexTurnPolicies(spec.AccessMode, spec.ApprovalMode, spec.SessionAutoApprove, spec.WorkspaceRoot)
-
-	type codexCollabMode struct {
-		Mode     string `json:"mode"`
-		Settings struct {
-			Model                 string  `json:"model"`
-			ReasoningEffort       *string `json:"reasoning_effort"`
-			DeveloperInstructions *string `json:"developer_instructions"`
-		} `json:"settings"`
-	}
-
-	var (
-		threadID       string
-		resModel       string
-		resEffort      string
-		collabMode     = "default"
-		collabDevInstr *string
-		freshThread    = spec.NativeSessionID == ""
-	)
-	if !freshThread {
-		params := map[string]any{
-			"threadId":          spec.NativeSessionID,
-			"cwd":               spec.WorkspaceRoot,
-			"sandbox":           sandbox,
-			"approvalPolicy":    approvalPolicy,
-			"approvalsReviewer": reviewer,
-		}
-		if spec.Model != "" {
-			params["model"] = spec.Model
-		}
-		raw, err := sess.request(initCtx, "thread/resume", params)
-		if err != nil {
-			_ = mp.Kill()
+	method, params, freshThread := buildCodexThreadOpenRequest(spec, sandbox, approvalPolicy, reviewer)
+	raw, err := sess.request(initCtx, method, params)
+	if err != nil {
+		_ = mp.Kill()
+		if !freshThread {
 			return ThreadHandle{}, fmt.Errorf("native_session_unrecoverable: %w", err)
 		}
-		var res struct {
-			Thread struct {
-				ID string `json:"id"`
-			} `json:"thread"`
-			Model             string           `json:"model"`
-			ReasoningEffort   *string          `json:"reasoningEffort"`
-			CollaborationMode *codexCollabMode `json:"collaborationMode"`
-		}
-		if err := json.Unmarshal(raw, &res); err != nil || res.Thread.ID == "" {
-			_ = mp.Kill()
-			return ThreadHandle{}, errors.New("native_session_unrecoverable: invalid thread/resume response")
-		}
-		threadID = res.Thread.ID
-		resModel = strings.TrimSpace(res.Model)
-		if res.ReasoningEffort != nil {
-			resEffort = strings.ToLower(strings.TrimSpace(*res.ReasoningEffort))
-		}
-		if res.CollaborationMode != nil {
-			if m := strings.TrimSpace(res.CollaborationMode.Mode); m != "" {
-				collabMode = m
-			}
-			if res.CollaborationMode.Settings.DeveloperInstructions != nil {
-				v := *res.CollaborationMode.Settings.DeveloperInstructions
-				collabDevInstr = &v
-			}
-		}
-	} else {
-		params := map[string]any{
-			"cwd":               spec.WorkspaceRoot,
-			"sandbox":           sandbox,
-			"approvalPolicy":    approvalPolicy,
-			"approvalsReviewer": reviewer,
-		}
-		if spec.Model != "" {
-			params["model"] = spec.Model
-		}
-		if spec.RoleHint != "" {
-			params["developerInstructions"] = spec.RoleHint
-		}
-		raw, err := sess.request(initCtx, "thread/start", params)
-		if err != nil {
-			_ = mp.Kill()
-			return ThreadHandle{}, fmt.Errorf("codex thread/start failed: %w", err)
-		}
-		var res struct {
-			Thread struct {
-				ID string `json:"id"`
-			} `json:"thread"`
-			Model           string  `json:"model"`
-			ReasoningEffort *string `json:"reasoningEffort"`
-		}
-		if err := json.Unmarshal(raw, &res); err != nil || res.Thread.ID == "" {
-			_ = mp.Kill()
-			return ThreadHandle{}, errors.New("codex thread/start returned empty thread id")
-		}
-		threadID = res.Thread.ID
-		resModel = strings.TrimSpace(res.Model)
-		if res.ReasoningEffort != nil {
-			resEffort = strings.ToLower(strings.TrimSpace(*res.ReasoningEffort))
-		}
+		return ThreadHandle{}, fmt.Errorf("codex thread/start failed: %w", err)
+	}
+	opened, err := parseCodexThreadOpenResponse(raw, freshThread)
+	if err != nil {
+		_ = mp.Kill()
+		return ThreadHandle{}, err
 	}
 
 	seededDefaults := spec.NativeDefaultsCaptured || strings.TrimSpace(spec.NativeDefaultModel) != "" || strings.TrimSpace(spec.NativeDefaultReasoningEffort) != ""
 	sess.mu.Lock()
-	sess.threadID = threadID
-	sess.currentModel = resModel
-	sess.currentEffort = resEffort
-	sess.collabMode = collabMode
-	sess.collabDevInstructions = collabDevInstr
+	sess.threadID = opened.threadID
+	sess.currentModel = opened.model
+	sess.currentEffort = opened.effort
+	sess.collabMode = opened.collabMode
+	sess.collabDevInstructions = opened.collabDevInstr
 	if seededDefaults {
 		sess.nativeCaptured = true
 		sess.nativeModel = strings.TrimSpace(spec.NativeDefaultModel)
 		sess.nativeEffort = strings.ToLower(strings.TrimSpace(spec.NativeDefaultReasoningEffort))
 	} else if freshThread {
 		sess.nativeCaptured = true
-		sess.nativeModel = resModel
-		sess.nativeEffort = resEffort
+		sess.nativeModel = opened.model
+		sess.nativeEffort = opened.effort
 	}
 	nativeCaptured := sess.nativeCaptured
 	nativeModel := sess.nativeModel
 	nativeEffort := sess.nativeEffort
 	sess.mu.Unlock()
 	return ThreadHandle{
-		Key:                          spec.WorkerID + ":" + threadID,
-		NativeSessionID:              threadID,
+		Key:                          spec.WorkerID + ":" + opened.threadID,
+		NativeSessionID:              opened.threadID,
 		NativeDefaultsCaptured:       nativeCaptured,
 		NativeDefaultModel:           nativeModel,
 		NativeDefaultReasoningEffort: nativeEffort,
@@ -256,82 +175,57 @@ func (a *CodexAdapter) StartTurn(ctx context.Context, handle ThreadHandle, spec 
 		return "", nil, fmt.Errorf("%w: codex session closed", ErrPreStartFailed)
 	}
 	sess.active = at
-	wantModel := firstNonEmpty(spec.Model, sess.openSpec.Model, sess.nativeModel)
-	wantEffort := strings.ToLower(firstNonEmpty(spec.ReasoningEffort, sess.openSpec.ReasoningEffort, sess.nativeEffort))
-	resetEffortToAuto := sess.nativeCaptured && wantEffort == "" && sess.currentEffort != ""
-	resetModel := firstNonEmpty(wantModel, sess.currentModel)
-	useCollabReset := resetEffortToAuto && resetModel != ""
-	sendModel := !useCollabReset && wantModel != "" && wantModel != sess.currentModel
-	sendEffort := !useCollabReset && wantEffort != "" && wantEffort != sess.currentEffort
-	collabMode := firstNonEmpty(sess.collabMode, "default")
-	var collabDevInstr any
-	if sess.collabDevInstructions != nil {
-		collabDevInstr = *sess.collabDevInstructions
-	}
+	plan := sess.planTurnConfigLocked(spec)
 	sess.mu.Unlock()
 
-	_, sandboxPolicy, approvalPolicy, reviewer := codexTurnPolicies(spec.AccessMode, spec.ApprovalMode, spec.SessionAutoApprove, spec.WorkspaceRoot)
-	params := map[string]any{
-		"threadId":            handle.NativeSessionID,
-		"cwd":                 spec.WorkspaceRoot,
-		"approvalPolicy":      approvalPolicy,
-		"approvalsReviewer":   reviewer,
-		"sandboxPolicy":       sandboxPolicy,
-		"clientUserMessageId": spec.ClientCorrelationID,
-		"input": []map[string]any{
-			{"type": "text", "text": spec.Prompt},
-		},
-	}
-	if useCollabReset {
-		// In codex-cli 0.171.0, omitting or sending effort:null preserves the
-		// previous turn's effort override. CollaborationMode resets
-		// reasoning_effort to null while preserving active mode & instructions.
-		params["collaborationMode"] = map[string]any{
-			"mode": collabMode,
-			"settings": map[string]any{
-				"model":                  resetModel,
-				"reasoning_effort":       nil,
-				"developer_instructions": collabDevInstr,
-			},
-		}
-	} else {
-		if sendModel {
-			params["model"] = wantModel
-		}
-		if sendEffort {
-			params["effort"] = wantEffort
-		}
-	}
+	params := buildCodexTurnStartParams(handle.NativeSessionID, spec, plan)
 	raw, err := sess.request(ctx, "turn/start", params)
 	if err != nil {
 		sess.clearActive(at)
 		return "", nil, err
 	}
-	var res struct {
-		Turn struct {
-			ID     string `json:"id"`
-			Status string `json:"status"`
-		} `json:"turn"`
-	}
-	if err := json.Unmarshal(raw, &res); err != nil || res.Turn.ID == "" {
+	turnID, err := parseCodexTurnStartResponse(raw)
+	if err != nil {
 		sess.clearActive(at)
-		return "", nil, errors.New("codex turn/start returned empty turn id")
+		return "", nil, err
 	}
 	sess.mu.Lock()
-	at.turnID = res.Turn.ID
-	if useCollabReset {
-		sess.currentModel = resetModel
+	at.turnID = turnID
+	if plan.useCollabReset {
+		sess.currentModel = plan.resetModel
 		sess.currentEffort = ""
 	} else {
-		if sendModel {
-			sess.currentModel = wantModel
+		if plan.sendModel {
+			sess.currentModel = plan.wantModel
 		}
-		if sendEffort {
-			sess.currentEffort = wantEffort
+		if plan.sendEffort {
+			sess.currentEffort = plan.wantEffort
 		}
 	}
 	sess.mu.Unlock()
-	return res.Turn.ID, at.done, nil
+	return turnID, at.done, nil
+}
+
+func (s *codexSession) planTurnConfigLocked(spec TurnStartSpec) codexTurnConfigPlan {
+	wantModel := firstNonEmpty(spec.Model, s.openSpec.Model, s.nativeModel)
+	wantEffort := strings.ToLower(firstNonEmpty(spec.ReasoningEffort, s.openSpec.ReasoningEffort, s.nativeEffort))
+	resetEffortToAuto := s.nativeCaptured && wantEffort == "" && s.currentEffort != ""
+	resetModel := firstNonEmpty(wantModel, s.currentModel)
+	useCollabReset := resetEffortToAuto && resetModel != ""
+	var collabDevInstr any
+	if s.collabDevInstructions != nil {
+		collabDevInstr = *s.collabDevInstructions
+	}
+	return codexTurnConfigPlan{
+		wantModel:      wantModel,
+		wantEffort:     wantEffort,
+		resetModel:     resetModel,
+		collabMode:     firstNonEmpty(s.collabMode, "default"),
+		collabDevInstr: collabDevInstr,
+		useCollabReset: useCollabReset,
+		sendModel:      !useCollabReset && wantModel != "" && wantModel != s.currentModel,
+		sendEffort:     !useCollabReset && wantEffort != "" && wantEffort != s.currentEffort,
+	}
 }
 
 func (a *CodexAdapter) InterruptTurn(ctx context.Context, handle ThreadHandle, nativeTurnID string) error {
@@ -390,40 +284,7 @@ func (a *CodexAdapter) InspectThreadTurns(ctx context.Context, handle ThreadHand
 	if err != nil {
 		return nil, err
 	}
-	var resp struct {
-		Data []struct {
-			ID     string `json:"id"`
-			Status string `json:"status"`
-			Items  []struct {
-				ID       string `json:"id"`
-				Type     string `json:"type"`
-				ClientID string `json:"clientId"`
-				Phase    string `json:"phase"`
-				Text     string `json:"text"`
-			} `json:"items"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, err
-	}
-	out := make([]NativeTurnRecord, 0, len(resp.Data))
-	for _, t := range resp.Data {
-		rec := NativeTurnRecord{
-			NativeTurnID: t.ID,
-			Status:       mapCodexTurnStatus(t.Status),
-		}
-		for _, it := range t.Items {
-			rec.Items = append(rec.Items, NativeItem{
-				ItemID:   it.ID,
-				Type:     it.Type,
-				ClientID: it.ClientID,
-				Phase:    it.Phase,
-				Text:     it.Text,
-			})
-		}
-		out = append(out, rec)
-	}
-	return out, nil
+	return parseCodexInspectTurnsResponse(raw)
 }
 
 func (s *codexSession) request(ctx context.Context, method string, params any) (json.RawMessage, error) {
@@ -591,16 +452,7 @@ func (s *codexSession) readLoop() {
 }
 
 func (s *codexSession) handleMessage(raw []byte) {
-	var env struct {
-		ID     *json.RawMessage `json:"id"`
-		Method string           `json:"method"`
-		Params json.RawMessage  `json:"params"`
-		Result json.RawMessage  `json:"result"`
-		Error  *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
+	var env codexRPCEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return
 	}
@@ -731,59 +583,32 @@ func (s *codexSession) handleServerRequest(rawID json.RawMessage, method string,
 	}
 }
 
+func (s *codexSession) emitActiveEvent(ev AdapterEvent) {
+	s.mu.Lock()
+	at := s.active
+	if at != nil && at.onEvent != nil {
+		at.onEvent(ev)
+	}
+	s.mu.Unlock()
+}
+
 func (s *codexSession) handleNotification(method string, params json.RawMessage) {
 	switch method {
 	case "guardianWarning":
-		var p struct {
-			Message string `json:"message"`
-		}
-		if json.Unmarshal(params, &p) == nil && strings.TrimSpace(p.Message) != "" {
-			s.mu.Lock()
-			at := s.active
-			if at != nil && at.onEvent != nil {
-				at.onEvent(AdapterEvent{Kind: "approval_auto", Summary: truncateSummary(p.Message, 240)})
-			}
-			s.mu.Unlock()
+		if summary, ok := parseCodexGuardianWarning(params); ok {
+			s.emitActiveEvent(AdapterEvent{Kind: "approval_auto", Summary: summary})
 		}
 
 	case "item/autoApprovalReview/started":
-		s.mu.Lock()
-		at := s.active
-		if at != nil && at.onEvent != nil {
-			at.onEvent(AdapterEvent{Kind: "approval_auto", Summary: "Codex Guardian reviewing approval request..."})
-		}
-		s.mu.Unlock()
+		s.emitActiveEvent(AdapterEvent{Kind: "approval_auto", Summary: "Codex Guardian reviewing approval request..."})
 
 	case "item/autoApprovalReview/completed":
-		var p struct {
-			Review struct {
-				Status    string `json:"status"`
-				RiskLevel string `json:"riskLevel"`
-				Rationale string `json:"rationale"`
-			} `json:"review"`
-		}
-		if json.Unmarshal(params, &p) == nil {
-			msg := fmt.Sprintf("Codex Guardian review %s", firstNonEmptyStr(p.Review.Status, "completed"))
-			if p.Review.RiskLevel != "" {
-				msg += " (risk: " + p.Review.RiskLevel + ")"
-			}
-			if strings.TrimSpace(p.Review.Rationale) != "" {
-				msg += ": " + truncateSummary(p.Review.Rationale, 160)
-			}
-			s.mu.Lock()
-			at := s.active
-			if at != nil && at.onEvent != nil {
-				at.onEvent(AdapterEvent{Kind: "approval_auto", Summary: msg})
-			}
-			s.mu.Unlock()
+		if summary, ok := parseCodexAutoApprovalReview(params); ok {
+			s.emitActiveEvent(AdapterEvent{Kind: "approval_auto", Summary: summary})
 		}
 
 	case "item/agentMessage/delta":
-		var p struct {
-			TurnID string `json:"turnId"`
-			ItemID string `json:"itemId"`
-			Delta  string `json:"delta"`
-		}
+		var p codexAgentDeltaNotification
 		if json.Unmarshal(params, &p) != nil {
 			return
 		}
@@ -819,18 +644,7 @@ func (s *codexSession) handleNotification(method string, params json.RawMessage)
 		if json.Unmarshal(params, &p) != nil {
 			return
 		}
-		isAsyncQuestion := p.Item.Type == "agentMessage" && len(p.Item.Questions) > 0
-		phase := p.Item.Phase
-		if isAsyncQuestion {
-			phase = "commentary"
-		}
-		it := NativeItem{
-			ItemID:   p.Item.ID,
-			Type:     p.Item.Type,
-			ClientID: p.Item.ClientID,
-			Phase:    phase,
-			Text:     p.Item.Text,
-		}
+		it, isAsyncQuestion := buildCodexCompletedNativeItem(p.Item)
 		s.mu.Lock()
 		at := s.active
 		if at != nil && (at.turnID == "" || at.turnID == p.TurnID) {
@@ -847,15 +661,7 @@ func (s *codexSession) handleNotification(method string, params json.RawMessage)
 		}
 
 	case "turn/completed":
-		var p struct {
-			Turn struct {
-				ID     string `json:"id"`
-				Status string `json:"status"`
-				Error  *struct {
-					Message string `json:"message"`
-				} `json:"error"`
-			} `json:"turn"`
-		}
+		var p codexTurnCompletedNotification
 		if json.Unmarshal(params, &p) != nil {
 			return
 		}

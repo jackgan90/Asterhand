@@ -221,3 +221,49 @@ func TestRunCLIArgsInputMutualExclusion(t *testing.T) {
 		t.Fatalf("expected exit 2 mutual exclusion error, got err=%v out=%s", err, out.String())
 	}
 }
+
+func TestWaitCLIExplicitZeroAfterCommentarySeq(t *testing.T) {
+	optsOmitted, err := parseWaitArgs([]string{"turn_1"})
+	if err != nil || optsOmitted.AfterCommentarySeqSet {
+		t.Fatalf("expected omitted after-commentary-seq unset, got %+v err=%v", optsOmitted, err)
+	}
+	if _, raw := buildWaitPayload(optsOmitted, 30, 0); strings.Contains(string(raw), "after_commentary_seq") {
+		t.Fatalf("expected omitted flag to omit after_commentary_seq from JSON, got %s", string(raw))
+	}
+
+	optsZero, err := parseWaitArgs([]string{"turn_1", "--after-commentary-seq", "0", "--wake-on-commentary"})
+	if err != nil || !optsZero.AfterCommentarySeqSet || optsZero.AfterCommentarySeq != 0 {
+		t.Fatalf("expected explicit --after-commentary-seq 0 captured, got %+v err=%v", optsZero, err)
+	}
+	if _, raw := buildWaitPayload(optsZero, 30, 0); !strings.Contains(string(raw), `"after_commentary_seq":0`) {
+		t.Fatalf("expected explicit 0 in workers_wait JSON payload, got %s", string(raw))
+	}
+
+	if _, err := parseWaitArgs([]string{"turn_1", "turn_2", "--after-commentary-seq", "0"}); err == nil {
+		t.Fatal("expected multi-turn wait with explicit --after-commentary-seq 0 to be rejected")
+	}
+
+	// evaluateWaitStep must advance using delivered_commentary_seq (not latest_commentary_seq)
+	// so paginated commentaries are never skipped between polls.
+	optsPaginated := waitCLIOptions{TurnIDs: []string{"turn_1"}, AfterCommentarySeqSet: true, AfterCommentarySeq: 0}
+	_, seq12, _ := evaluateWaitStep(optsPaginated, Response{Data: map[string]any{
+		"turn_id":                  "turn_1",
+		"state":                    "running",
+		"latest_commentary_seq":    float64(17),
+		"delivered_commentary_seq": float64(12),
+		"commentaries_truncated":   true,
+	}}, "", "")
+	if seq12 != 12 {
+		t.Fatalf("expected nextSeq=12 from delivered_commentary_seq, got %d", seq12)
+	}
+	_, seq0, _ := evaluateWaitStep(optsPaginated, Response{Data: map[string]any{
+		"turn_id":                  "turn_1",
+		"state":                    "running",
+		"latest_commentary_seq":    float64(3),
+		"delivered_commentary_seq": float64(0),
+		"commentaries_truncated":   true,
+	}}, "", "")
+	if seq0 != 0 {
+		t.Fatalf("expected nextSeq=0 when delivered_commentary_seq is explicit 0, got %d", seq0)
+	}
+}

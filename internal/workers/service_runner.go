@@ -118,6 +118,10 @@ func (s *Service) handleTurnAdapterEvent(rt *runningTurn, w *Worker, t *Turn, ev
 	if sz > 0 {
 		rt.streamBytes += int64(sz)
 	}
+	if ev.Kind == "delta" || (ev.Kind == "progress" && (ev.Summary == "" || !rt.waitingSince.IsZero() || rt.lastProgress == ev.Summary)) {
+		s.mu.Unlock()
+		return
+	}
 	s.mu.Unlock()
 	if ev.Kind != "delta" && ev.Kind != "progress" {
 		_, _ = s.store.AppendLog(t.ID, LogEntry{
@@ -153,28 +157,69 @@ func (s *Service) handleTurnAdapterEvent(rt *runningTurn, w *Worker, t *Turn, ev
 		seq := s.recordCommentary(rt, fullText, now)
 		prog := firstNonEmptyStr(ev.Summary, truncateSummary(fullText, 160))
 		if seq > 0 || prog != "" {
-			s.updateTurnState(t.ID, func(cur *Turn) {
-				if seq > cur.LatestCommentarySeq {
-					cur.LatestCommentarySeq = seq
-				}
-				if prog != "" && cur.State != TurnWaitingApproval && cur.State != TurnWaitingInput {
-					cur.Progress = prog
-				}
-				cur.UpdatedAt = now
-			})
+			s.persistTurnCommentary(rt, t.ID, seq, prog, now)
 			s.notifyWaiters(t.ID)
 		}
 	case "progress", "command", "edit", "mcp", "search", "plan", "tool", "system", "approval_auto":
-		if ev.Summary != "" {
-			s.updateTurnState(t.ID, func(cur *Turn) {
-				if cur.State != TurnWaitingApproval && cur.State != TurnWaitingInput {
-					cur.Progress = ev.Summary
-				}
-				cur.UpdatedAt = now
-			})
+		if s.persistTurnProgress(rt, t.ID, ev.Summary, now) {
 			s.notifyWaiters(t.ID)
 		}
 	}
+}
+
+func (s *Service) persistTurnCommentary(rt *runningTurn, turnID string, seq int64, prog string, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur, err := s.store.GetTurn(turnID)
+	if err != nil || IsTurnTerminal(cur.State) || cur.State == TurnReconcile {
+		return
+	}
+	if seq > cur.LatestCommentarySeq {
+		cur.LatestCommentarySeq = seq
+	}
+	if prog != "" && cur.State != TurnWaitingApproval && cur.State != TurnWaitingInput {
+		cur.Progress = prog
+	}
+	cur.UpdatedAt = now
+	if s.store.SaveTurn(cur) == nil && rt != nil {
+		rt.lastProgress = cur.Progress
+	}
+}
+
+func (s *Service) persistTurnProgress(rt *runningTurn, turnID, summary string, now time.Time) bool {
+	if summary == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rt != nil && (!rt.waitingSince.IsZero() || rt.lastProgress == summary) {
+		return false
+	}
+	cur, err := s.store.GetTurn(turnID)
+	if err != nil {
+		return false
+	}
+	if cur.State == TurnWaitingApproval || cur.State == TurnWaitingInput || IsTurnTerminal(cur.State) || cur.State == TurnReconcile {
+		if rt != nil {
+			rt.lastProgress = cur.Progress
+		}
+		return false
+	}
+	if cur.Progress == summary {
+		if rt != nil {
+			rt.lastProgress = cur.Progress
+		}
+		return false
+	}
+	cur.Progress = summary
+	cur.UpdatedAt = now
+	if s.store.SaveTurn(cur) != nil {
+		return false
+	}
+	if rt != nil {
+		rt.lastProgress = summary
+	}
+	return true
 }
 
 func (s *Service) awaitTurnStart(rt *runningTurn, w *Worker, t *Turn, adapter Adapter, handle ThreadHandle, prompt string) (turnStartResult, bool) {

@@ -78,6 +78,7 @@ type runningTurn struct {
 	waitingSince    time.Time
 	pausedTotal     time.Duration
 	lastEventAt     time.Time
+	lastProgress    string
 	streamEvents    int64
 	streamBytes     int64
 	commentarySeq   int64
@@ -600,12 +601,19 @@ func (s *Service) SteerTurn(ctx context.Context, in SteerInput) (Turn, error) {
 		Kind:      "steer",
 		Summary:   truncateSummary("Steer: "+text, 500),
 	})
+	steerProgress := "Steer delivered: " + truncateSummary(text, 120)
+	s.mu.Lock()
 	if latest, gErr := s.store.GetTurn(turnID); gErr == nil && latest.State == TurnRunning {
-		latest.Progress = "Steer delivered: " + truncateSummary(text, 120)
+		latest.Progress = steerProgress
 		latest.UpdatedAt = now
-		_ = s.store.SaveTurn(latest)
-		t = latest
+		if s.store.SaveTurn(latest) == nil {
+			if cur, exists := s.activeTurns[turnID]; exists {
+				cur.lastProgress = steerProgress
+			}
+			t = latest
+		}
 	}
+	s.mu.Unlock()
 	s.populateTurnActivity(&t)
 	s.notifyWaiters(turnID)
 	return t, nil

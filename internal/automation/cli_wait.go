@@ -18,10 +18,11 @@ type waitCLIOptions struct {
 	Home               string
 	Caller             string
 	WorkspaceID        string
-	TimeoutSeconds     int
-	PollSeconds        int
-	AfterCommentarySeq int64
-	WakeOnCommentary   bool
+	TimeoutSeconds        int
+	PollSeconds           int
+	AfterCommentarySeq    int64
+	AfterCommentarySeqSet bool
+	WakeOnCommentary      bool
 	DisconnectGraceSec int
 	Quiet              bool
 	TurnIDs            []string
@@ -84,20 +85,27 @@ func parseWaitArgs(args []string) (waitCLIOptions, error) {
 	if *afterSeq < 0 {
 		return waitCLIOptions{}, Fail("invalid_parameters", "after-commentary-seq must be non-negative")
 	}
-	if len(turnIDs) > 1 && (*wakeComment || *afterSeq > 0) {
+	afterSeqSet := false
+	f.Visit(func(fl *flag.Flag) {
+		if fl.Name == "after-commentary-seq" {
+			afterSeqSet = true
+		}
+	})
+	if len(turnIDs) > 1 && (*wakeComment || afterSeqSet) {
 		return waitCLIOptions{}, Fail("invalid_parameters", "--wake-on-commentary and --after-commentary-seq only apply to a single turn_id")
 	}
 	return waitCLIOptions{
-		Home:               *home,
-		Caller:             strings.TrimSpace(*caller),
-		WorkspaceID:        strings.TrimSpace(*wsID),
-		TimeoutSeconds:     *timeoutSec,
-		PollSeconds:        *pollSec,
-		AfterCommentarySeq: *afterSeq,
-		WakeOnCommentary:   *wakeComment,
-		DisconnectGraceSec: *graceSec,
-		Quiet:              *quiet,
-		TurnIDs:            turnIDs,
+		Home:                  *home,
+		Caller:                strings.TrimSpace(*caller),
+		WorkspaceID:           strings.TrimSpace(*wsID),
+		TimeoutSeconds:        *timeoutSec,
+		PollSeconds:           *pollSec,
+		AfterCommentarySeq:    *afterSeq,
+		AfterCommentarySeqSet: afterSeqSet,
+		WakeOnCommentary:      *wakeComment,
+		DisconnectGraceSec:    *graceSec,
+		Quiet:                 *quiet,
+		TurnIDs:               turnIDs,
 	}, nil
 }
 
@@ -244,7 +252,7 @@ func buildWaitPayload(opts waitCLIOptions, sliceSec int, commentarySeq int64) (s
 		if opts.WorkspaceID != "" {
 			payload["workspace_id"] = opts.WorkspaceID
 		}
-		if commentarySeq > 0 {
+		if opts.AfterCommentarySeqSet || commentarySeq > 0 {
 			payload["after_commentary_seq"] = commentarySeq
 		}
 		if opts.WakeOnCommentary {
@@ -302,7 +310,11 @@ func evaluateWaitStep(opts waitCLIOptions, resp Response, prevState, prevProgres
 
 	state, _ := dataMap["state"].(string)
 	progress, _ := dataMap["progress"].(string)
-	nextSeq = readInt64Value(dataMap["latest_commentary_seq"])
+	if delivered, ok := dataMap["delivered_commentary_seq"]; ok && delivered != nil {
+		nextSeq = readInt64Value(delivered)
+	} else {
+		nextSeq = readInt64Value(dataMap["latest_commentary_seq"])
+	}
 
 	if isWaitWakeTerminalState(state) {
 		return true, nextSeq, ""

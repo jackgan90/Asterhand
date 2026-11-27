@@ -275,7 +275,9 @@ func (s *Service) syncTurnInteractionStateLocked(turnID string, rt *runningTurn,
 				cur.Progress = defaultInteractionProgress(head)
 			}
 			cur.UpdatedAt = now
-			_ = s.store.SaveTurn(cur)
+			if s.store.SaveTurn(cur) == nil && rt != nil {
+				rt.lastProgress = cur.Progress
+			}
 		}
 		return
 	}
@@ -296,7 +298,9 @@ func (s *Service) syncTurnInteractionStateLocked(turnID string, rt *runningTurn,
 			}
 		}
 		cur.UpdatedAt = now
-		_ = s.store.SaveTurn(cur)
+		if s.store.SaveTurn(cur) == nil && rt != nil {
+			rt.lastProgress = cur.Progress
+		}
 	}
 }
 

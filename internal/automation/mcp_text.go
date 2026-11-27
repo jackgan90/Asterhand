@@ -88,7 +88,7 @@ func formatMCPText(opName string, response Response) string {
 }
 
 func compactOverBudgetData(dataMap map[string]any) map[string]any {
-	keys := []string{"turn_id", "worker_id", "state", "truncated", "result_bytes", "next_cursor", "triggered_turn_id", "error_code"}
+	keys := []string{"turn_id", "worker_id", "state", "truncated", "result_bytes", "next_cursor", "triggered_turn_id", "error_code", "latest_commentary_seq", "delivered_commentary_seq", "commentaries_truncated"}
 	compact := map[string]any{}
 	for _, k := range keys {
 		if v, ok := dataMap[k]; ok && v != nil && v != "" {

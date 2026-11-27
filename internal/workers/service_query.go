@@ -2,8 +2,10 @@ package workers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -134,7 +136,7 @@ func (s *Service) archiveTurnCommentaries(rt *runningTurn, finalAnswer string) {
 	s.turnCommentaries[rt.turnID] = cp
 }
 
-func (s *Service) selectCommentaries(turnID string, afterSeq int64, defaultTail int) ([]CommentaryEntry, int64) {
+func (s *Service) selectCommentaries(turnID string, afterSeq int64, hasAfterSeq bool, defaultTail int) ([]CommentaryEntry, int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var src []CommentaryEntry
@@ -147,7 +149,7 @@ func (s *Service) selectCommentaries(turnID string, afterSeq int64, defaultTail 
 		return nil, 0
 	}
 	latest := src[len(src)-1].Seq
-	if afterSeq > 0 {
+	if hasAfterSeq || afterSeq > 0 {
 		var out []CommentaryEntry
 		for _, e := range src {
 			if e.Seq > afterSeq {
@@ -176,7 +178,7 @@ func shouldWakeCallerWithOpts(t Turn, opts WaitOptions) bool {
 	if shouldWakeCaller(t) {
 		return true
 	}
-	if opts.WakeOnCommentary && t.State == TurnRunning && t.LatestCommentarySeq > opts.AfterCommentarySeq {
+	if opts.WakeOnCommentary && t.LatestCommentarySeq > opts.AfterCommentarySeq {
 		return true
 	}
 	return false
@@ -200,7 +202,7 @@ func (s *Service) WaitWithOptions(ctx context.Context, turnID, expectedWorkspace
 			}
 		}
 		preview, trunc := s.readPreview(t)
-		comments, latestSeq := s.selectCommentaries(t.ID, opts.AfterCommentarySeq, 2)
+		comments, latestSeq := s.selectCommentaries(t.ID, opts.AfterCommentarySeq, opts.HasAfterCommentarySeq, 2)
 		if latestSeq > t.LatestCommentarySeq {
 			t.LatestCommentarySeq = latestSeq
 		}
@@ -265,8 +267,418 @@ func (s *Service) readPreview(t Turn) (string, bool) {
 	return s.readPreviewCapped(t, 24<<10)
 }
 
+const (
+	waitAnyPerItemPreviewBytes = 4 << 10
+	// Keep serialized workers_wait_any data comfortably inside both
+	// automation.MaxResponse (64 KiB) and the MCP text projection cap (48 KiB)
+	// after outer response / next_step wrappers.
+	waitAnyMaxPayloadJSONBytes = 46 << 10
+)
+
+type waitAnyEnvelope struct {
+	TriggeredTurnID string        `json:"triggered_turn_id,omitempty"`
+	Items           []WaitAnyItem `json:"items"`
+}
+
+type waitAnyCandidate struct {
+	fullText string
+	comments []CommentaryEntry
+}
+
+type waitAnySlot struct {
+	idx       int
+	isPreview bool
+	baseSize  int
+	fullCap   string
+	fullItem  WaitAnyItem
+	fullNeed  int
+}
+
+func (s *Service) readCompletedResultText(t Turn) string {
+	if !t.AnswerAvailable || t.State != TurnCompleted {
+		return ""
+	}
+	full, ok, err := s.store.ReadResultText(t.ID)
+	if err != nil || !ok {
+		return ""
+	}
+	return full
+}
+
+func cloneVCSSnapshot(v *VCSSnapshot) *VCSSnapshot {
+	if v == nil {
+		return nil
+	}
+	cp := *v
+	if len(v.ChangedFiles) > 0 {
+		cp.ChangedFiles = append([]string(nil), v.ChangedFiles...)
+	}
+	return &cp
+}
+
+func cloneInteractionView(v *InteractionView) *InteractionView {
+	if v == nil {
+		return nil
+	}
+	cp := *v
+	if len(v.Paths) > 0 {
+		cp.Paths = append([]string(nil), v.Paths...)
+	}
+	if len(v.Questions) > 0 {
+		qs := make([]InteractionQuestion, len(v.Questions))
+		for i, q := range v.Questions {
+			if len(q.Options) > 0 {
+				q.Options = append([]InteractionOption(nil), q.Options...)
+			}
+			qs[i] = q
+		}
+		cp.Questions = qs
+	}
+	if v.EscalateAt != nil {
+		t := *v.EscalateAt
+		cp.EscalateAt = &t
+	}
+	return &cp
+}
+
+func int64Ptr(v int64) *int64 {
+	return &v
+}
+
+func interactionInspectHint(workerID, turnID, kind string) string {
+	if kind == InteractionInput {
+		return fmt.Sprintf("Full input details omitted to fit batch budget; call workers_wait(turn_id=%q, wait_seconds=1) or workers_get(worker_id=%q) to inspect all questions before replying.", turnID, workerID)
+	}
+	return fmt.Sprintf("Full approval details omitted to fit batch budget; call workers_get(worker_id=%q) or workers_wait(turn_id=%q, wait_seconds=1) to inspect full command/paths.", workerID, turnID)
+}
+
+func compactInteractionDetails(pi *InteractionView, workerID, turnID string, dropQuestions bool) {
+	if pi == nil {
+		return
+	}
+	changed := false
+	if pi.Command != "" {
+		pi.Command = ""
+		changed = true
+	}
+	if len(pi.Paths) > 0 {
+		pi.Paths = nil
+		changed = true
+	}
+	if s := truncateSummary(pi.Summary, 200); s != pi.Summary {
+		pi.Summary = s
+		changed = true
+	}
+	if r := truncateSummary(pi.Reason, 200); r != pi.Reason {
+		pi.Reason = r
+		changed = true
+	}
+	if n := truncateSummary(pi.EscalationNote, 200); n != pi.EscalationNote {
+		pi.EscalationNote = n
+		changed = true
+	}
+	if dropQuestions && len(pi.Questions) > 0 {
+		pi.Questions = nil
+		changed = true
+	}
+	if changed {
+		pi.DetailsTruncated = true
+		pi.InspectHint = interactionInspectHint(workerID, turnID, pi.Kind)
+	}
+}
+
+func waitAnyJSONSize(v any) int {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return 0
+	}
+	return len(b)
+}
+
+func applyWaitAnyPreview(base WaitAnyItem, fullText, preview string) WaitAnyItem {
+	out := base
+	out.AnswerPreview = preview
+	if len(preview) < len(fullText) {
+		out.Truncated = true
+		out.NextCursor = strconv.Itoa(len(preview))
+	} else {
+		out.Truncated = false
+		out.NextCursor = ""
+	}
+	return out
+}
+
+func utf8CursorBoundaries(prefix, fullText string) []int {
+	ends := make([]int, 0, len(prefix))
+	for pos := 0; pos < len(prefix); {
+		_, size := utf8.DecodeRuneInString(prefix[pos:])
+		if size <= 0 {
+			break
+		}
+		pos += size
+		if pos == len(fullText) || (pos < len(fullText) && utf8.RuneStart(fullText[pos])) {
+			ends = append(ends, pos)
+		}
+	}
+	return ends
+}
+
+func compactWaitAnyBaseItems(triggered string, items []WaitAnyItem, maxBytes int) int {
+	size := func() int {
+		return waitAnyJSONSize(waitAnyEnvelope{TriggeredTurnID: triggered, Items: items})
+	}
+	used := size()
+	if used <= maxBytes {
+		return used
+	}
+	apply := func(includeTriggered bool, fn func(*WaitAnyItem)) bool {
+		for i := range items {
+			if !includeTriggered && items[i].TurnID == triggered {
+				continue
+			}
+			fn(&items[i])
+		}
+		used = size()
+		return used <= maxBytes
+	}
+	if apply(false, func(it *WaitAnyItem) {
+		if it.AfterVCS != nil {
+			it.AfterVCS.ChangedFiles = nil
+		}
+	}) || apply(true, func(it *WaitAnyItem) {
+		if it.AfterVCS != nil {
+			it.AfterVCS.ChangedFiles = nil
+		}
+	}) || apply(false, func(it *WaitAnyItem) { it.AfterVCS = nil }) ||
+		apply(true, func(it *WaitAnyItem) { it.AfterVCS = nil }) ||
+		apply(true, func(it *WaitAnyItem) {
+			it.ErrorMessage = truncateSummary(it.ErrorMessage, 256)
+			it.Progress = truncateSummary(it.Progress, 120)
+		}) {
+		return used
+	}
+	// Compact heavy PendingInteraction payloads while preserving turn state,
+	// request_id, kind, handler flags (visible_to_human/claimed_by_caller),
+	// bounded summary, and single-turn inspection guidance.
+	if apply(false, func(it *WaitAnyItem) {
+		if it.PendingInteraction != nil && it.PendingInteraction.Kind == InteractionApproval {
+			compactInteractionDetails(it.PendingInteraction, it.WorkerID, it.TurnID, true)
+		}
+	}) || apply(false, func(it *WaitAnyItem) {
+		if it.PendingInteraction != nil && it.PendingInteraction.Kind != InteractionApproval {
+			compactInteractionDetails(it.PendingInteraction, it.WorkerID, it.TurnID, false)
+		}
+	}) || apply(true, func(it *WaitAnyItem) {
+		if it.PendingInteraction != nil {
+			compactInteractionDetails(it.PendingInteraction, it.WorkerID, it.TurnID, it.PendingInteraction.Kind == InteractionApproval)
+		}
+	}) || apply(false, func(it *WaitAnyItem) {
+		compactInteractionDetails(it.PendingInteraction, it.WorkerID, it.TurnID, true)
+	}) || apply(true, func(it *WaitAnyItem) {
+		compactInteractionDetails(it.PendingInteraction, it.WorkerID, it.TurnID, true)
+	}) {
+		return used
+	}
+	if apply(false, func(it *WaitAnyItem) {
+		it.ErrorMessage = ""
+		it.Progress = ""
+	}) {
+		return used
+	}
+	apply(true, func(it *WaitAnyItem) {
+		if it.PendingInteraction != nil {
+			it.PendingInteraction.WorkspaceRoot = ""
+			it.PendingInteraction.WorkerAlias = ""
+		}
+	})
+	return used
+}
+
+func fitWaitAnyPreviewSlot(base WaitAnyItem, fullText, fullCap string, baseSize, alloc int) (WaitAnyItem, int) {
+	if alloc <= 0 || fullCap == "" {
+		return base, 0
+	}
+	ends := utf8CursorBoundaries(fullCap, fullText)
+	if len(fullCap) == len(fullText) && len(ends) > 0 && ends[len(ends)-1] == len(fullText) {
+		ends = ends[:len(ends)-1]
+	}
+	if len(ends) == 0 {
+		return base, 0
+	}
+	firstTooLarge := sort.Search(len(ends), func(i int) bool {
+		cand := applyWaitAnyPreview(base, fullText, fullCap[:ends[i]])
+		return waitAnyJSONSize(cand)-baseSize > alloc
+	})
+	if firstTooLarge == 0 {
+		return base, 0
+	}
+	chosen := applyWaitAnyPreview(base, fullText, fullCap[:ends[firstTooLarge-1]])
+	return chosen, waitAnyJSONSize(chosen) - baseSize
+}
+
+func fitWaitAnyCommentariesSlot(base WaitAnyItem, comments []CommentaryEntry, baseSize, alloc int) (WaitAnyItem, int) {
+	if alloc <= 0 || len(comments) == 0 {
+		return base, 0
+	}
+	for start := 0; start < len(comments); start++ {
+		cand := base
+		cand.Commentaries = comments[start:]
+		if start == 0 {
+			cand.CommentariesTruncated = false
+			cand.DeliveredCommentarySeq = int64Ptr(comments[len(comments)-1].Seq)
+		}
+		if delta := waitAnyJSONSize(cand) - baseSize; delta <= alloc {
+			return cand, delta
+		}
+	}
+	latest := comments[len(comments)-1]
+	ends := utf8CursorBoundaries(latest.Text, latest.Text)
+	if len(ends) > 0 && ends[len(ends)-1] == len(latest.Text) {
+		ends = ends[:len(ends)-1]
+	}
+	if len(ends) == 0 {
+		return base, 0
+	}
+	firstTooLarge := sort.Search(len(ends), func(i int) bool {
+		entry := latest
+		entry.Text = latest.Text[:ends[i]]
+		entry.Truncated = true
+		cand := base
+		cand.Commentaries = []CommentaryEntry{entry}
+		return waitAnyJSONSize(cand)-baseSize > alloc
+	})
+	if firstTooLarge == 0 {
+		return base, 0
+	}
+	entry := latest
+	entry.Text = latest.Text[:ends[firstTooLarge-1]]
+	entry.Truncated = true
+	cand := base
+	cand.Commentaries = []CommentaryEntry{entry}
+	return cand, waitAnyJSONSize(cand) - baseSize
+}
+
+func buildWaitAnyTierSlots(items []WaitAnyItem, candidates []waitAnyCandidate, primary bool) []waitAnySlot {
+	var slots []waitAnySlot
+	for i := range items {
+		if primary {
+			if len(candidates[i].fullText) > 0 {
+				fullCap := candidates[i].fullText[:clampUTF8Bytes([]byte(candidates[i].fullText), waitAnyPerItemPreviewBytes)]
+				baseSize := waitAnyJSONSize(items[i])
+				fullItem := applyWaitAnyPreview(items[i], candidates[i].fullText, fullCap)
+				slots = append(slots, waitAnySlot{
+					idx:       i,
+					isPreview: true,
+					baseSize:  baseSize,
+					fullCap:   fullCap,
+					fullItem:  fullItem,
+					fullNeed:  waitAnyJSONSize(fullItem) - baseSize,
+				})
+			} else if !IsTurnTerminal(items[i].State) && len(candidates[i].comments) > 0 {
+				baseSize := waitAnyJSONSize(items[i])
+				fullItem := items[i]
+				fullItem.Commentaries = candidates[i].comments
+				fullItem.CommentariesTruncated = false
+				fullItem.DeliveredCommentarySeq = int64Ptr(candidates[i].comments[len(candidates[i].comments)-1].Seq)
+				slots = append(slots, waitAnySlot{
+					idx:      i,
+					baseSize: baseSize,
+					fullItem: fullItem,
+					fullNeed: waitAnyJSONSize(fullItem) - baseSize,
+				})
+			}
+		} else if IsTurnTerminal(items[i].State) && len(candidates[i].comments) > 0 {
+			baseSize := waitAnyJSONSize(items[i])
+			fullItem := items[i]
+			fullItem.Commentaries = candidates[i].comments
+			fullItem.CommentariesTruncated = false
+			fullItem.DeliveredCommentarySeq = int64Ptr(candidates[i].comments[len(candidates[i].comments)-1].Seq)
+			slots = append(slots, waitAnySlot{
+				idx:      i,
+				baseSize: baseSize,
+				fullItem: fullItem,
+				fullNeed: waitAnyJSONSize(fullItem) - baseSize,
+			})
+		}
+	}
+	return slots
+}
+
+func allocateWaitAnyTier(triggered string, items []WaitAnyItem, candidates []waitAnyCandidate, rem int, primary bool) int {
+	pending := buildWaitAnyTierSlots(items, candidates, primary)
+	for len(pending) > 0 {
+		share := 0
+		if rem > 0 {
+			share = rem / len(pending)
+		}
+		progressed := false
+		next := pending[:0]
+		for _, sl := range pending {
+			if sl.fullNeed <= share {
+				items[sl.idx] = sl.fullItem
+				rem -= sl.fullNeed
+				progressed = true
+			} else {
+				next = append(next, sl)
+			}
+		}
+		pending = next
+		if !progressed {
+			break
+		}
+	}
+	if triggered != "" && len(pending) > 1 {
+		for i := 1; i < len(pending); i++ {
+			if items[pending[i].idx].TurnID == triggered {
+				trigSlot := pending[i]
+				copy(pending[1:i+1], pending[0:i])
+				pending[0] = trigSlot
+				break
+			}
+		}
+	}
+	for pos, sl := range pending {
+		if rem <= 0 {
+			break
+		}
+		alloc := rem / (len(pending) - pos)
+		if sl.fullNeed <= alloc {
+			items[sl.idx] = sl.fullItem
+			rem -= sl.fullNeed
+			continue
+		}
+		var updated WaitAnyItem
+		var delta int
+		if sl.isPreview {
+			updated, delta = fitWaitAnyPreviewSlot(items[sl.idx], candidates[sl.idx].fullText, sl.fullCap, sl.baseSize, alloc)
+		} else {
+			updated, delta = fitWaitAnyCommentariesSlot(items[sl.idx], candidates[sl.idx].comments, sl.baseSize, alloc)
+		}
+		if delta <= alloc {
+			items[sl.idx] = updated
+			rem -= delta
+		}
+	}
+	return rem
+}
+
+func fitWaitAnyBudget(triggered string, items []WaitAnyItem, candidates []waitAnyCandidate, maxBytes int) {
+	for i := range items {
+		if len(candidates[i].comments) > 0 && len(items[i].Commentaries) == 0 {
+			items[i].CommentariesTruncated = true
+			items[i].DeliveredCommentarySeq = int64Ptr(candidates[i].comments[0].Seq - 1)
+		}
+	}
+	used := compactWaitAnyBaseItems(triggered, items, maxBytes)
+	rem := allocateWaitAnyTier(triggered, items, candidates, maxBytes-used, true)
+	if rem > 0 {
+		allocateWaitAnyTier(triggered, items, candidates, rem, false)
+	}
+}
+
 func (s *Service) buildWaitAnyItems(turnIDs []string, expectedWorkspaceID string) ([]WaitAnyItem, string, error) {
 	items := make([]WaitAnyItem, 0, len(turnIDs))
+	candidates := make([]waitAnyCandidate, 0, len(turnIDs))
 	triggered := ""
 	for _, id := range turnIDs {
 		t, err := s.GetTurn(id, expectedWorkspaceID)
@@ -282,14 +694,15 @@ func (s *Service) buildWaitAnyItems(turnIDs []string, expectedWorkspaceID string
 				t = refreshed
 			}
 		}
-		preview, trunc := s.readPreviewCapped(t, 4<<10)
-		nextCursor := ""
-		if trunc {
-			nextCursor = strconv.Itoa(len(preview))
-		}
-		comments, latestSeq := s.selectCommentaries(t.ID, 0, 2)
+		fullText := s.readCompletedResultText(t)
+		comments, latestSeq := s.selectCommentaries(t.ID, 0, false, 2)
 		if latestSeq > t.LatestCommentarySeq {
 			t.LatestCommentarySeq = latestSeq
+		}
+		trunc := len(fullText) > 0
+		nextCursor := ""
+		if trunc {
+			nextCursor = "0"
 		}
 		items = append(items, WaitAnyItem{
 			TurnID:              t.ID,
@@ -300,7 +713,6 @@ func (s *Service) buildWaitAnyItems(turnIDs []string, expectedWorkspaceID string
 			Progress:            t.Progress,
 			AnswerAvailable:     t.AnswerAvailable,
 			AnswerSource:        t.AnswerSource,
-			AnswerPreview:       preview,
 			Truncated:           trunc,
 			ResultBytes:         t.ResultBytes,
 			NextCursor:          nextCursor,
@@ -310,12 +722,16 @@ func (s *Service) buildWaitAnyItems(turnIDs []string, expectedWorkspaceID string
 			StreamBytes:         t.StreamBytes,
 			ErrorCode:           t.ErrorCode,
 			ErrorMessage:        t.ErrorMessage,
-			AfterVCS:            t.AfterVCS,
-			PendingInteraction:  t.PendingInteraction,
+			AfterVCS:            cloneVCSSnapshot(t.AfterVCS),
+			PendingInteraction:  cloneInteractionView(t.PendingInteraction),
 			LatestCommentarySeq: t.LatestCommentarySeq,
-			Commentaries:        comments,
+		})
+		candidates = append(candidates, waitAnyCandidate{
+			fullText: fullText,
+			comments: comments,
 		})
 	}
+	fitWaitAnyBudget(triggered, items, candidates, waitAnyMaxPayloadJSONBytes)
 	return items, triggered, nil
 }
 

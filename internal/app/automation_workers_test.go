@@ -590,7 +590,7 @@ func TestM2HarnessesDiscoveryOpsAndWorkspaceWritePolicy(t *testing.T) {
 			t.Fatalf("expected range invalid_parameters for defer_seconds=%d, got %+v", badDef, rr.Error)
 		}
 	}
-	if rNeg := testAutomationCall(a, tok, "workers_wait", "", workerWaitInput{TurnID: "turn_missing", AfterCommentarySeq: -1}); rNeg.Error == nil || rNeg.Error.Code != "invalid_parameters" {
+	if rNeg := testAutomationCall(a, tok, "workers_wait", "", workerWaitInput{TurnID: "turn_missing", AfterCommentarySeq: automation.Int64(-1)}); rNeg.Error == nil || rNeg.Error.Code != "invalid_parameters" {
 		t.Fatalf("expected invalid_parameters for negative after_commentary_seq, got %+v", rNeg.Error)
 	}
 	opSteer := testAutomationCall(a, tok, "operations_new_id", "", map[string]any{"operation": "workers_steer"}).Data.(map[string]string)["operation_id"]

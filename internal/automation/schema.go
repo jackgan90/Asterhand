@@ -43,6 +43,35 @@ func (o *OptionalInt) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// OptionalInt64 distinguishes an omitted JSON 64-bit integer from an explicit 0
+// or negative value while still presenting a clean {"type":"integer"} schema.
+type OptionalInt64 struct {
+	Set   bool
+	Value int64
+}
+
+func Int64(v int64) OptionalInt64 { return OptionalInt64{Set: true, Value: v} }
+
+func (o OptionalInt64) IsZero() bool { return !o.Set }
+
+func (o OptionalInt64) MarshalJSON() ([]byte, error) {
+	return json.Marshal(o.Value)
+}
+
+func (o *OptionalInt64) UnmarshalJSON(b []byte) error {
+	trimmed := bytes.TrimSpace(b)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return Fail("invalid_parameters", "Value cannot be null")
+	}
+	var n int64
+	if err := json.Unmarshal(trimmed, &n); err != nil {
+		return Fail("invalid_parameters", "Expected an integer")
+	}
+	o.Set = true
+	o.Value = n
+	return nil
+}
+
 // Decode rejects unknown fields, trailing JSON, duplicate keys, invalid Unicode
 // and missing required fields, identically for CLI, MCP and the local transport.
 func Decode[T any](raw json.RawMessage) (T, error) {
@@ -83,7 +112,7 @@ func requiredFields(value any, typ reflect.Type, field string) error {
 	if value == nil {
 		return &Error{Code: "invalid_parameters", Message: "Value cannot be null", Field: field}
 	}
-	if typ == reflect.TypeFor[OptionalInt]() {
+	if typ == reflect.TypeFor[OptionalInt]() || typ == reflect.TypeFor[OptionalInt64]() {
 		return nil
 	}
 	if typ.Kind() == reflect.Struct {
@@ -146,7 +175,7 @@ func typeSchema(typ reflect.Type) map[string]any {
 	if typ == reflect.TypeFor[localcommands.NotificationSetting]() {
 		return map[string]any{"type": "boolean"}
 	}
-	if typ == reflect.TypeFor[OptionalInt]() {
+	if typ == reflect.TypeFor[OptionalInt]() || typ == reflect.TypeFor[OptionalInt64]() {
 		return map[string]any{"type": "integer"}
 	}
 	if typ == reflect.TypeFor[[]byte]() {

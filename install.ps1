@@ -580,6 +580,23 @@ function Exit-InstallActivation($Held) {
     foreach ($mutex in $Held.mutexes) { $mutex.ReleaseMutex(); $mutex.Dispose() }
 }
 
+function Publish-InstallDirectory([string]$Source, [string]$Destination) {
+    $delays = @(100, 200, 400, 800)
+    for ($attempt = 0; ; $attempt++) {
+        try {
+            # Move-Item can fall back to moving files through the runtime junction.
+            [IO.Directory]::Move($Source, $Destination)
+            return
+        } catch {
+            $code = $_.Exception.GetBaseException().HResult
+            # Windows may report access denied when a descendant has an open handle.
+            if ($attempt -ge $delays.Count -or $code -notin @(0x80070005, 0x80070020, 0x80070021)) { throw }
+            Write-Host ("Retrying installation directory rename in {0} ms (0x{1:X8}): {2}" -f $delays[$attempt], $code, $Destination)
+            Start-Sleep -Milliseconds $delays[$attempt]
+        }
+    }
+}
+
 function Publish-InstallFile([string]$Source, [string]$Destination) {
     $temporary = $Destination + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
     try {
@@ -804,7 +821,7 @@ $staging = Assert-ChildPath (Join-Path $InstallDir ('.staging-' + [guid]::NewGui
         if ((& $candidate version) -ne $Version -or $LASTEXITCODE -ne 0) { throw 'Asterhand version check failed.' }
         & $candidate bundle-check --directory $staging
         if ($LASTEXITCODE -ne 0) { throw 'Bundled dependency check failed.' }
-        Move-Item -LiteralPath $staging -Destination $versionDir
+        Publish-InstallDirectory $staging $versionDir
     }
     if ($LocalBuildPath) { Assert-LocalVersion $versionDir $local }
     $candidate = Join-Path $versionDir 'asterhand.exe'
@@ -853,13 +870,18 @@ $staging = Assert-ChildPath (Join-Path $InstallDir ('.staging-' + [guid]::NewGui
 } finally {
     Exit-InstallActivation $activation
     if ($null -ne $installationGuard) { $installationGuard.Dispose() }
-    if ($staging -and (Test-Path -LiteralPath $staging)) {
-        $safeStaging = Assert-ChildPath $staging $InstallDir
-        if ((Split-Path -Leaf $safeStaging) -notlike '.staging-*') { throw 'Refusing unexpected cleanup target.' }
-        $runtimeLink = Get-Item -LiteralPath (Join-Path $safeStaging 'runtime') -Force -ErrorAction SilentlyContinue
-        if ($null -ne $runtimeLink -and ($runtimeLink.Attributes -band [IO.FileAttributes]::ReparsePoint)) { [IO.Directory]::Delete($runtimeLink.FullName) }
-        Remove-Item -LiteralPath $safeStaging -Recurse -Force
-    }
+    try {
+        if ($staging -and (Test-Path -LiteralPath $staging)) {
+            $safeStaging = Assert-ChildPath $staging $InstallDir
+            if ((Split-Path -Leaf $safeStaging) -notlike '.staging-*' -or
+                ([IO.File]::GetAttributes($safeStaging) -band [IO.FileAttributes]::ReparsePoint)) { throw 'Refusing unexpected cleanup target.' }
+            $runtimePath = Join-Path $safeStaging 'runtime'
+            try { $runtimeAttributes = [IO.File]::GetAttributes($runtimePath) }
+            catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] { $runtimeAttributes = 0 }
+            if ($runtimeAttributes -band [IO.FileAttributes]::ReparsePoint) { [IO.Directory]::Delete($runtimePath) }
+            Remove-Item -LiteralPath $safeStaging -Recurse -Force
+        }
+    } catch { Write-Warning "Could not clean installation staging directory '$staging': $($_.Exception.Message)" -WarningAction Continue }
 }
 if ($StartAfterInstall) {
     Write-Host 'Starting the installed node and waiting for its health check.'

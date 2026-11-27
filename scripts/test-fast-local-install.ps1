@@ -22,11 +22,34 @@ function Write-Text([string]$Path,[string]$Text='fixture') {
 $tokens=$null; $parseErrors=$null
 $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'install.ps1'),[ref]$tokens,[ref]$parseErrors)
 Assert ($parseErrors.Count -eq 0) 'Installer syntax failed.'
-foreach ($name in @('Initialize-InstallNative','Assert-ChildPath','Assert-LocalInstallFile','Assert-LocalInstallFiles','Assert-LocalApplicationInventory','Read-LocalInstallCandidate','Assert-LocalVersion')) {
+foreach ($name in @('Initialize-InstallNative','Assert-ChildPath','Publish-InstallDirectory','Assert-LocalInstallFile','Assert-LocalInstallFiles','Assert-LocalApplicationInventory','Read-LocalInstallCandidate','Assert-LocalVersion')) {
     $definition = $ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true)
     . ([scriptblock]::Create($definition.Extent.Text))
 }
 try {
+    $staging = Join-Path $OutputDirectory 'publish/staging'
+    $published = Join-Path $OutputDirectory 'publish/version'
+    $sharedRuntime = Join-Path $OutputDirectory 'publish/shared-runtime'
+    $sharedReceipt = Join-Path $sharedRuntime 'runtime-receipt.json'
+    $heldFile = Join-Path $staging 'application.exe'
+    Write-Text $sharedReceipt 'shared runtime fixture'
+    Write-Text $heldFile
+    New-Item -ItemType Junction -Path (Join-Path $staging 'runtime') -Target $sharedRuntime | Out-Null
+    $handle = [IO.File]::Open($heldFile, 'Open', 'Read', 'Read')
+    try {
+        $renameFailure = $null
+        try { Publish-InstallDirectory $staging $published }
+        catch { $renameFailure = $_.Exception.GetBaseException() }
+        Assert ($null -ne $renameFailure -and $renameFailure.HResult -in @(0x80070005, 0x80070020, 0x80070021)) 'Publishing with an open descendant must report the original rename error.'
+        Assert (-not (Test-Path -LiteralPath $published)) 'Failed rename left a partially published version.'
+        Assert (([IO.File]::ReadAllText($sharedReceipt)) -eq 'shared runtime fixture') 'Failed publish modified the shared runtime.'
+    } finally { $handle.Dispose() }
+    Publish-InstallDirectory $staging $published
+    $publishedRuntime = Get-Item -LiteralPath (Join-Path $published 'runtime') -Force
+    Assert ($publishedRuntime.LinkType -eq 'Junction' -and $publishedRuntime.Target -eq $sharedRuntime) 'Publishing after release did not preserve the runtime junction.'
+    Assert (([IO.File]::ReadAllText($sharedReceipt)) -eq 'shared runtime fixture') 'Publishing moved shared runtime files.'
+    $checks.Add('contended-publish-preserves-shared-runtime-and-junction')
+
     $sourceRoot = Join-Path $OutputDirectory 'source'
     foreach ($directory in @('cmd','internal','web','plugins','packaging','scripts','tests')) { [IO.Directory]::CreateDirectory((Join-Path $sourceRoot $directory)) | Out-Null }
     foreach ($path in @('go.mod','go.sum','install.ps1','install.sh','install-local.cmd','LICENSE','docs/installation/quickstart.md','internal/prompt/default-chat.txt','web/app.js','cmd/main.go','plugins/tool.js')) { Write-Text (Join-Path $sourceRoot $path) }

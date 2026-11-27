@@ -124,7 +124,22 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Cannot build the executable fixture.' }
     $report.go = (& $Go version)
     Add-FixtureResource $executable
-    & (Join-Path $PSScriptRoot 'set-executable-icon.ps1') -Executable $executable -Icon (Join-Path $assets 'application.ico')
+    $embedIcon = Join-Path $PSScriptRoot 'set-executable-icon.ps1'
+    $icon = Join-Path $assets 'application.ico'
+    $unmodified = (Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash
+    $handle = [IO.File]::Open($executable, 'Open', 'Read', 'Read')
+    try {
+        $replaceFailure = $null
+        try { & $embedIcon -Executable $executable -Icon $icon }
+        catch { $replaceFailure = $_.Exception }
+        if ($null -eq $replaceFailure -or $replaceFailure.GetBaseException().HResult -ne 0x80070020 -or
+            $replaceFailure.Message -notlike '*Cannot replace executable*0x80070020*' -or
+            -not $replaceFailure.Message.Contains($executable)) { throw 'Expected a replacement sharing error with the executable path.' }
+        if ((Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash -ne $unmodified) { throw 'The failed replacement changed the executable.' }
+        if (Get-ChildItem -LiteralPath $OutputDirectory -Filter '.asterhand-icon-*.tmp' -Force) { throw 'The failed replacement left a temporary icon file.' }
+    } finally { $handle.Dispose() }
+    $report.checks += @{name='replacement-sharing-violation-preserves-executable';status='passed'}
+    & $embedIcon -Executable $executable -Icon $icon
     $group = [Asterhand.Build.IconResources]::Read($executable, 14, 1)
     if ([BitConverter]::ToUInt16($group, 4) -ne $application.Count) { throw 'PE icon group frame count differs.' }
     for ($i = 0; $i -lt $application.Count; $i++) {

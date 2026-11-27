@@ -15,6 +15,7 @@ using System.IO;
 using System.ComponentModel;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace Asterhand.Build {
     public static class IconResources {
@@ -159,9 +160,30 @@ namespace Asterhand.Build {
                 UpdateCopy(working, frames, group);
                 Verify(working, frames, group);
                 // Replacement occurs only after the complete resource transaction and readback pass.
-                File.Replace(working, executable, null);
-            } finally {
-                if (File.Exists(working)) File.Delete(working);
+                ReplaceWithRetry(working, executable);
+            } catch {
+                try { File.Delete(working); }
+                catch (Exception cleanup) {
+                    Console.Error.WriteLine("Could not delete temporary icon file '{0}': {1}", working, cleanup.Message);
+                }
+                throw;
+            }
+        }
+
+        private static void ReplaceWithRetry(string working, string executable) {
+            int[] delays = { 100, 200, 400, 800 };
+            for (int attempt = 0; ; attempt++) {
+                try {
+                    File.Replace(working, executable, null);
+                    return;
+                } catch (IOException failure) {
+                    if (failure.HResult != unchecked((int)0x80070020) &&
+                        failure.HResult != unchecked((int)0x80070021)) throw;
+                    if (attempt == delays.Length)
+                        throw new IOException(String.Format("Cannot replace executable '{0}' while embedding its icon (0x{1:X8}): {2}",
+                            executable, failure.HResult, failure.Message), failure);
+                    Thread.Sleep(delays[attempt]);
+                }
             }
         }
 

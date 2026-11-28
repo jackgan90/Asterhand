@@ -50,8 +50,28 @@ func (s *Service) markInterruptedOnStartup() error {
 			return err
 		}
 	}
-	s.store.PruneExpiredDetails(now)
+	s.pruneHistory(now)
 	return nil
+}
+
+func (s *Service) pruneHistory(now time.Time) {
+	s.store.PruneDetailsAndCap(now)
+	expired, err := s.store.ListExpiredTerminalTurns(now)
+	if err != nil || len(expired) == 0 {
+		return
+	}
+	s.mu.Lock()
+	hook := s.beforePruneTerminalTurns
+	s.mu.Unlock()
+	var keepIDs []string
+	if hook != nil {
+		var hErr error
+		keepIDs, hErr = hook(s, expired, now)
+		if hErr != nil {
+			return
+		}
+	}
+	_ = s.store.DeleteExpiredTerminalTurns(now, keepIDs)
 }
 
 func (s *Service) restoreRetainedWriteLockOnStartup(t Turn, now time.Time) error {
@@ -402,6 +422,7 @@ func (s *Service) reapIdleResidents() {
 			_ = ad.CloseThread(rp.handle)
 		}
 	}
+	s.pruneHistory(now)
 }
 
 // RevokeWorkspace aborts pending or in-flight turns whose workspace was removed

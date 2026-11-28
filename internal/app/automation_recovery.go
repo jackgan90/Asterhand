@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackgan90/Asterhand/internal/operations"
 	"github.com/jackgan90/Asterhand/internal/store"
+	"github.com/jackgan90/Asterhand/internal/workers"
 )
 
 // Positive domain evidence repairs an interrupted journal publication. Absence
@@ -119,4 +120,72 @@ func (a *App) reconcileAutomationOperation(receipt operations.Receipt) (operatio
 		return receipt, err
 	}
 	return receipt, nil
+}
+
+func (a *App) workerServiceHooks() workers.ServiceHooks {
+	return workers.ServiceHooks{
+		BeforePruneTerminalTurns: a.reconcileReceiptsBeforeTurnPrune,
+	}
+}
+
+// reconcileReceiptsBeforeTurnPrune reconciles pending non-terminal workers_send
+// receipts using the expiring turn summaries before 30-day summary pruning runs.
+// Any turn whose matching receipt cannot yet be persisted as terminal is
+// returned in keepTurnIDs so its summary stays available for future recovery.
+func (a *App) reconcileReceiptsBeforeTurnPrune(svc *workers.Service, expired []workers.Turn, now time.Time) ([]string, error) {
+	if a == nil || a.Store == nil || svc == nil || len(expired) == 0 {
+		return nil, nil
+	}
+	pending, err := a.Store.Pending()
+	if err != nil {
+		return nil, err
+	}
+	if len(pending) == 0 {
+		return nil, nil
+	}
+	expiredIDs := make(map[string]bool, len(expired))
+	for _, t := range expired {
+		expiredIDs[t.ID] = true
+	}
+	keepSet := map[string]bool{}
+	for _, r := range pending {
+		if r.Terminal() || r.Name != "workers_send" {
+			continue
+		}
+		summary, found, err := svc.OperationLookup(r.Name, r.NativeID())
+		if err != nil {
+			return nil, err
+		}
+		if !found && strings.Contains(r.ID, "_") {
+			summary, found, err = svc.LegacyOperationLookup(r.Name, r.ID, r.Actor, r.Target)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if !found {
+			continue
+		}
+		m, _ := summary.(map[string]any)
+		turnID, _ := m["turn_id"].(string)
+		reconciled := r
+		reconciled.State, reconciled.Accepted, reconciled.Result = "completed", true, compactResult(summary)
+		if fErr := a.Store.Finish(reconciled, now); fErr != nil {
+			if errors.Is(fErr, operations.ErrConflict) {
+				if latest, lErr := a.Store.Lookup(r.Actor, r.Node, r.ID); lErr == nil && latest.Terminal() {
+					continue
+				}
+			}
+			if turnID != "" && expiredIDs[turnID] {
+				keepSet[turnID] = true
+			}
+		}
+	}
+	if len(keepSet) == 0 {
+		return nil, nil
+	}
+	keep := make([]string, 0, len(keepSet))
+	for id := range keepSet {
+		keep = append(keep, id)
+	}
+	return keep, nil
 }

@@ -667,3 +667,132 @@ func TestPublicWorkersWaitRunningNextStepPaginatesImmediately(t *testing.T) {
 		"after_commentary_seq": nextSeq, "wake_on_commentary": wake,
 	}, len(p2.Commentaries), p2.Commentaries[0].Seq)
 }
+
+func makeMCPHTMLTableReport(rows int) string {
+	var b strings.Builder
+	b.WriteString("<table><thead><tr><th>File</th><th>Check</th><th>Detail &amp; Snippet</th></tr></thead><tbody>\n")
+	for i := 0; i < rows; i++ {
+		fmt.Fprintf(&b, "<tr><td>pkg/file_%03d.go</td><td>&lt;rule-%03d&gt; 核查</td><td><code>x &lt; y &amp;&amp; z &gt; %d</code></td></tr>\n", i, i, i)
+	}
+	b.WriteString("</tbody></table>")
+	return strings.TrimSpace(b.String())
+}
+
+func readAllResultViaMCPTextOnly(t *testing.T, cs *mcp.ClientSession, turnID, wsID, startCursor string, maxBytes int) string {
+	t.Helper()
+	var out strings.Builder
+	cursor := startCursor
+	for page := 1; page <= 30; page++ {
+		args := map[string]any{"turn_id": turnID, "workspace_id": wsID}
+		if cursor != "" {
+			args["cursor"] = cursor
+		}
+		if maxBytes > 0 {
+			args["max_bytes"] = maxBytes
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "workers_result", Arguments: args})
+		cancel()
+		if err != nil || res.IsError || len(res.Content) == 0 {
+			t.Fatalf("MCP workers_result(page=%d cursor=%q) failed: res=%+v err=%v", page, cursor, res, err)
+		}
+		tc, ok := res.Content[0].(*mcp.TextContent)
+		if !ok {
+			t.Fatalf("expected TextContent, got %T", res.Content[0])
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(tc.Text), &payload); err != nil {
+			t.Fatalf("unmarshal MCP workers_result text: %v", err)
+		}
+		if trunc, _ := payload["text_truncated"].(bool); trunc {
+			t.Fatalf("MCP workers_result(page=%d cursor=%q) triggered text_truncated: %s", page, cursor, tc.Text[:min(400, len(tc.Text))])
+		}
+		dataMap, _ := payload["data"].(map[string]any)
+		txt, _ := dataMap["text"].(string)
+		if txt == "" {
+			t.Fatalf("MCP workers_result(page=%d cursor=%q) delivered 0 text bytes", page, cursor)
+		}
+		out.WriteString(txt)
+		complete, _ := dataMap["complete"].(bool)
+		nextCur, _ := dataMap["next_cursor"].(string)
+		if complete {
+			if nextCur != "" {
+				t.Fatalf("complete page returned non-empty next_cursor=%q", nextCur)
+			}
+			return out.String()
+		}
+		if nextCur == "" || nextCur == cursor {
+			t.Fatalf("incomplete page %d did not advance next_cursor (cur=%q next=%q)", page, cursor, nextCur)
+		}
+		cursor = nextCur
+	}
+	t.Fatalf("MCP workers_result pagination exceeded 30 pages (cursor=%q)", cursor)
+	return ""
+}
+
+func TestMCPTextOnlyClientReconstructsHTMLTableReportFromWaitAndResult(t *testing.T) {
+	// ~58 KiB HTML table report where default 24 KiB raw chunks expand > 55 KiB in JSON.
+	htmlReport := makeMCPHTMLTableReport(520)
+	if len(htmlReport) < 55000 {
+		t.Fatalf("fixture too small: %d bytes", len(htmlReport))
+	}
+	adapter := &stubWorkerAdapter{
+		startFn: func(ctx context.Context, handle workers.ThreadHandle, spec workers.TurnStartSpec, onEvent func(workers.AdapterEvent)) (string, <-chan workers.TurnOutcome, error) {
+			ch := make(chan workers.TurnOutcome, 1)
+			ch <- workers.TurnOutcome{
+				State:        workers.TurnCompleted,
+				NativeTurnID: "nt_html_tbl",
+				Items:        []workers.NativeItem{{ItemID: "f_tbl", Type: "agentMessage", Phase: "final_answer", Text: htmlReport}},
+			}
+			return "nt_html_tbl", ch, nil
+		},
+	}
+
+	n, ws, tok := setupM1WorkerNode(t, adapter)
+	a := n.app
+	cs, closeMCP := openTestWaitMCPSession(t, a, tok)
+	defer closeMCP()
+
+	w := testAutomationCall(a, tok, "workers_create", operations.NewID(time.Now()), workerCreateInput{
+		HarnessID: harnesses.HarnessCodex, WorkspaceRoot: ws.RootPath, Alias: "html-table-worker", AccessMode: harnesses.AccessReadOnly,
+	}).Data.(workers.Worker)
+	turn := testAutomationCall(a, tok, "workers_send", operations.NewID(time.Now()), workerSendInput{
+		WorkerID: w.ID, WorkspaceID: ws.ID, Prompt: "generate html table report",
+	}).Data.(workers.Turn)
+
+	// 1. Follow workers_wait.next_cursor strictly via MCP content[].text.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	waitRes, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "workers_wait",
+		Arguments: map[string]any{"turn_id": turn.ID, "workspace_id": ws.ID, "wait_seconds": 5},
+	})
+	cancel()
+	if err != nil || waitRes.IsError || len(waitRes.Content) == 0 {
+		t.Fatalf("MCP workers_wait failed: res=%+v err=%v", waitRes, err)
+	}
+	var waitPayload map[string]any
+	if err := json.Unmarshal([]byte(waitRes.Content[0].(*mcp.TextContent).Text), &waitPayload); err != nil {
+		t.Fatalf("unmarshal MCP workers_wait text: %v", err)
+	}
+	if trunc, _ := waitPayload["text_truncated"].(bool); trunc {
+		t.Fatalf("MCP workers_wait triggered text_truncated")
+	}
+	waitData, _ := waitPayload["data"].(map[string]any)
+	waitAnswer, _ := waitData["answer"].(string)
+	waitCursor, _ := waitData["next_cursor"].(string)
+	if waitAnswer == "" || waitCursor != strconv.Itoa(len(waitAnswer)) {
+		t.Fatalf("unexpected MCP workers_wait preview/cursor: len=%d cursor=%q", len(waitAnswer), waitCursor)
+	}
+	rest := readAllResultViaMCPTextOnly(t, cs, turn.ID, ws.ID, waitCursor, 0)
+	if waitAnswer+rest != htmlReport {
+		t.Fatalf("MCP text-only wait+result reconstruction mismatch: got %d bytes, want %d bytes", len(waitAnswer)+len(rest), len(htmlReport))
+	}
+
+	// 2. Also verify reading from cursor="0" with default max_bytes and max_bytes=32768 via MCP text only.
+	if fromStart := readAllResultViaMCPTextOnly(t, cs, turn.ID, ws.ID, "0", 0); fromStart != htmlReport {
+		t.Fatalf("MCP text-only fromStart(default) mismatch: got %d bytes, want %d bytes", len(fromStart), len(htmlReport))
+	}
+	if fromStart32K := readAllResultViaMCPTextOnly(t, cs, turn.ID, ws.ID, "0", 32<<10); fromStart32K != htmlReport {
+		t.Fatalf("MCP text-only fromStart(32KiB) mismatch: got %d bytes, want %d bytes", len(fromStart32K), len(htmlReport))
+	}
+}

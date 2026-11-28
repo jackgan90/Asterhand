@@ -70,7 +70,7 @@ func setupM1WorkerNode(t *testing.T, adapter workers.Adapter) (*testNode, harnes
 		_ = a.Workers.Close(ctx)
 		cancel()
 	}
-	wsSvc, err := workers.NewService(a.Config.Home, a.Harnesses, adapter)
+	wsSvc, err := workers.NewServiceWithHooks(a.Config.Home, a.Harnesses, a.workerServiceHooks(), adapter)
 	if err != nil {
 		t.Fatal(err)
 	}

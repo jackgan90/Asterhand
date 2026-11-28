@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackgan90/Asterhand/internal/automation"
 	"github.com/jackgan90/Asterhand/internal/i18n"
 	_ "modernc.org/sqlite"
 )
@@ -30,8 +29,10 @@ var (
 )
 
 type Store struct {
-	mu sync.Mutex
-	db *sql.DB
+	mu                sync.Mutex
+	db                *sql.DB
+	detailBytes       int64
+	detailBytesLoaded bool
 }
 
 func OpenStore(home string) (*Store, error) {
@@ -101,7 +102,12 @@ func OpenStore(home string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	st := &Store{db: db}
+	if err := st.initDetailBytes(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return st, nil
 }
 
 func (s *Store) Close() error {
@@ -467,13 +473,10 @@ func (s *Store) SaveResultText(turnID, text string, now time.Time) (int, bool, e
 	if s.db == nil {
 		return 0, false, ErrStoreClosed
 	}
-	_, err := s.db.Exec(
-		`INSERT INTO turn_results(turn_id, body, byte_len, updated_at)
-		 VALUES(?,?,?,?)
-		 ON CONFLICT(turn_id) DO UPDATE SET body=excluded.body, byte_len=excluded.byte_len, updated_at=excluded.updated_at`,
-		turnID, raw, len(raw), now.UnixMilli(),
-	)
-	return len(raw), truncated, err
+	if err := s.saveResultWithCapLocked(turnID, raw, now); err != nil {
+		return 0, truncated, err
+	}
+	return len(raw), truncated, nil
 }
 
 func (s *Store) ReadResultText(turnID string) (string, bool, error) {
@@ -499,23 +502,7 @@ func (s *Store) AppendLog(turnID string, entry LogEntry) (int64, error) {
 	if s.db == nil {
 		return 0, ErrStoreClosed
 	}
-	var total int
-	_ = s.db.QueryRow("SELECT COALESCE(SUM(byte_len),0) FROM turn_logs WHERE turn_id=?", turnID).Scan(&total)
-	if total >= MaxTurnLogBytes {
-		return 0, automation.Fail("capacity", "Turn log budget reached")
-	}
-	var lastSeq int64
-	_ = s.db.QueryRow("SELECT COALESCE(MAX(seq),0) FROM turn_logs WHERE turn_id=?", turnID).Scan(&lastSeq)
-	entry.Seq = lastSeq + 1
-	b, err := json.Marshal(entry)
-	if err != nil {
-		return 0, err
-	}
-	if total+len(b) > MaxTurnLogBytes {
-		return 0, automation.Fail("capacity", "Turn log budget reached")
-	}
-	_, err = s.db.Exec("INSERT INTO turn_logs(turn_id, seq, body, byte_len) VALUES(?,?,?,?)", turnID, entry.Seq, b, len(b))
-	return entry.Seq, err
+	return s.appendLogWithCapLocked(turnID, entry)
 }
 
 func (s *Store) ReadLogs(turnID string, afterSeq int64, limit int) ([]LogEntry, bool, error) {
@@ -599,21 +586,6 @@ func (s *Store) ReadLogsTail(turnID string, limit int) ([]LogEntry, bool, error)
 		out[i], out[j] = out[j], out[i]
 	}
 	return out, hasMore, nil
-}
-
-// PruneExpiredDetails evicts terminal turn result/log details beyond
-// DetailRetention while never touching active or reconciliation_required turns.
-func (s *Store) PruneExpiredDetails(now time.Time) {
-	cutoff := now.Add(-DetailRetention).UnixMilli()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.db == nil {
-		return
-	}
-	_, _ = s.db.Exec(`DELETE FROM turn_results WHERE updated_at < ? AND turn_id IN (SELECT turn_id FROM turns WHERE state NOT IN (?,?,?,?,?))`,
-		cutoff, TurnPrepared, TurnRunning, TurnWaitingApproval, TurnWaitingInput, TurnReconcile)
-	_, _ = s.db.Exec(`DELETE FROM turn_logs WHERE turn_id IN (SELECT turn_id FROM turns WHERE updated_at < ? AND state NOT IN (?,?,?,?,?))`,
-		cutoff, TurnPrepared, TurnRunning, TurnWaitingApproval, TurnWaitingInput, TurnReconcile)
 }
 
 func clampUTF8Bytes(b []byte, max int) int {

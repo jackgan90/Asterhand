@@ -267,3 +267,29 @@ func TestWaitCLIExplicitZeroAfterCommentarySeq(t *testing.T) {
 		t.Fatalf("expected nextSeq=0 when delivered_commentary_seq is explicit 0, got %d", seq0)
 	}
 }
+
+func TestFormatMCPTextWorkersResultOverBudgetDoesNotSkipPage(t *testing.T) {
+	resp := Response{
+		Version: APIVersion,
+		Data: map[string]any{
+			"turn_id":     "turn_big_res",
+			"worker_id":   "wkr_1",
+			"state":       "completed",
+			"offset":      20587,
+			"total_bytes": 58516,
+			"complete":    false,
+			"next_cursor": "45163",
+			"text":        strings.Repeat("<", 10000), // 60 KiB after JSON HTML escaping (> 48 KiB)
+		},
+	}
+	txt := formatMCPText("workers_result", resp)
+	if !strings.Contains(txt, `"text_truncated":true`) || !strings.Contains(txt, `"offset":20587`) {
+		t.Fatalf("expected truncated fallback preserving offset=20587, got %s", txt)
+	}
+	if strings.Contains(txt, "45163") || strings.Contains(txt, `"next_cursor"`) {
+		t.Fatalf("workers_result fallback must not advertise skipped next_cursor=45163, got %s", txt)
+	}
+	if !strings.Contains(txt, `cursor=\"20587\"`) || !strings.Contains(txt, `max_bytes=8192`) {
+		t.Fatalf("workers_result fallback should instruct retrying from offset 20587 with smaller max_bytes, got %s", txt)
+	}
+}

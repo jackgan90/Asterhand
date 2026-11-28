@@ -19,6 +19,7 @@ func buildWorkerWaitView(
 	t workers.Turn,
 	preview string,
 	origTrunc bool,
+	expired bool,
 	commentaries []workers.CommentaryEntry,
 	verbose bool,
 	hasAfterSeq bool,
@@ -42,6 +43,7 @@ func buildWorkerWaitView(
 		AnswerAvailable:     t.AnswerAvailable,
 		AnswerSource:        t.AnswerSource,
 		PartialOutput:       t.PartialOutput,
+		Expired:             expired,
 		ResultBytes:         t.ResultBytes,
 		ErrorCode:           t.ErrorCode,
 		ErrorMessage:        t.ErrorMessage,
@@ -279,6 +281,12 @@ func buildWaitViewNextStep(t workers.Turn, view workerWaitView) string {
 		}
 		return workerWaitNextStep(t, view.Truncated, view.NextCursor, len(view.Commentaries))
 	case workers.TurnCompleted:
+		if view.Expired {
+			if hasMoreComments {
+				return fmt.Sprintf("Turn completed (stored %d-byte answer has expired under retention or capacity limits) with paginated commentaries (delivered_commentary_seq=%d, latest_commentary_seq=%d). Call workers_wait(turn_id=%q, after_commentary_seq=%d) to read the remaining commentaries.", t.ResultBytes, *view.DeliveredCommentarySeq, t.LatestCommentarySeq, t.ID, *view.DeliveredCommentarySeq)
+			}
+			return fmt.Sprintf("Turn completed and previously produced %d bytes of answer text, but the stored body has expired under retention or capacity limits.", t.ResultBytes)
+		}
 		if hasMoreComments && view.Truncated {
 			return fmt.Sprintf("Turn completed with paginated commentaries (delivered_commentary_seq=%d, latest_commentary_seq=%d) and truncated preview. Call workers_wait(turn_id=%q, after_commentary_seq=%d) for remaining commentaries and workers_result(turn_id=%q, cursor=%q) for the rest of the answer.", *view.DeliveredCommentarySeq, t.LatestCommentarySeq, t.ID, *view.DeliveredCommentarySeq, t.ID, view.NextCursor)
 		}

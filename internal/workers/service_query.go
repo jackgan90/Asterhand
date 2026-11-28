@@ -185,33 +185,47 @@ func shouldWakeCallerWithOpts(t Turn, opts WaitOptions) bool {
 }
 
 func (s *Service) Wait(ctx context.Context, turnID, expectedWorkspaceID string, waitDur time.Duration) (Turn, string, bool, error) {
-	t, preview, trunc, _, err := s.WaitWithOptions(ctx, turnID, expectedWorkspaceID, WaitOptions{WaitDuration: waitDur})
-	return t, preview, trunc, err
+	res, err := s.WaitSnapshot(ctx, turnID, expectedWorkspaceID, WaitOptions{WaitDuration: waitDur})
+	return res.Turn, res.Preview, res.Truncated, err
 }
 
 func (s *Service) WaitWithOptions(ctx context.Context, turnID, expectedWorkspaceID string, opts WaitOptions) (Turn, string, bool, []CommentaryEntry, error) {
+	res, err := s.WaitSnapshot(ctx, turnID, expectedWorkspaceID, opts)
+	return res.Turn, res.Preview, res.Truncated, res.Commentaries, err
+}
+
+func (s *Service) WaitSnapshot(ctx context.Context, turnID, expectedWorkspaceID string, opts WaitOptions) (WaitResult, error) {
 	waitDur := opts.WaitDuration
 	if waitDur <= 0 || waitDur > automation.MaxWait {
 		waitDur = automation.MaxWait
 	}
-	finish := func(t Turn) (Turn, string, bool, []CommentaryEntry, error) {
+	finish := func(t Turn) (WaitResult, error) {
 		if t.State == TurnWaitingInput && t.PendingInteraction != nil && !t.PendingInteraction.VisibleToHuman {
 			s.markInputObservedByCaller(t.ID, t.PendingInteraction.RequestID)
 			if refreshed, gErr := s.GetTurn(t.ID, expectedWorkspaceID); gErr == nil {
 				t = refreshed
 			}
 		}
-		preview, trunc := s.readPreview(t)
+		preview, trunc, expired, err := s.readPreview(t)
+		if err != nil {
+			return WaitResult{}, err
+		}
 		comments, latestSeq := s.selectCommentaries(t.ID, opts.AfterCommentarySeq, opts.HasAfterCommentarySeq, 2)
 		if latestSeq > t.LatestCommentarySeq {
 			t.LatestCommentarySeq = latestSeq
 		}
-		return t, preview, trunc, comments, nil
+		return WaitResult{
+			Turn:         t,
+			Preview:      preview,
+			Truncated:    trunc,
+			Expired:      expired,
+			Commentaries: comments,
+		}, nil
 	}
 
 	t, err := s.GetTurn(turnID, expectedWorkspaceID)
 	if err != nil {
-		return Turn{}, "", false, nil, err
+		return WaitResult{}, err
 	}
 	if shouldWakeCallerWithOpts(t, opts) {
 		return finish(t)
@@ -221,7 +235,7 @@ func (s *Service) WaitWithOptions(ctx context.Context, turnID, expectedWorkspace
 
 	t, err = s.GetTurn(turnID, expectedWorkspaceID)
 	if err != nil {
-		return Turn{}, "", false, nil, err
+		return WaitResult{}, err
 	}
 	if shouldWakeCallerWithOpts(t, opts) {
 		return finish(t)
@@ -232,15 +246,21 @@ func (s *Service) WaitWithOptions(ctx context.Context, turnID, expectedWorkspace
 	for {
 		select {
 		case <-ctx.Done():
-			t, _ = s.GetTurn(turnID, expectedWorkspaceID)
-			return finish(t)
+			latest, gErr := s.GetTurn(turnID, expectedWorkspaceID)
+			if gErr != nil {
+				return WaitResult{}, gErr
+			}
+			return finish(latest)
 		case <-timer.C:
-			t, _ = s.GetTurn(turnID, expectedWorkspaceID)
-			return finish(t)
+			latest, gErr := s.GetTurn(turnID, expectedWorkspaceID)
+			if gErr != nil {
+				return WaitResult{}, gErr
+			}
+			return finish(latest)
 		case <-ch:
 			t, err = s.GetTurn(turnID, expectedWorkspaceID)
 			if err != nil {
-				return Turn{}, "", false, nil, err
+				return WaitResult{}, err
 			}
 			if shouldWakeCallerWithOpts(t, opts) {
 				return finish(t)
@@ -249,21 +269,24 @@ func (s *Service) WaitWithOptions(ctx context.Context, turnID, expectedWorkspace
 	}
 }
 
-func (s *Service) readPreviewCapped(t Turn, capBytes int) (string, bool) {
+func (s *Service) readPreviewCapped(t Turn, capBytes int) (string, bool, bool, error) {
 	if !t.AnswerAvailable || t.State != TurnCompleted {
-		return "", false
+		return "", false, false, nil
 	}
 	full, ok, err := s.store.ReadResultText(t.ID)
-	if err != nil || !ok {
-		return "", false
+	if err != nil {
+		return "", false, false, err
+	}
+	if !ok {
+		return "", false, t.ResultBytes > 0, nil
 	}
 	if len(full) <= capBytes {
-		return full, false
+		return full, false, false, nil
 	}
-	return full[:clampUTF8Bytes([]byte(full), capBytes)], true
+	return full[:clampUTF8Bytes([]byte(full), capBytes)], true, false, nil
 }
 
-func (s *Service) readPreview(t Turn) (string, bool) {
+func (s *Service) readPreview(t Turn) (string, bool, bool, error) {
 	return s.readPreviewCapped(t, 24<<10)
 }
 
@@ -294,15 +317,18 @@ type waitAnySlot struct {
 	fullNeed  int
 }
 
-func (s *Service) readCompletedResultText(t Turn) string {
+func (s *Service) readCompletedResultText(t Turn) (string, bool, error) {
 	if !t.AnswerAvailable || t.State != TurnCompleted {
-		return ""
+		return "", false, nil
 	}
 	full, ok, err := s.store.ReadResultText(t.ID)
-	if err != nil || !ok {
-		return ""
+	if err != nil {
+		return "", false, err
 	}
-	return full
+	if !ok {
+		return "", t.ResultBytes > 0, nil
+	}
+	return full, false, nil
 }
 
 func cloneVCSSnapshot(v *VCSSnapshot) *VCSSnapshot {
@@ -694,7 +720,10 @@ func (s *Service) buildWaitAnyItems(turnIDs []string, expectedWorkspaceID string
 				t = refreshed
 			}
 		}
-		fullText := s.readCompletedResultText(t)
+		fullText, expired, err := s.readCompletedResultText(t)
+		if err != nil {
+			return nil, "", err
+		}
 		comments, latestSeq := s.selectCommentaries(t.ID, 0, false, 2)
 		if latestSeq > t.LatestCommentarySeq {
 			t.LatestCommentarySeq = latestSeq
@@ -714,6 +743,7 @@ func (s *Service) buildWaitAnyItems(turnIDs []string, expectedWorkspaceID string
 			AnswerAvailable:     t.AnswerAvailable,
 			AnswerSource:        t.AnswerSource,
 			Truncated:           trunc,
+			Expired:             expired,
 			ResultBytes:         t.ResultBytes,
 			NextCursor:          nextCursor,
 			ElapsedSeconds:      t.ElapsedSeconds,
@@ -883,12 +913,7 @@ func (s *Service) ReadResult(turnID, expectedWorkspaceID string, offset, maxByte
 	if take == 0 && len(rem) > 0 {
 		_, take = utf8.DecodeRuneInString(rem)
 	}
-	page.Text = rem[:take]
-	if offset+take >= len(full) {
-		page.Complete = true
-	} else {
-		page.NextCursor = fmt.Sprintf("%d", offset+take)
-	}
+	fitResultPageBudget(&page, rem, take, offset, len(full), resultPageMaxPayloadJSONBytes)
 	return page, nil
 }
 

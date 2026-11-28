@@ -139,9 +139,10 @@ func New(c *config.Manager, x executor.Executor) (*App, error) {
 	} else {
 		a.Harnesses = hs
 	}
-	if ws, err := workers.NewService(
+	if ws, err := workers.NewServiceWithHooks(
 		c.Home,
 		a.Harnesses,
+		a.workerServiceHooks(),
 		workers.NewCodexAdapter(),
 		workers.NewClaudeAdapter(),
 		workers.NewDeepSeekAdapter(),

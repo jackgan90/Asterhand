@@ -73,7 +73,7 @@ func formatMCPText(opName string, response Response) string {
 	delete(payload, "data")
 	payload["text_truncated"] = true
 	if hasMap {
-		if compact := compactOverBudgetData(dataMap); len(compact) > 0 {
+		if compact := compactOverBudgetData(opName, dataMap); len(compact) > 0 {
 			payload["data"] = compact
 		}
 	}
@@ -87,8 +87,13 @@ func formatMCPText(opName string, response Response) string {
 	return clampUTF8(string(raw), maxMCPTextBytes)
 }
 
-func compactOverBudgetData(dataMap map[string]any) map[string]any {
-	keys := []string{"turn_id", "worker_id", "state", "truncated", "result_bytes", "next_cursor", "triggered_turn_id", "error_code", "latest_commentary_seq", "delivered_commentary_seq", "commentaries_truncated"}
+func compactOverBudgetData(opName string, dataMap map[string]any) map[string]any {
+	keys := []string{"turn_id", "worker_id", "state", "truncated", "expired", "result_bytes", "next_cursor", "triggered_turn_id", "error_code", "latest_commentary_seq", "delivered_commentary_seq", "commentaries_truncated"}
+	if opName == "workers_result" {
+		// Do not advertise next_cursor when the page text was omitted; preserve offset
+		// so text-only clients retry the same page with a smaller max_bytes.
+		keys = []string{"turn_id", "worker_id", "state", "offset", "total_bytes", "complete", "expired"}
+	}
 	compact := map[string]any{}
 	for _, k := range keys {
 		if v, ok := dataMap[k]; ok && v != nil && v != "" {
@@ -100,7 +105,14 @@ func compactOverBudgetData(dataMap map[string]any) map[string]any {
 
 func overBudgetNextStep(opName string, dataMap map[string]any) string {
 	switch opName {
-	case "workers_wait", "workers_result", "workers_get":
+	case "workers_result":
+		tid, _ := dataMap["turn_id"].(string)
+		off := readInt64Value(dataMap["offset"])
+		if tid != "" {
+			return fmt.Sprintf("Text projection exceeded single-message budget; retry this page with a smaller slice via workers_result(turn_id=%q, cursor=\"%d\", max_bytes=8192).", tid, off)
+		}
+		return "Text projection exceeded single-message budget; retry this page with a smaller max_bytes."
+	case "workers_wait", "workers_get":
 		tid, _ := dataMap["turn_id"].(string)
 		cur, _ := dataMap["next_cursor"].(string)
 		if tid != "" && cur != "" {

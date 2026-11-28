@@ -141,6 +141,7 @@ type workerWaitView struct {
 	Answer              string                    `json:"answer,omitempty"`
 	PartialOutput       string                    `json:"partial_output,omitempty"`
 	Truncated           bool                      `json:"truncated,omitempty"`
+	Expired             bool                      `json:"expired,omitempty" description:"True when the completed turn's stored answer body has been evicted by retention or capacity limits while the summary remains readable"`
 	ResultBytes         int                       `json:"result_bytes,omitempty"`
 	NextCursor          string                    `json:"next_cursor,omitempty"`
 	ErrorCode           string                    `json:"error_code,omitempty"`
@@ -330,7 +331,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 				return automation.Outcome{}, automation.Fail("invalid_parameters", "after_commentary_seq must be non-negative")
 			}
 			dur := time.Duration(waitSec) * time.Second
-			t, preview, trunc, commentaries, err := a.Workers.WaitWithOptions(ctx, v.TurnID, v.WorkspaceID, workers.WaitOptions{
+			res, err := a.Workers.WaitSnapshot(ctx, v.TurnID, v.WorkspaceID, workers.WaitOptions{
 				WaitDuration:          dur,
 				AfterCommentarySeq:    v.AfterCommentarySeq.Value,
 				HasAfterCommentarySeq: v.AfterCommentarySeq.Set,
@@ -339,7 +340,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			if err != nil {
 				return automation.Outcome{}, err
 			}
-			view := buildWorkerWaitView(t, preview, trunc, commentaries, v.Verbose, v.AfterCommentarySeq.Set, v.AfterCommentarySeq.Value)
+			view := buildWorkerWaitView(res.Turn, res.Preview, res.Truncated, res.Expired, res.Commentaries, v.Verbose, v.AfterCommentarySeq.Set, v.AfterCommentarySeq.Value)
 			return automation.Outcome{Data: view}, nil
 		})
 

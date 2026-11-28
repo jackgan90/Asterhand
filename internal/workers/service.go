@@ -141,14 +141,19 @@ type Service struct {
 	waiters               map[string][]chan struct{} // turnID -> notification chans
 	turnCommentaries      map[string][]CommentaryEntry
 	turnCommentaryOrder   []string
-	interactions          map[string]*pendingInteraction
-	onInteractionsChanged func([]InteractionView)
-	wg                    sync.WaitGroup
-	reaperStop            chan struct{}
-	reaperOnce            sync.Once
+	interactions             map[string]*pendingInteraction
+	onInteractionsChanged    func([]InteractionView)
+	beforePruneTerminalTurns func(svc *Service, expired []Turn, now time.Time) ([]string, error)
+	wg                       sync.WaitGroup
+	reaperStop               chan struct{}
+	reaperOnce               sync.Once
 }
 
 func NewService(home string, hs *harnesses.Service, adapters ...Adapter) (*Service, error) {
+	return NewServiceWithHooks(home, hs, ServiceHooks{}, adapters...)
+}
+
+func NewServiceWithHooks(home string, hs *harnesses.Service, hooks ServiceHooks, adapters ...Adapter) (*Service, error) {
 	st, err := OpenStore(home)
 	if err != nil {
 		return nil, err
@@ -158,21 +163,22 @@ func NewService(home string, hs *harnesses.Service, adapters ...Adapter) (*Servi
 		am[a.HarnessID()] = a
 	}
 	s := &Service{
-		home:             home,
-		store:            st,
-		harnesses:        hs,
-		adapters:         am,
-		budgets:          DefaultBudgets(),
-		now:              time.Now,
-		activeTurns:      map[string]*runningTurn{},
-		workerTurn:       map[string]string{},
-		writeLocks:       map[string]worktreeLock{},
-		pendingReconcile: map[string]pendingReconcileInfo{},
-		residents:        map[string]*residentProc{},
-		waiters:          map[string][]chan struct{}{},
-		turnCommentaries: map[string][]CommentaryEntry{},
-		interactions:     map[string]*pendingInteraction{},
-		reaperStop:       make(chan struct{}),
+		home:                     home,
+		store:                    st,
+		harnesses:                hs,
+		adapters:                 am,
+		budgets:                  DefaultBudgets(),
+		now:                      time.Now,
+		activeTurns:              map[string]*runningTurn{},
+		workerTurn:               map[string]string{},
+		writeLocks:               map[string]worktreeLock{},
+		pendingReconcile:         map[string]pendingReconcileInfo{},
+		residents:                map[string]*residentProc{},
+		waiters:                  map[string][]chan struct{}{},
+		turnCommentaries:         map[string][]CommentaryEntry{},
+		interactions:             map[string]*pendingInteraction{},
+		beforePruneTerminalTurns: hooks.BeforePruneTerminalTurns,
+		reaperStop:               make(chan struct{}),
 	}
 	if err := s.markInterruptedOnStartup(); err != nil {
 		_ = st.Close()
@@ -185,6 +191,19 @@ func NewService(home string, hs *harnesses.Service, adapters ...Adapter) (*Servi
 	s.wg.Add(1)
 	go s.idleReaperLoop()
 	return s, nil
+}
+
+// SetBeforePruneTerminalTurns updates the hook invoked before 30-day terminal
+// turn summaries are deleted during retention maintenance.
+func (s *Service) SetBeforePruneTerminalTurns(fn func(svc *Service, expired []Turn, now time.Time) ([]string, error)) {
+	s.mu.Lock()
+	s.beforePruneTerminalTurns = fn
+	s.mu.Unlock()
+}
+
+// PruneRetention runs the shared detail/summary/capacity retention pass for now.
+func (s *Service) PruneRetention(now time.Time) {
+	s.pruneHistory(now.UTC())
 }
 
 func (s *Service) Budgets() Budgets {

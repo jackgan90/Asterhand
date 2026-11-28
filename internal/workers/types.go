@@ -286,6 +286,24 @@ type WaitOptions struct {
 	WakeOnCommentary      bool
 }
 
+type WaitResult struct {
+	Turn         Turn
+	Preview      string
+	Truncated    bool
+	Expired      bool
+	Commentaries []CommentaryEntry
+}
+
+// ServiceHooks allows the parent application to participate in retention
+// lifecycle points without creating a circular dependency on the receipt store.
+type ServiceHooks struct {
+	// BeforePruneTerminalTurns runs before terminal turn summaries older than
+	// SummaryRetention are deleted. It may reconcile pending non-terminal
+	// receipts using expired turn records and return turn IDs whose summaries
+	// must be retained if reconciliation persistence has not yet succeeded.
+	BeforePruneTerminalTurns func(svc *Service, expired []Turn, now time.Time) (keepTurnIDs []string, err error)
+}
+
 type InteractionRequest struct {
 	Kind          string
 	ToolName      string
@@ -318,6 +336,7 @@ type WaitAnyItem struct {
 	AnswerSource       string           `json:"answer_source,omitempty"`
 	AnswerPreview      string           `json:"answer_preview,omitempty"`
 	Truncated           bool              `json:"truncated,omitempty"`
+	Expired             bool              `json:"expired,omitempty" description:"True when the completed turn's stored answer body has been evicted by retention or capacity limits while the summary remains readable"`
 	ResultBytes         int               `json:"result_bytes"`
 	NextCursor          string            `json:"next_cursor,omitempty"`
 	ElapsedSeconds      int               `json:"elapsed_seconds,omitempty"`

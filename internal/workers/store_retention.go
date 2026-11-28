@@ -38,28 +38,26 @@ func (s *Store) cachedDetailUsageLocked() (int64, error) {
 	return total, nil
 }
 
+const detailUsageSQL = `SELECT (SELECT COALESCE(SUM(byte_len),0) FROM turn_results) +
+		        (SELECT COALESCE(SUM(byte_len),0) FROM turn_logs) +
+		        (SELECT COALESCE(SUM(byte_len),0) FROM turn_prompts)`
+
 func (s *Store) detailUsageLocked() (int64, error) {
 	var total int64
-	err := s.db.QueryRow(
-		`SELECT (SELECT COALESCE(SUM(byte_len),0) FROM turn_results) +
-		        (SELECT COALESCE(SUM(byte_len),0) FROM turn_logs)`,
-	).Scan(&total)
+	err := s.db.QueryRow(detailUsageSQL).Scan(&total)
 	return total, err
 }
 
 func detailUsageTx(tx *sql.Tx) (int64, error) {
 	var total int64
-	err := tx.QueryRow(
-		`SELECT (SELECT COALESCE(SUM(byte_len),0) FROM turn_results) +
-		        (SELECT COALESCE(SUM(byte_len),0) FROM turn_logs)`,
-	).Scan(&total)
+	err := tx.QueryRow(detailUsageSQL).Scan(&total)
 	return total, err
 }
 
-// evictTerminalDetailsForCapTx evicts result and log details of the oldest
-// terminal turns until total node detail bytes (turn_results + turn_logs) are
-// at or below targetMaxBytes. Active and reconciliation_required turns, as well
-// as keepTurnID, are never evicted.
+// evictTerminalDetailsForCapTx evicts result, log, and prompt details of the
+// oldest terminal turns until total node detail bytes are at or below
+// targetMaxBytes. Active and reconciliation_required turns, as well as
+// keepTurnID, are never evicted.
 func evictTerminalDetailsForCapTx(tx *sql.Tx, keepTurnID string, targetMaxBytes int64) (int64, error) {
 	total, err := detailUsageTx(tx)
 	if err != nil || total <= targetMaxBytes {
@@ -72,13 +70,15 @@ func evictTerminalDetailsForCapTx(tx *sql.Tx, keepTurnID string, targetMaxBytes 
 	rows, err := tx.Query(
 		`SELECT t.turn_id,
 		        COALESCE((SELECT byte_len FROM turn_results r WHERE r.turn_id = t.turn_id), 0) +
-		        COALESCE((SELECT SUM(byte_len) FROM turn_logs l WHERE l.turn_id = t.turn_id), 0) AS detail_bytes
+		        COALESCE((SELECT SUM(byte_len) FROM turn_logs l WHERE l.turn_id = t.turn_id), 0) +
+		        COALESCE((SELECT byte_len FROM turn_prompts p WHERE p.turn_id = t.turn_id), 0) AS detail_bytes
 		 FROM turns t
 		 WHERE t.state NOT IN (?,?,?,?,?)
 		   AND t.turn_id <> ?
 		   AND (
 		     EXISTS (SELECT 1 FROM turn_results r WHERE r.turn_id = t.turn_id)
 		     OR EXISTS (SELECT 1 FROM turn_logs l WHERE l.turn_id = t.turn_id)
+		     OR EXISTS (SELECT 1 FROM turn_prompts p WHERE p.turn_id = t.turn_id)
 		   )
 		 ORDER BY t.updated_at ASC, t.turn_id ASC`,
 		TurnPrepared, TurnRunning, TurnWaitingApproval, TurnWaitingInput, TurnReconcile,
@@ -113,6 +113,9 @@ func evictTerminalDetailsForCapTx(tx *sql.Tx, keepTurnID string, targetMaxBytes 
 			return total, err
 		}
 		if _, err := tx.Exec(`DELETE FROM turn_logs WHERE turn_id=?`, c.turnID); err != nil {
+			return total, err
+		}
+		if _, err := tx.Exec(`DELETE FROM turn_prompts WHERE turn_id=?`, c.turnID); err != nil {
 			return total, err
 		}
 		total -= c.detailBytes
@@ -302,6 +305,20 @@ func (s *Store) PruneDetailsAndCap(now time.Time) {
 	if err != nil {
 		return
 	}
+	res3, err := tx.Exec(
+		`DELETE FROM turn_prompts
+		 WHERE EXISTS (
+		   SELECT 1 FROM turns t
+		   WHERE t.turn_id = turn_prompts.turn_id
+		     AND t.state NOT IN (?,?,?,?,?)
+		     AND (t.updated_at < ? OR turn_prompts.updated_at < ?)
+		 )`,
+		TurnPrepared, TurnRunning, TurnWaitingApproval, TurnWaitingInput, TurnReconcile,
+		detailCutoff, detailCutoff,
+	)
+	if err != nil {
+		return
+	}
 	n1, _ := res1.RowsAffected()
 	if n1 > 0 {
 		if _, err := tx.Exec(`DELETE FROM turn_result_chunks WHERE NOT EXISTS (SELECT 1 FROM turn_results r WHERE r.turn_id = turn_result_chunks.turn_id)`); err != nil {
@@ -309,7 +326,8 @@ func (s *Store) PruneDetailsAndCap(now time.Time) {
 		}
 	}
 	n2, _ := res2.RowsAffected()
-	needRecount := n1 > 0 || n2 > 0 || !s.detailBytesLoaded || s.detailBytes > MaxTotalDetailBytes
+	n3, _ := res3.RowsAffected()
+	needRecount := n1 > 0 || n2 > 0 || n3 > 0 || !s.detailBytesLoaded || s.detailBytes > MaxTotalDetailBytes
 	var newUsage int64
 	if needRecount {
 		newUsage, err = evictTerminalDetailsForCapTx(tx, "", MaxTotalDetailBytes)
@@ -367,7 +385,9 @@ func (s *Store) ListExpiredTerminalTurns(now time.Time) ([]Turn, error) {
 }
 
 // DeleteExpiredTerminalTurns removes terminal turn summaries older than
-// SummaryRetention (30 days), excluding any turn IDs in keepTurnIDs.
+// SummaryRetention (30 days), excluding any turn IDs in keepTurnIDs, while
+// explicitly deleting any remaining associated detail rows and recording
+// per-worker pruned counts in the same transaction.
 func (s *Store) DeleteExpiredTerminalTurns(now time.Time, keepTurnIDs []string) error {
 	summaryCutoff := now.Add(-SummaryRetention).UnixMilli()
 	s.mu.Lock()
@@ -379,7 +399,7 @@ func (s *Store) DeleteExpiredTerminalTurns(now time.Time, keepTurnIDs []string) 
 		TurnPrepared, TurnRunning, TurnWaitingApproval, TurnWaitingInput, TurnReconcile,
 		summaryCutoff,
 	}
-	query := `DELETE FROM turns WHERE state NOT IN (?,?,?,?,?) AND updated_at < ?`
+	whereClause := `WHERE state NOT IN (?,?,?,?,?) AND updated_at < ?`
 	if len(keepTurnIDs) > 0 {
 		placeholders := make([]string, 0, len(keepTurnIDs))
 		for _, id := range keepTurnIDs {
@@ -390,11 +410,67 @@ func (s *Store) DeleteExpiredTerminalTurns(now time.Time, keepTurnIDs []string) 
 			args = append(args, id)
 		}
 		if len(placeholders) > 0 {
-			query += " AND turn_id NOT IN (" + strings.Join(placeholders, ",") + ")"
+			whereClause += " AND turn_id NOT IN (" + strings.Join(placeholders, ",") + ")"
 		}
 	}
-	_, err := s.db.Exec(query, args...)
-	return err
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.Query(`SELECT turn_id, worker_id FROM turns `+whereClause, args...)
+	if err != nil {
+		return err
+	}
+	var turnIDs []string
+	prunedByWorker := map[string]int{}
+	for rows.Next() {
+		var tid, wid string
+		if sErr := rows.Scan(&tid, &wid); sErr != nil {
+			rows.Close()
+			return sErr
+		}
+		turnIDs = append(turnIDs, tid)
+		prunedByWorker[wid]++
+	}
+	if rErr := rows.Err(); rErr != nil {
+		rows.Close()
+		return rErr
+	}
+	rows.Close()
+	if len(turnIDs) == 0 {
+		return nil
+	}
+
+	for wid, cnt := range prunedByWorker {
+		if _, err := tx.Exec(
+			`INSERT INTO worker_history_pruned(worker_id, pruned_turns) VALUES(?, ?)
+			 ON CONFLICT(worker_id) DO UPDATE SET pruned_turns = worker_history_pruned.pruned_turns + excluded.pruned_turns`,
+			wid, cnt,
+		); err != nil {
+			return err
+		}
+	}
+	for _, tbl := range []string{"turn_prompts", "turn_result_chunks", "turn_results", "turn_logs", "turns"} {
+		stmt, err := tx.Prepare(`DELETE FROM ` + tbl + ` WHERE turn_id=?`)
+		if err != nil {
+			return err
+		}
+		for _, tid := range turnIDs {
+			if _, err := stmt.Exec(tid); err != nil {
+				stmt.Close()
+				return err
+			}
+		}
+		stmt.Close()
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.detailBytesLoaded = false
+	return nil
 }
 
 // PruneExpiredDetails enforces worker history retention and node capacity rules:

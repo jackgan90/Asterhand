@@ -129,18 +129,18 @@ type Service struct {
 	budgets   Budgets
 	now       func() time.Time
 
-	mu                    sync.Mutex
-	stopping              bool
-	closed                bool
-	activeTurns           map[string]*runningTurn // turnID -> runningTurn
-	workerTurn            map[string]string       // workerID -> active turnID
-	writeLocks            map[string]worktreeLock         // turnID -> held write lock
-	pendingReconcile      map[string]pendingReconcileInfo // turnID -> unpersisted reconciliation
-	residents             map[string]*residentProc
-	nextResidentID        uint64
-	waiters               map[string][]chan struct{} // turnID -> notification chans
-	turnCommentaries      map[string][]CommentaryEntry
-	turnCommentaryOrder   []string
+	mu                       sync.Mutex
+	stopping                 bool
+	closed                   bool
+	activeTurns              map[string]*runningTurn         // turnID -> runningTurn
+	workerTurn               map[string]string               // workerID -> active turnID
+	writeLocks               map[string]worktreeLock         // turnID -> held write lock
+	pendingReconcile         map[string]pendingReconcileInfo // turnID -> unpersisted reconciliation
+	residents                map[string]*residentProc
+	nextResidentID           uint64
+	waiters                  map[string][]chan struct{} // turnID -> notification chans
+	turnCommentaries         map[string][]CommentaryEntry
+	turnCommentaryOrder      []string
 	interactions             map[string]*pendingInteraction
 	onInteractionsChanged    func([]InteractionView)
 	beforePruneTerminalTurns func(svc *Service, expired []Turn, now time.Time) ([]string, error)
@@ -443,12 +443,20 @@ func (s *Service) Send(ctx context.Context, in SendInput) (Turn, error) {
 	}
 
 	now := s.now().UTC()
+	turnSeq, err := s.store.NextTurnSeq(w.ID, w.LastTurnSeq)
+	if err != nil {
+		s.mu.Unlock()
+		return Turn{}, err
+	}
 	turnID := "turn_" + model.ID()[:16]
 	t := Turn{
 		ID:                  turnID,
 		WorkerID:            w.ID,
 		WorkspaceID:         w.WorkspaceID,
 		HarnessID:           w.HarnessID,
+		TurnSeq:             turnSeq,
+		PromptPreview:       promptPreview(in.Prompt),
+		PromptBytes:         len(in.Prompt),
 		SessionEpoch:        w.SessionEpoch,
 		OperationID:         in.OperationID,
 		OperationKey:        opKey,
@@ -471,8 +479,9 @@ func (s *Service) Send(ctx context.Context, in SendInput) (Turn, error) {
 	}
 	w.State = WorkerRunning
 	w.ActiveTurnID = t.ID
+	w.LastTurnSeq = turnSeq
 	w.UpdatedAt = now
-	if err := s.store.SaveTurnAndWorker(t, &w); err != nil {
+	if _, err := s.store.SaveNewTurn(t, &w, in.Prompt, now); err != nil {
 		s.mu.Unlock()
 		return Turn{}, err
 	}

@@ -95,7 +95,11 @@ func compactOverBudgetData(opName string, dataMap map[string]any) map[string]any
 	if opName == "workers_result" {
 		// Do not advertise next_cursor when the page text was omitted; preserve offset
 		// so text-only clients retry the same page with a smaller max_bytes.
-		keys = []string{"turn_id", "worker_id", "state", "offset", "total_bytes", "complete", "expired", "partial", "result_truncated"}
+		keys = []string{"turn_id", "worker_id", "part", "state", "offset", "total_bytes", "complete", "expired", "partial", "result_truncated"}
+	} else if opName == "workers_turns" {
+		// Do not advertise next_cursor when items were omitted; preserve request
+		// cursor so text-only clients retry this same page with a smaller limit.
+		keys = []string{"worker_id", "workspace_id", "filter", "cursor", "has_more", "truncated"}
 	}
 	compact := map[string]any{}
 	for _, k := range keys {
@@ -125,6 +129,12 @@ func toMapSlice(v any) []map[string]any {
 
 func compactWorkersGetOverBudget(dataMap map[string]any) map[string]any {
 	compact := map[string]any{}
+	if summary, ok := dataMap["summary"].(map[string]any); ok && len(summary) > 0 {
+		compact["summary"] = summary
+	}
+	if more, ok := dataMap["turns_has_more"].(bool); ok && more {
+		compact["turns_has_more"] = true
+	}
 	if w, ok := dataMap["worker"].(map[string]any); ok {
 		cw := map[string]any{}
 		for _, k := range []string{"worker_id", "workspace_id", "alias", "harness_id", "state", "active_turn_id"} {
@@ -191,6 +201,9 @@ func overBudgetNextStep(opName string, dataMap map[string]any) string {
 		tid, _ := dataMap["turn_id"].(string)
 		off := readInt64Value(dataMap["offset"])
 		if tid != "" {
+			if part, _ := dataMap["part"].(string); part == "prompt" {
+				return fmt.Sprintf("Text projection exceeded single-message budget; retry this page with a smaller slice via workers_result(turn_id=%q, part=\"prompt\", cursor=\"%d\", max_bytes=8192).", tid, off)
+			}
 			return fmt.Sprintf("Text projection exceeded single-message budget; retry this page with a smaller slice via workers_result(turn_id=%q, cursor=\"%d\", max_bytes=8192).", tid, off)
 		}
 		return "Text projection exceeded single-message budget; retry this page with a smaller max_bytes."
@@ -222,6 +235,35 @@ func overBudgetNextStep(opName string, dataMap map[string]any) string {
 			return fmt.Sprintf("Text projection exceeded single-message budget; call workers_list(cursor=%q) with a smaller limit to read remaining workers.", cur)
 		}
 		return "Text projection exceeded single-message budget; call workers_list with a smaller limit or workspace_id filter."
+	case "workers_turns":
+		wid, _ := dataMap["worker_id"].(string)
+		ws, _ := dataMap["workspace_id"].(string)
+		flt, _ := dataMap["filter"].(string)
+		cur, _ := dataMap["cursor"].(string)
+		retryLimit := 10
+		if items := toMapSlice(dataMap["items"]); len(items) > 0 {
+			if half := len(items) / 2; half < retryLimit {
+				if half < 1 {
+					retryLimit = 1
+				} else {
+					retryLimit = half
+				}
+			}
+		}
+		if wid != "" {
+			args := fmt.Sprintf("worker_id=%q", wid)
+			if ws != "" {
+				args += fmt.Sprintf(", workspace_id=%q", ws)
+			}
+			if flt != "" {
+				args += fmt.Sprintf(", filter=%q", flt)
+			}
+			if cur != "" {
+				args += fmt.Sprintf(", cursor=%q", cur)
+			}
+			return fmt.Sprintf("Text projection exceeded single-message budget; retry workers_turns(%s, limit=%d) with a smaller limit.", args, retryLimit)
+		}
+		return "Text projection exceeded single-message budget; retry workers_turns with a smaller limit."
 	case "workers_logs":
 		tid, _ := dataMap["turn_id"].(string)
 		if nextSeq := readInt64Value(dataMap["next_after_seq"]); tid != "" && nextSeq > 0 {
@@ -315,9 +357,13 @@ func nextStepHint(opName string, response Response) string {
 		}
 		return "Reply delivered to worker. Continue calling workers_wait until the turn finishes."
 	case "workers_result":
+		part, _ := dataMap["part"].(string)
 		isPartial, _ := dataMap["partial"].(bool)
 		if next, _ := dataMap["next_cursor"].(string); next != "" {
 			tid, _ := dataMap["turn_id"].(string)
+			if part == "prompt" {
+				return fmt.Sprintf("More prompt text available. Call workers_result(turn_id=%q, part=\"prompt\", cursor=%q).", tid, next)
+			}
 			if isPartial {
 				return fmt.Sprintf("More partial output available (not a completed final answer). Call workers_result(turn_id=%q, cursor=%q).", tid, next)
 			}

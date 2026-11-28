@@ -19,6 +19,7 @@ const resultPageMaxPayloadJSONBytes = 46 << 10
 type ResultPage struct {
 	TurnID          string `json:"turn_id"`
 	WorkerID        string `json:"worker_id"`
+	Part            string `json:"part,omitempty" description:"\"prompt\" when this page reads the caller's original prompt instead of the worker answer"`
 	State           string `json:"state"`
 	AnswerAvailable bool   `json:"answer_available"`
 	AnswerSource    string `json:"answer_source"`
@@ -31,6 +32,13 @@ type ResultPage struct {
 	Expired         bool   `json:"expired"`
 	ResultTruncated bool   `json:"result_truncated,omitempty" description:"True when the stored final or partial text was truncated at the 2 MiB storage cap before persistence"`
 	NextCursor      string `json:"next_cursor,omitempty"`
+}
+
+// CanReadStoredResult reports whether a turn has a readable stored output body
+// in turn_results (either a completed final answer or retained partial output
+// on a non-success terminal turn).
+func CanReadStoredResult(t Turn) (readable bool, partial bool) {
+	return canReadStoredResult(t)
 }
 
 func canReadStoredResult(t Turn) (readable bool, partial bool) {

@@ -52,6 +52,8 @@
 
 工具名称与 CLI 操作名称统一使用下划线规范名（`[a-zA-Z0-9_-]`），输入参数来自同一 schema；写工具的 `operation_id` 为可选字段——省略时由 `asterhand-mcp` 自动按节点规范时钟生成并随成功响应或断连 `result_unknown` 报错原样返回；若需要调用前预先固化跨进程重放身份，仍可先调用 `operations_new_id`（对应 `node_start` 传 `{"operation":"node_start"}`）再显式传入。MCP 请求编号只识别本次通信，不能替代业务操作 ID。结果在 `structuredContent` 与有界 `content[].text` 中双通道返回，业务错误设置 `isError`；守护进程短暂重启期间已注册工具清单保留不清除，仅在显式鉴权拒绝或策略撤销时即时收回。敏感操作不在工具列表内。
 
+协作历史较长时，用 `workers_turns`（参数 `worker_id`、`limit`、`cursor`、`filter`）按开始时间从新到旧翻页查看全部轮次，`filter: "attention"` 只返回失败、取消、中断、待对账、受阻和等待中的轮次；用 `workers_result` 传 `part: "prompt"` 分页读回某一轮发起方提交的完整任务说明。`workers_get` 的 `summary` 给出轮次数、累计轮次时长与墙钟时长。
+
 ## 续改未保存内容
 
 例如在 Codex 中说“把我正在编辑的脚本图描述补全并保存”。agent 调用 `drafts.list` 按业务目标找到编辑器，对它调用 `drafts.get`。修改返回内容后，用 `drafts.update` 提交 `draft_id`、`expected_revision` 和完整 `content`。要保存或发送，用最新修订调用 `drafts.commit`。这些写操作使用与其他工具相同的 `operation_id`。

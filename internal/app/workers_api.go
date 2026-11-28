@@ -9,6 +9,55 @@ import (
 	"github.com/jackgan90/Asterhand/internal/workers"
 )
 
+// webTurnsPageSize is the timeline page size used by the Web Coding Workers panel.
+const webTurnsPageSize = 20
+
+// workersResultAPI pages the worker answer or the caller's original prompt for
+// one turn, sharing workers_result semantics (part, byte cursor, max_bytes).
+func (a *App) workersResultAPI(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	turnID := strings.TrimSpace(q.Get("turn_id"))
+	if turnID == "" {
+		a.fail(w, r, 400, automation.Fail("invalid_parameters", "turn_id is required"))
+		return
+	}
+	offset := 0
+	if raw := strings.TrimSpace(q.Get("cursor")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			a.fail(w, r, 400, automation.Fail("invalid_cursor", "Cursor must be a non-negative byte offset"))
+			return
+		}
+		offset = n
+	}
+	maxBytes := 32 << 10
+	if raw := strings.TrimSpace(q.Get("max_bytes")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > 32<<10 {
+			a.fail(w, r, 400, automation.Fail("invalid_parameters", "max_bytes must be between 1 and 32768"))
+			return
+		}
+		maxBytes = n
+	}
+	var (
+		page workers.ResultPage
+		err  error
+	)
+	switch strings.TrimSpace(q.Get("part")) {
+	case "", "answer":
+		page, err = a.Workers.ReadResult(turnID, "", offset, maxBytes)
+	case "prompt":
+		page, err = a.Workers.ReadPrompt(turnID, "", offset, maxBytes)
+	default:
+		err = automation.Fail("invalid_parameters", "part must be \"answer\" or \"prompt\"")
+	}
+	if err != nil {
+		a.fail(w, r, 400, err)
+		return
+	}
+	send(w, 200, page)
+}
+
 // Web Coding Workers panel API backed by the same shared workers.Service used by CLI/MCP.
 func (a *App) workersAPI(w http.ResponseWriter, r *http.Request) {
 	if a.Workers == nil {
@@ -42,12 +91,55 @@ func (a *App) workersAPI(w http.ResponseWriter, r *http.Request) {
 			a.fail(w, r, 400, automation.Fail("invalid_parameters", "worker_id is required"))
 			return
 		}
-		wk, turns, err := a.Workers.Get(workerID, "")
+		wk, err := a.Workers.GetWorker(workerID, "")
 		if err != nil {
 			a.fail(w, r, 400, err)
 			return
 		}
-		send(w, 200, map[string]any{"worker": wk, "turns": turns})
+		summary, err := a.Workers.TurnSummary(wk)
+		if err != nil {
+			a.fail(w, r, 400, err)
+			return
+		}
+		filter := r.URL.Query().Get("filter")
+		items, hasMore, next, err := a.Workers.ListTurns(workerID, "", "", webTurnsPageSize, filter)
+		if err != nil {
+			a.fail(w, r, 400, err)
+			return
+		}
+		send(w, 200, map[string]any{"worker": wk, "summary": summary, "turns": items, "turns_has_more": hasMore, "turns_next_cursor": next})
+	case "/api/workers/turns":
+		if r.Method != http.MethodGet {
+			w.WriteHeader(405)
+			return
+		}
+		q := r.URL.Query()
+		workerID := strings.TrimSpace(q.Get("worker_id"))
+		if workerID == "" {
+			a.fail(w, r, 400, automation.Fail("invalid_parameters", "worker_id is required"))
+			return
+		}
+		limit := webTurnsPageSize
+		if raw := strings.TrimSpace(q.Get("limit")); raw != "" {
+			n, err := strconv.Atoi(raw)
+			if err != nil || n < 1 || n > 50 {
+				a.fail(w, r, 400, automation.Fail("invalid_parameters", "limit must be between 1 and 50"))
+				return
+			}
+			limit = n
+		}
+		items, hasMore, next, err := a.Workers.ListTurns(workerID, "", q.Get("cursor"), limit, q.Get("filter"))
+		if err != nil {
+			a.fail(w, r, 400, err)
+			return
+		}
+		send(w, 200, map[string]any{"items": items, "has_more": hasMore, "next_cursor": next})
+	case "/api/workers/result":
+		if r.Method != http.MethodGet {
+			w.WriteHeader(405)
+			return
+		}
+		a.workersResultAPI(w, r)
 	case "/api/workers/logs":
 		if r.Method != http.MethodGet {
 			w.WriteHeader(405)
@@ -77,7 +169,7 @@ func (a *App) workersAPI(w http.ResponseWriter, r *http.Request) {
 			"entries":  entries,
 			"has_more": hasMore,
 		}
-		if workers.IsTurnTerminal(turn.State) && turn.AnswerAvailable {
+		if readable, _ := workers.CanReadStoredResult(turn); readable {
 			if page, err := a.Workers.ReadResult(turnID, "", 0, 16<<10); err == nil {
 				resp["result"] = page
 			}

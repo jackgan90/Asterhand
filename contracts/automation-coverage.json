@@ -194,7 +194,8 @@
         "internal/harnesses/service_test.go",
         "internal/workers/service_test.go",
         "internal/app/automation_workers_test.go",
-        "tests/workers-panel.test.mjs"
+        "tests/workers-panel.test.mjs",
+        "tests/workers-timeline.test.mjs"
       ],
       "operations": [
         "harnesses_list",
@@ -202,6 +203,7 @@
         "workers_create",
         "workers_list",
         "workers_get",
+        "workers_turns",
         "workers_send",
         "workers_wait",
         "workers_wait_any",
@@ -253,6 +255,8 @@
     "/api/harnesses/turn-action": "human",
     "/api/workers/list": "workers",
     "/api/workers/get": "workers",
+    "/api/workers/turns": "workers",
+    "/api/workers/result": "workers",
     "/api/workers/logs": "workers",
     "/api/workers/action": "workers",
     "/api/workers/interactions/decide": "human",

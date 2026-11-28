@@ -7,6 +7,7 @@ import "embed"
 //go:embed tool-settings.mjs
 //go:embed harnesses-settings.mjs
 //go:embed workers-panel.mjs
+//go:embed workers-timeline.mjs
 //go:embed workers-interactions.mjs
 //go:embed workers.css
 var Files embed.FS

@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	DBSchemaVersion     = 1
+	DBSchemaVersion     = 2
 	MaxResultBytes      = 2 << 20  // 2 MiB per turn full text
 	MaxTurnLogBytes     = 1 << 20  // 1 MiB per turn structured logs
 	MaxTotalDetailBytes = 64 << 20 // 64 MiB node-wide retention cap
@@ -84,7 +84,10 @@ func OpenStore(home string) (*Store, error) {
 		client_correlation_id TEXT NOT NULL,
 		state TEXT NOT NULL,
 		body BLOB NOT NULL,
-		updated_at INTEGER NOT NULL
+		updated_at INTEGER NOT NULL,
+		turn_seq INTEGER NOT NULL DEFAULT 0,
+		started_at INTEGER NOT NULL DEFAULT 0,
+		finished_at INTEGER NOT NULL DEFAULT 0
 	);
 	CREATE INDEX IF NOT EXISTS idx_turns_worker ON turns(worker_id, updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_turns_op ON turns(operation_id);
@@ -111,12 +114,33 @@ func OpenStore(home string) (*Store, error) {
 		byte_len INTEGER NOT NULL,
 		PRIMARY KEY(turn_id, seq)
 	);
-	PRAGMA user_version=1;`)
+
+	CREATE TABLE IF NOT EXISTS turn_prompts(
+		turn_id TEXT PRIMARY KEY,
+		body BLOB NOT NULL,
+		byte_len INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS worker_history_pruned(
+		worker_id TEXT PRIMARY KEY,
+		pruned_turns INTEGER NOT NULL DEFAULT 0
+	);`)
 	if err != nil {
 		db.Close()
 		return nil, err
 	}
 	st := &Store{db: db}
+	if schema < DBSchemaVersion {
+		if err := st.migrateSchema(schema); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_turns_worker_started ON turns(worker_id, started_at DESC, turn_seq DESC, turn_id DESC)`); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := st.initDetailBytes(); err != nil {
 		db.Close()
 		return nil, err
@@ -385,17 +409,7 @@ func (s *Store) SaveTurn(t Turn) error {
 	if s.db == nil {
 		return ErrStoreClosed
 	}
-	opKey := dedupKey(t.OperationKey, t.OperationID)
-	_, err = s.db.Exec(
-		`INSERT INTO turns(turn_id, worker_id, workspace_id, operation_id, client_correlation_id, state, body, updated_at)
-		 VALUES(?,?,?,?,?,?,?,?)
-		 ON CONFLICT(turn_id) DO UPDATE SET
-		   state=excluded.state,
-		   body=excluded.body,
-		   updated_at=excluded.updated_at`,
-		t.ID, t.WorkerID, t.WorkspaceID, opKey, t.ClientCorrelationID, t.State, b, t.UpdatedAt.UnixMilli(),
-	)
-	return err
+	return upsertTurnExec(s.db, t, b)
 }
 
 // SaveTurnAndWorker persists a turn update and an optional worker update in a
@@ -423,31 +437,11 @@ func (s *Store) SaveTurnAndWorker(t Turn, w *Worker) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	turnOpKey := dedupKey(t.OperationKey, t.OperationID)
-	if _, err := tx.Exec(
-		`INSERT INTO turns(turn_id, worker_id, workspace_id, operation_id, client_correlation_id, state, body, updated_at)
-		 VALUES(?,?,?,?,?,?,?,?)
-		 ON CONFLICT(turn_id) DO UPDATE SET
-		   state=excluded.state,
-		   body=excluded.body,
-		   updated_at=excluded.updated_at`,
-		t.ID, t.WorkerID, t.WorkspaceID, turnOpKey, t.ClientCorrelationID, t.State, tb, t.UpdatedAt.UnixMilli(),
-	); err != nil {
+	if err := upsertTurnExec(tx, t, tb); err != nil {
 		return err
 	}
 	if w != nil {
-		workerOpKey := dedupKey(w.OperationKey, w.OperationID)
-		if _, err := tx.Exec(
-			`INSERT INTO workers(worker_id, workspace_id, alias, operation_id, state, body, updated_at)
-			 VALUES(?,?,?,?,?,?,?)
-			 ON CONFLICT(worker_id) DO UPDATE SET
-			   workspace_id=excluded.workspace_id,
-			   alias=excluded.alias,
-			   state=excluded.state,
-			   body=excluded.body,
-			   updated_at=excluded.updated_at`,
-			w.ID, w.WorkspaceID, w.Alias, workerOpKey, w.State, wb, w.UpdatedAt.UnixMilli(),
-		); err != nil {
+		if err := upsertWorkerExec(tx, *w, wb); err != nil {
 			return err
 		}
 	}
@@ -466,16 +460,18 @@ func (s *Store) GetTurn(turnID string) (Turn, error) {
 	if s.db == nil {
 		return Turn{}, ErrStoreClosed
 	}
-	var b []byte
-	err := s.db.QueryRow("SELECT body FROM turns WHERE turn_id=?", turnID).Scan(&b)
+	var (
+		seq int
+		b   []byte
+	)
+	err := s.db.QueryRow("SELECT turn_seq, body FROM turns WHERE turn_id=?", turnID).Scan(&seq, &b)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Turn{}, ErrNotFound
 	}
 	if err != nil {
 		return Turn{}, err
 	}
-	var t Turn
-	return t, json.Unmarshal(b, &t)
+	return decodeTurnRow(seq, b)
 }
 
 func (s *Store) TurnByOperationID(operationID string) (Turn, error) {
@@ -527,24 +523,7 @@ func (s *Store) ListTurnsByWorker(workerID string, limit int) ([]Turn, error) {
 	if s.db == nil {
 		return nil, ErrStoreClosed
 	}
-	rows, err := s.db.Query("SELECT body FROM turns WHERE worker_id=? ORDER BY updated_at DESC LIMIT ?", workerID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []Turn{}
-	for rows.Next() {
-		var b []byte
-		if err := rows.Scan(&b); err != nil {
-			return nil, err
-		}
-		var t Turn
-		if err := json.Unmarshal(b, &t); err != nil {
-			return nil, err
-		}
-		out = append(out, t)
-	}
-	return out, rows.Err()
+	return queryTurnRows(s.db, "SELECT turn_seq, body FROM turns WHERE worker_id=?"+turnTimelineOrder+" LIMIT ?", workerID, limit)
 }
 
 func (s *Store) ListNonTerminalTurns() ([]Turn, error) {

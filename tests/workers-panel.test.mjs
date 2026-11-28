@@ -795,3 +795,112 @@ test("Workers panel secret card survives reopen, clears on close, preserves live
   });
   panel.stop();
 });
+
+test("timeline shows task overview, numbered rows, task prompt, earlier pages, and attention filter", async () => {
+  const byId = installFakeDOM();
+  const {workersPanel} = await import("../web/workers-panel.mjs");
+
+  const w1 = {worker_id: "w1", alias: "reviewer", harness_id: "claude-code", access_mode: "read_only", state: "idle", workspace_root: "F:\\proj", role_hint: "ROLE_HINT_TEXT"};
+  const t25 = {turn_id: "turn_25", worker_id: "w1", turn_seq: 25, state: "completed", prompt_preview: "Fix the bug", prompt_bytes: 12, elapsed_seconds: 42, started_at: "2026-11-21T09:00:00Z", answer_available: true};
+  const t24 = {turn_id: "turn_24", worker_id: "w1", turn_seq: 24, state: "failed", elapsed_seconds: 63, started_at: "2026-11-21T08:50:00Z"};
+  const t23 = {turn_id: "turn_23", worker_id: "w1", turn_seq: 23, state: "completed", prompt_preview: "Older task", prompt_bytes: 10, elapsed_seconds: 5, started_at: "2026-11-21T08:40:00Z"};
+  const urls = [];
+  const api = async (url) => {
+    urls.push(url);
+    if (url.startsWith("/api/workers/list")) return {items: [w1]};
+    if (url.startsWith("/api/workers/get")) {
+      return {worker: w1, summary: {turn_count: 25, turns_seconds: 1122, wall_seconds: 3900, attention_count: 1}, turns: [t25, t24], turns_has_more: true, turns_next_cursor: "cur_1"};
+    }
+    if (url.startsWith("/api/workers/logs?turn_id=turn_25")) return {turn: t25, entries: [{seq: 1, kind: "tool", summary: "LOG25"}], result: {text: "ANSWER25", complete: true}};
+    if (url.startsWith("/api/workers/logs?turn_id=turn_24")) return {turn: {...t24, error_message: "ERR24"}, entries: []};
+    if (url.startsWith("/api/workers/result?turn_id=turn_25&part=prompt")) return {text: "Fix the bug!", complete: true, part: "prompt"};
+    if (url.startsWith("/api/workers/turns") && url.includes("cursor=cur_1")) return {items: [t23], has_more: false};
+    if (url.startsWith("/api/workers/turns") && url.includes("filter=attention")) return {items: [t24], has_more: false};
+    throw new Error("unexpected url " + url);
+  };
+
+  const panel = workersPanel({
+    api,
+    post: async () => ({}),
+    listen: (t, e, cb) => t.addEventListener(e, cb),
+    session: () => ({active: true}),
+    notice: () => {},
+  });
+
+  await panel.open();
+  const detailEl = byId.get("workers-detail");
+  const text = () => detailEl.textContent;
+  assert.match(text(), /ROLE_HINT_TEXT/);
+  assert.match(text(), /18m42s/);
+  assert.match(text(), /1h05m/);
+  assert.match(text(), /#25/);
+  assert.match(text(), /Fix the bug!/, "expanded newest turn shows the full task prompt");
+  assert.match(text(), /ANSWER25/);
+  assert.equal(detailEl.querySelectorAll(".worker-turn-row").length, 2);
+
+  detailEl.querySelector(".worker-load-older").click();
+  await new Promise(r => setTimeout(r, 20));
+  assert.equal(detailEl.querySelectorAll(".worker-turn-row").length, 3);
+  assert.match(text(), /Older task/);
+  assert.equal(detailEl.querySelector(".worker-load-older"), null, "no more pages after the last cursor");
+
+  detailEl.querySelectorAll(".worker-turn-row")[1].click();
+  await new Promise(r => setTimeout(r, 20));
+  assert.match(text(), /ERR24/);
+  assert.ok(!urls.some(u => u.includes("turn_id=turn_24&part=prompt")), "turns without a recorded prompt must not fetch it");
+  assert.match(text(), /ANSWER25/, "several turns can stay expanded");
+
+  detailEl.querySelectorAll(".worker-filter-btn")[1].click();
+  await new Promise(r => setTimeout(r, 20));
+  assert.equal(detailEl.querySelectorAll(".worker-turn-row").length, 1);
+  assert.match(text(), /#24/);
+  assert.doesNotMatch(text(), /#25/);
+  panel.stop();
+});
+
+test("polling auto-expands a newly started turn without refetching finished expanded turns", async () => {
+  const byId = installFakeDOM();
+  const {workersPanel} = await import("../web/workers-panel.mjs");
+
+  const w1 = {worker_id: "w1", alias: "codex-1", harness_id: "codex", access_mode: "read_only", state: "idle", workspace_root: "F:\\proj"};
+  const t1 = {turn_id: "turn_1", worker_id: "w1", turn_seq: 1, state: "completed", started_at: "2026-11-21T09:00:00Z"};
+  const t2 = {turn_id: "turn_2", worker_id: "w1", turn_seq: 2, state: "running", started_at: "2026-11-21T09:05:00Z"};
+  let firstPage = [t1];
+  const logCalls = {turn_1: 0, turn_2: 0};
+  const api = async (url) => {
+    if (url.startsWith("/api/workers/list")) return {items: [w1]};
+    if (url.startsWith("/api/workers/get")) return {worker: w1, summary: {turn_count: firstPage.length}, turns: firstPage};
+    if (url.startsWith("/api/workers/logs?turn_id=turn_1")) {
+      logCalls.turn_1++;
+      return {turn: t1, entries: [], result: {text: "DONE1", complete: true}};
+    }
+    if (url.startsWith("/api/workers/logs?turn_id=turn_2")) {
+      logCalls.turn_2++;
+      return {turn: t2, entries: [{seq: 1, kind: "tool", summary: "LIVE2"}]};
+    }
+    throw new Error("unexpected url " + url);
+  };
+  const panel = workersPanel({
+    api,
+    post: async () => ({}),
+    listen: (t, e, cb) => t.addEventListener(e, cb),
+    session: () => ({active: true}),
+    notice: () => {},
+  });
+
+  await panel.open();
+  const detailEl = byId.get("workers-detail");
+  assert.match(detailEl.textContent, /DONE1/);
+  assert.equal(logCalls.turn_1, 1);
+
+  firstPage = [t2, t1];
+  byId.get("workers-refresh").click();
+  await new Promise(r => setTimeout(r, 20));
+  assert.match(detailEl.textContent, /LIVE2/, "new running turn is expanded automatically");
+  assert.match(detailEl.textContent, /DONE1/, "previously expanded turn stays open");
+  assert.equal(logCalls.turn_1, 1, "finished expanded turns are not refetched on poll");
+  const rows = detailEl.querySelectorAll(".worker-turn-row");
+  assert.match(rows[0].textContent, /#2/);
+  assert.match(rows[1].textContent, /#1/);
+  panel.stop();
+});

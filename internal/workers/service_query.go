@@ -28,17 +28,14 @@ func (s *Service) List(workspaceRoot, workspaceID string, includeClosed bool, li
 }
 
 func (s *Service) Get(workerID, expectedWorkspaceID string) (Worker, []Turn, error) {
-	w, err := s.store.GetWorker(workerID)
-	if errors.Is(err, ErrNotFound) {
-		return Worker{}, nil, automation.Fail("not_found", "Worker not found")
-	}
+	w, err := s.GetWorker(workerID, expectedWorkspaceID)
 	if err != nil {
 		return Worker{}, nil, err
 	}
-	if expectedWorkspaceID != "" && w.WorkspaceID != expectedWorkspaceID {
-		return Worker{}, nil, automation.Fail("workspace_mismatch", "Worker does not belong to the expected workspace")
-	}
 	turns, err := s.store.ListTurnsByWorker(w.ID, 10)
+	if err == nil {
+		err = s.fillDerivedTurnSeqs(w.ID, turns)
+	}
 	return w, turns, err
 }
 
@@ -62,16 +59,9 @@ func (s *Service) GetTurn(turnID, expectedWorkspaceID string) (Turn, error) {
 
 func (s *Service) populateTurnActivity(t *Turn) {
 	now := s.now().UTC()
+	t.ElapsedSeconds = turnElapsedSeconds(*t, now)
 	if t.FinishedAt != nil {
-		if sec := int(t.FinishedAt.Sub(t.StartedAt).Seconds()); sec >= 0 {
-			t.ElapsedSeconds = sec
-		}
 		return
-	}
-	if !t.StartedAt.IsZero() {
-		if sec := int(now.Sub(t.StartedAt).Seconds()); sec >= 0 {
-			t.ElapsedSeconds = sec
-		}
 	}
 	s.mu.Lock()
 	if rt, ok := s.activeTurns[t.ID]; ok {

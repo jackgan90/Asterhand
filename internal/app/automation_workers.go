@@ -50,12 +50,12 @@ type workerSendInput struct {
 }
 
 type workerWaitInput struct {
-	TurnID             string                 `json:"turn_id" description:"Turn identifier returned by workers_send"`
-	WorkspaceID        string                 `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
-	WaitSeconds        automation.OptionalInt `json:"wait_seconds,omitempty,omitzero" description:"Seconds to wait for progress or completion (1..30, default 30)"`
+	TurnID             string                   `json:"turn_id" description:"Turn identifier returned by workers_send"`
+	WorkspaceID        string                   `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
+	WaitSeconds        automation.OptionalInt   `json:"wait_seconds,omitempty,omitzero" description:"Seconds to wait for progress or completion (1..30, default 30)"`
 	AfterCommentarySeq automation.OptionalInt64 `json:"after_commentary_seq,omitempty,omitzero" description:"Return only mid-turn commentary entries with seq greater than this value; omit for the latest 2 tail entries, or pass an explicit non-negative seq (including 0 or a previous delivered_commentary_seq when commentaries_truncated is true) to paginate buffered entries in ascending order"`
-	WakeOnCommentary   bool                   `json:"wake_on_commentary,omitempty" description:"When true, return immediately whenever the worker emits a new user-facing commentary update instead of waiting until wait_seconds expires"`
-	Verbose            bool                   `json:"verbose,omitempty" description:"When true, include the full nested turn metadata object (default false returns a compact view; use workers_get for full turn metadata)"`
+	WakeOnCommentary   bool                     `json:"wake_on_commentary,omitempty" description:"When true, return immediately whenever the worker emits a new user-facing commentary update instead of waiting until wait_seconds expires"`
+	Verbose            bool                     `json:"verbose,omitempty" description:"When true, include the full nested turn metadata object (default false returns a compact view; use workers_get for full turn metadata)"`
 }
 
 type workerWaitAnyInput struct {
@@ -67,8 +67,29 @@ type workerWaitAnyInput struct {
 type workerResultInput struct {
 	TurnID      string                 `json:"turn_id" description:"Turn identifier returned by workers_send"`
 	WorkspaceID string                 `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
+	Part        string                 `json:"part,omitempty" enum:"answer,prompt" description:"Which text to read: \"answer\" (default, the worker's final or partial output) or \"prompt\" (the caller's original prompt for this turn)"`
 	Cursor      string                 `json:"cursor,omitempty" description:"Byte offset cursor returned by a previous truncated workers_wait or workers_result call (must align to a UTF-8 character boundary)"`
 	MaxBytes    automation.OptionalInt `json:"max_bytes,omitempty,omitzero" description:"Maximum UTF-8 bytes to return per page (1..32768, default 24576)"`
+}
+
+type workerTurnsInput struct {
+	WorkerID    string                 `json:"worker_id" description:"Worker identifier returned by workers_create or workers_list"`
+	WorkspaceID string                 `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch (must be passed unchanged across cursor pages when specified on the first page)"`
+	Filter      string                 `json:"filter,omitempty" enum:"all,attention" description:"\"all\" (default) or \"attention\" to return only failed, cancelled, interrupted, reconciliation_required, blocked, or waiting turns"`
+	Cursor      string                 `json:"cursor,omitempty" description:"Opaque cursor returned as next_cursor by a previous workers_turns call; pass with the same worker_id, workspace_id (if specified), and filter to read older turns"`
+	Limit       automation.OptionalInt `json:"limit,omitempty,omitzero" description:"Maximum number of turns to return (1..50, default 20)"`
+}
+
+type workerTurnsView struct {
+	WorkerID    string                 `json:"worker_id"`
+	WorkspaceID string                 `json:"workspace_id,omitempty"`
+	Filter      string                 `json:"filter,omitempty"`
+	Cursor      string                 `json:"cursor,omitempty" description:"Echoes the request cursor passed for this page when paging older turns"`
+	Items       []workers.TurnListItem `json:"items"`
+	HasMore     bool                   `json:"has_more,omitempty" description:"True when older turns exist after this page"`
+	NextCursor  string                 `json:"next_cursor,omitempty" description:"Opaque cursor bound to worker_id, workspace_id, and filter; pass with the same worker_id, workspace_id (if specified), and filter to read older turns"`
+	Truncated   bool                   `json:"truncated,omitempty" description:"True when the page was shortened or an oversized item field was compacted to fit the response budget"`
+	NextStep    string                 `json:"next_step,omitempty"`
 }
 
 type workerLogsInput struct {
@@ -128,10 +149,12 @@ type workerReplyView struct {
 }
 
 type workerGetView struct {
-	Worker           workers.Worker `json:"worker"`
-	Turns            []workers.Turn `json:"turns"`
-	HistoryTruncated bool           `json:"history_truncated,omitempty" description:"True when turn history fields were compacted to fit the response budget"`
-	NextStep         string         `json:"next_step,omitempty"`
+	Worker           workers.Worker       `json:"worker"`
+	Turns            []workers.Turn       `json:"turns"`
+	Summary          *workers.TurnSummary `json:"summary,omitempty" description:"Counts and durations aggregated over all retained turns of this worker"`
+	TurnsHasMore     bool                 `json:"turns_has_more,omitempty" description:"True when the worker has more retained turns than the recent turns listed here; page through them with workers_turns"`
+	HistoryTruncated bool                 `json:"history_truncated,omitempty" description:"True when turn history fields were compacted to fit the response budget"`
+	NextStep         string               `json:"next_step,omitempty"`
 }
 
 type workerListView struct {
@@ -143,33 +166,33 @@ type workerListView struct {
 }
 
 type workerWaitView struct {
-	Turn                *workers.Turn             `json:"turn,omitempty"`
-	WorkerID            string                    `json:"worker_id"`
-	TurnID              string                    `json:"turn_id"`
-	State               string                    `json:"state"`
-	Progress            string                    `json:"progress,omitempty"`
-	AnswerAvailable     bool                      `json:"answer_available"`
-	AnswerSource        string                    `json:"answer_source,omitempty"`
-	Answer              string                    `json:"answer,omitempty"`
-	PartialOutput       string                    `json:"partial_output,omitempty"`
-	Truncated           bool                      `json:"truncated,omitempty"`
-	Expired             bool                      `json:"expired,omitempty" description:"True when the completed turn's stored answer body has been evicted by retention or capacity limits while the summary remains readable"`
-	ResultTruncated     bool                      `json:"result_truncated,omitempty" description:"True when the worker's raw final answer exceeded the 2 MiB storage cap and was truncated before persistence"`
-	ResultBytes         int                       `json:"result_bytes,omitempty"`
-	NextCursor          string                    `json:"next_cursor,omitempty"`
-	ErrorCode           string                    `json:"error_code,omitempty"`
-	ErrorMessage        string                    `json:"error_message,omitempty"`
-	AfterVCS            *workers.VCSSnapshot      `json:"after_vcs,omitempty"`
-	ElapsedSeconds      int                       `json:"elapsed_seconds,omitempty"`
-	IdleSeconds         int                       `json:"idle_seconds,omitempty"`
-	StreamEvents        int64                     `json:"stream_events,omitempty"`
-	StreamBytes         int64                     `json:"stream_bytes,omitempty"`
+	Turn                   *workers.Turn             `json:"turn,omitempty"`
+	WorkerID               string                    `json:"worker_id"`
+	TurnID                 string                    `json:"turn_id"`
+	State                  string                    `json:"state"`
+	Progress               string                    `json:"progress,omitempty"`
+	AnswerAvailable        bool                      `json:"answer_available"`
+	AnswerSource           string                    `json:"answer_source,omitempty"`
+	Answer                 string                    `json:"answer,omitempty"`
+	PartialOutput          string                    `json:"partial_output,omitempty"`
+	Truncated              bool                      `json:"truncated,omitempty"`
+	Expired                bool                      `json:"expired,omitempty" description:"True when the completed turn's stored answer body has been evicted by retention or capacity limits while the summary remains readable"`
+	ResultTruncated        bool                      `json:"result_truncated,omitempty" description:"True when the worker's raw final answer exceeded the 2 MiB storage cap and was truncated before persistence"`
+	ResultBytes            int                       `json:"result_bytes,omitempty"`
+	NextCursor             string                    `json:"next_cursor,omitempty"`
+	ErrorCode              string                    `json:"error_code,omitempty"`
+	ErrorMessage           string                    `json:"error_message,omitempty"`
+	AfterVCS               *workers.VCSSnapshot      `json:"after_vcs,omitempty"`
+	ElapsedSeconds         int                       `json:"elapsed_seconds,omitempty"`
+	IdleSeconds            int                       `json:"idle_seconds,omitempty"`
+	StreamEvents           int64                     `json:"stream_events,omitempty"`
+	StreamBytes            int64                     `json:"stream_bytes,omitempty"`
 	LatestCommentarySeq    int64                     `json:"latest_commentary_seq,omitempty" description:"Highest commentary sequence number generated by this turn"`
 	DeliveredCommentarySeq *int64                    `json:"delivered_commentary_seq,omitempty" description:"Highest commentary sequence number delivered completely in this response; pass this value as after_commentary_seq to workers_wait to resume without skipping omitted or truncated commentaries"`
 	CommentariesTruncated  bool                      `json:"commentaries_truncated,omitempty" description:"True when one or more requested commentaries were omitted or shortened to fit response budget"`
 	Commentaries           []workers.CommentaryEntry `json:"commentaries,omitempty"`
-	PendingInteraction  *workers.InteractionView  `json:"pending_interaction,omitempty"`
-	NextStep            string                    `json:"next_step,omitempty"`
+	PendingInteraction     *workers.InteractionView  `json:"pending_interaction,omitempty"`
+	NextStep               string                    `json:"next_step,omitempty"`
 }
 
 type workerWaitAnyView struct {
@@ -288,7 +311,42 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			if err != nil {
 				return automation.Outcome{}, err
 			}
-			return automation.Outcome{Data: buildWorkerGetView(w, turns)}, nil
+			summary, err := a.Workers.TurnSummary(w)
+			if err != nil {
+				return automation.Outcome{}, err
+			}
+			return automation.Outcome{Data: withWorkerGetSummary(buildWorkerGetView(w, turns), w.ID, v.WorkspaceID, summary)}, nil
+		})
+
+	automation.Register(r, automation.Definition{
+		Name:        "workers_turns",
+		Description: "Page through all retained turns of a worker, newest first, with turn number, state, prompt preview, timing, and result size; filter=attention lists only turns that failed, were cancelled or interrupted, need reconciliation, are blocked, or are waiting",
+		Role:        "read",
+		Toolset:     automation.ToolsetCollab,
+	}, func(v workerTurnsInput) string { return v.WorkerID },
+		func(p automation.Principal, v workerTurnsInput) error { return scopeWorkers(p, v.WorkerID) },
+		func(ctx context.Context, call automation.Call, v workerTurnsInput) (automation.Outcome, error) {
+			if a.Workers == nil {
+				return automation.Outcome{}, automation.Fail("unavailable", "Workers service is unavailable")
+			}
+			limit, err := optionalIntRange(v.Limit, "limit", 20, 1, 50)
+			if err != nil {
+				return automation.Outcome{}, err
+			}
+			filter := strings.TrimSpace(v.Filter)
+			if filter == "" {
+				filter = workers.TurnFilterAll
+			}
+			binding := []any{"workers_turns", call.Principal.ID, v.WorkerID, v.WorkspaceID, filter}
+			cursor, err := automation.ParseCursor(v.Cursor, binding)
+			if err != nil {
+				return automation.Outcome{}, err
+			}
+			items, hasMore, _, err := a.Workers.ListTurns(v.WorkerID, v.WorkspaceID, cursor.After, limit, filter)
+			if err != nil {
+				return automation.Outcome{}, err
+			}
+			return automation.Outcome{Data: buildWorkerTurnsView(v.WorkerID, v.WorkspaceID, filter, v.Cursor, items, hasMore, binding)}, nil
 		})
 
 	automation.Register(r, automation.Definition{
@@ -399,7 +457,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 
 	automation.Register(r, automation.Definition{
 		Name:        "workers_result",
-		Description: "Read paginated final review/output text for a completed worker turn, or retained partial output (marked partial=true, answer_available=false) for an incomplete/non-success turn",
+		Description: "Read paginated final review/output text for a completed worker turn, or retained partial output (marked partial=true, answer_available=false) for an incomplete/non-success turn; pass part=\"prompt\" to read the caller's original prompt for the turn instead",
 		Role:        "read",
 		Toolset:     automation.ToolsetCollab,
 	}, func(v workerResultInput) string { return v.TurnID },
@@ -420,7 +478,15 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			if err != nil {
 				return automation.Outcome{}, err
 			}
-			page, err := a.Workers.ReadResult(v.TurnID, v.WorkspaceID, offset, maxBytes)
+			var page workers.ResultPage
+			switch strings.TrimSpace(v.Part) {
+			case "", "answer":
+				page, err = a.Workers.ReadResult(v.TurnID, v.WorkspaceID, offset, maxBytes)
+			case "prompt":
+				page, err = a.Workers.ReadPrompt(v.TurnID, v.WorkspaceID, offset, maxBytes)
+			default:
+				return automation.Outcome{}, automation.Fail("invalid_parameters", "part must be \"answer\" or \"prompt\"")
+			}
 			if err != nil {
 				return automation.Outcome{}, err
 			}
@@ -703,6 +769,7 @@ func describeWorkerAutomationResults(r *automation.Registry) {
 	r.DescribeData("workers_create", automation.Schema[workers.Worker]())
 	r.DescribeData("workers_list", automation.Schema[workerListView]())
 	r.DescribeData("workers_get", automation.Schema[workerGetView]())
+	r.DescribeData("workers_turns", automation.Schema[workerTurnsView]())
 	r.DescribeData("workers_send", automation.Schema[workers.Turn]())
 	r.DescribeData("workers_wait", automation.Schema[workerWaitView]())
 	r.DescribeData("workers_wait_any", automation.Schema[workerWaitAnyView]())

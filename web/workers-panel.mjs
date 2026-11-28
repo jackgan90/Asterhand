@@ -1,37 +1,13 @@
 import {$, localizeError, node, trapDialogWheel} from "./ui.mjs";
 import {t} from "./i18n.mjs";
 import {createWorkersInteractionsController} from "./workers-interactions.mjs";
-
-const TERMINAL_STATES = new Set([
-  "completed",
-  "failed",
-  "cancelled",
-  "cancelled_authorization_revoked",
-  "interrupted",
-  "blocked_unsupported_approval",
-  "blocked_unsupported_user_input",
-]);
+import {createTurnTimeline, createWorkerSummaryUpdater, stateTone} from "./workers-timeline.mjs";
 
 const WORKER_STATE_KEYS = {
   idle: "web.workers.state_idle",
   running: "web.workers.state_running",
   reconciliation_required: "web.workers.state_reconciliation_required",
   closed: "web.workers.state_closed",
-};
-
-const TURN_STATE_KEYS = {
-  prepared: "web.workers.turn_state_prepared",
-  running: "web.workers.turn_state_running",
-  waiting_approval: "web.workers.turn_state_waiting_approval",
-  waiting_input: "web.workers.turn_state_waiting_input",
-  completed: "web.workers.turn_state_completed",
-  failed: "web.workers.turn_state_failed",
-  cancelled: "web.workers.turn_state_cancelled",
-  cancelled_authorization_revoked: "web.workers.turn_state_cancelled_authorization_revoked",
-  interrupted: "web.workers.turn_state_interrupted",
-  reconciliation_required: "web.workers.turn_state_reconciliation_required",
-  blocked_unsupported_approval: "web.workers.turn_state_blocked_unsupported_approval",
-  blocked_unsupported_user_input: "web.workers.turn_state_blocked_unsupported_user_input",
 };
 
 function approvalModeLabel(mode) {
@@ -48,47 +24,13 @@ function folderName(rootPath) {
   return parts[parts.length - 1] || rootPath;
 }
 
-function formatLogTime(raw) {
-  if (!raw) return "";
-  const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toTimeString().slice(0, 8);
-}
-
 function workerStateLabel(state) {
   const key = WORKER_STATE_KEYS[state];
   return key ? t(key) : state;
 }
 
-function turnStateLabel(state) {
-  const key = TURN_STATE_KEYS[state];
-  return key ? t(key) : state;
-}
-
 function accessLabel(mode) {
   return t(mode === "workspace_write" ? "web.workers.access_workspace_write" : "web.workers.access_read_only");
-}
-
-function stateTone(state) {
-  if (state === "running" || state === "prepared" || state === "waiting_approval" || state === "waiting_input") return "warn";
-  if (state === "completed" || state === "idle") return "ok";
-  if (state === "reconciliation_required" || state.startsWith("blocked_")) return "warn";
-  if (state === "failed" || state === "interrupted" || state.startsWith("cancelled")) return "error";
-  return "";
-}
-
-function createLogRow(entry) {
-  const row = node("div", null, "worker-log-row");
-  const ts = formatLogTime(entry.timestamp);
-  const tag = entry.phase && entry.phase !== entry.kind ? `${entry.kind}/${entry.phase}` : entry.kind;
-  if (ts) row.append(node("span", ts, "worker-log-time"));
-  row.append(node("span", tag, "worker-log-tag"), node("span", entry.summary || "", "worker-log-msg"));
-  return row;
-}
-
-function isPinnedToBottom(el) {
-  if (!el) return false;
-  return (el.scrollHeight - el.scrollTop - el.clientHeight) <= 24;
 }
 
 export function workersPanel({api, post, listen, session, notice, now = () => Date.now()}) {
@@ -104,24 +46,24 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
   let workers = [];
   let selectedWorkerID = "";
   let selectedWorker = null;
-  let turns = [];
-  let selectedTurnID = "";
-  let selectedTurn = null;
-  let logEntries = [];
-  let lastLogSeq = 0;
-  let resultPage = null;
+  let summary = null;
+  let timeline = null;
+  let roleHintExpanded = false;
   let pollTimer = null;
   let refreshing = false;
   let pendingRefresh = false;
   let busyAction = false;
   let loadSeq = 0;
+  let localeRev = 0;
 
-  // Render cache to avoid rebuilding DOM and resetting scroll positions during polling.
+  // Render cache so polling patches the detail pane in place instead of
+  // rebuilding header controls when only summary durations advance.
   let lastWorkersSig = null;
-  let lastMetaSig = null;
-  let renderedTurnID = "";
-  let renderedLogBox = null;
-  let renderedLogCount = 0;
+  let attachedWorkerID = "";
+  let headHost = null;
+  let headBarEl = null;
+  let lastWorkerBarSig = null;
+  let summaryUpdater = null;
   const listButtons = new Map();
 
   const interactionsCtrl = createWorkersInteractionsController({
@@ -132,19 +74,12 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
     onDecide: payload => decideInteraction(payload),
   });
 
-  function resetTurnState() {
-    selectedTurnID = "";
-    selectedTurn = null;
-    logEntries = [];
-    lastLogSeq = 0;
-    resultPage = null;
-  }
-
   function invalidateDetailCache() {
-    lastMetaSig = null;
-    renderedTurnID = "";
-    renderedLogBox = null;
-    renderedLogCount = 0;
+    attachedWorkerID = "";
+    headHost = null;
+    headBarEl = null;
+    lastWorkerBarSig = null;
+    summaryUpdater = null;
   }
 
   function setStatus(key, isError = false) {
@@ -164,8 +99,8 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
   function schedulePoll() {
     clearPoll();
     if (!dialog?.open) return;
-    const waitingFirstTurn = Boolean(selectedWorker && selectedWorker.state !== "closed" && turns.length === 0);
-    const hasActive = (selectedTurn && !TERMINAL_STATES.has(selectedTurn.state))
+    const waitingFirstTurn = Boolean(selectedWorker && selectedWorker.state !== "closed" && timeline && timeline.turnCount() === 0);
+    const hasActive = Boolean(timeline?.hasActive())
       || workers.some(w => w.state === "running")
       || interactionsCtrl.hasItems()
       || waitingFirstTurn;
@@ -260,107 +195,7 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
     listEl.scrollTop = prevScrollTop;
   }
 
-  function renderVCSSnapshot(turn) {
-    const snap = turn.after_vcs || turn.baseline_vcs;
-    if (!snap) return null;
-    const box = node("section", null, "worker-vcs-box");
-    box.append(node("h4", t("web.workers.vcs_heading")));
-    if (snap.vcs === "none") {
-      box.append(node("p", t("web.workers.vcs_none"), "worker-meta-line"));
-      return box;
-    }
-    const baseDirty = Boolean(turn.baseline_vcs?.dirty_baseline);
-    const meta = [
-      snap.branch || "",
-      snap.head_commit || "",
-      t(baseDirty ? "web.workers.vcs_dirty_baseline" : "web.workers.vcs_clean_baseline"),
-    ].filter(Boolean).join(" · ");
-    box.append(
-      node("p", meta, "worker-meta-line"),
-      node("p", t("web.workers.vcs_counts", {
-        staged: String(snap.staged_count || 0),
-        unstaged: String(snap.unstaged_count || 0),
-        untracked: String(snap.untracked_count || 0),
-      }), "worker-meta-line"),
-    );
-    if (Array.isArray(snap.changed_files) && snap.changed_files.length) {
-      const files = node("div", snap.changed_files.join("\n"), "worker-code-block");
-      box.append(files);
-    }
-    if (snap.external_changes_possible) {
-      box.append(node("small", t("web.workers.vcs_external_note"), "harness-note"));
-    }
-    return box;
-  }
-
-  function detailMetaSignature() {
-    return JSON.stringify({
-      worker: selectedWorker ? {
-        worker_id: selectedWorker.worker_id,
-        alias: selectedWorker.alias,
-        state: selectedWorker.state,
-        access_mode: selectedWorker.access_mode,
-        effective_approval_mode: selectedWorker.effective_approval_mode,
-        session_auto_approve: Boolean(selectedWorker.session_auto_approve),
-        workspace_root: selectedWorker.workspace_root,
-        harness_id: selectedWorker.harness_id,
-        model: selectedWorker.model,
-        reasoning_effort: selectedWorker.reasoning_effort,
-      } : null,
-      turns: turns.map(x => [x.turn_id, x.state]),
-      selectedTurnID,
-      turn: selectedTurn ? {
-        turn_id: selectedTurn.turn_id,
-        state: selectedTurn.state,
-        error_message: selectedTurn.error_message,
-        partial_output: selectedTurn.partial_output,
-        baseline_vcs: selectedTurn.baseline_vcs,
-        after_vcs: selectedTurn.after_vcs,
-      } : null,
-      resultText: resultPage?.text || "",
-      busyAction,
-      hasLogs: logEntries.length > 0,
-    });
-  }
-
-  function renderDetail(force = false) {
-    if (!detailEl) return;
-    const metaSig = detailMetaSignature();
-
-    // Fast path: same worker & turn metadata, only new log entries arrived -> append in-place!
-    if (!force && metaSig === lastMetaSig && renderedTurnID === selectedTurnID && renderedLogBox) {
-      if (logEntries.length > renderedLogCount) {
-        const pinned = isPinnedToBottom(renderedLogBox);
-        const prevTop = renderedLogBox.scrollTop;
-        for (let i = renderedLogCount; i < logEntries.length; i++) {
-          renderedLogBox.append(createLogRow(logEntries[i]));
-        }
-        renderedLogCount = logEntries.length;
-        if (pinned) renderedLogBox.scrollTop = renderedLogBox.scrollHeight;
-        else renderedLogBox.scrollTop = prevTop;
-      }
-      return;
-    }
-
-    const sameTurn = renderedTurnID !== "" && renderedTurnID === selectedTurnID;
-    const prevDetailTop = sameTurn ? detailEl.scrollTop : 0;
-    const prevLogBox = sameTurn ? renderedLogBox : null;
-    const prevLogPinned = prevLogBox ? isPinnedToBottom(prevLogBox) : false;
-    const prevLogTop = prevLogBox ? prevLogBox.scrollTop : 0;
-    const prevAnswerEl = sameTurn ? detailEl.querySelector(".worker-answer-block") : null;
-    const prevAnswerTop = prevAnswerEl ? prevAnswerEl.scrollTop : 0;
-
-    lastMetaSig = metaSig;
-    renderedTurnID = selectedTurnID;
-    renderedLogBox = null;
-    renderedLogCount = 0;
-
-    detailEl.replaceChildren();
-    if (!selectedWorker) {
-      detailEl.append(node("div", t("web.workers.empty_select"), "empty"));
-      return;
-    }
-    const w = selectedWorker;
+  function buildWorkerHead(w) {
     const header = node("div", null, "worker-detail-head");
     const info = node("div", null, "worker-detail-meta");
     const titleRow = node("div", null, "worker-detail-title");
@@ -398,212 +233,143 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
       headActions.append(closeBtn);
     }
     header.append(info, headActions);
-    detailEl.append(header);
+    return header;
+  }
 
-    const turnsSec = node("section", null, "worker-turns-section");
-    turnsSec.append(node("h4", t("web.workers.turns_heading")));
-    if (!turns.length) {
-      turnsSec.append(node("p", t("web.workers.turns_empty"), "worker-meta-line"));
-    } else {
-      const turnList = node("div", null, "worker-turns-bar");
-      for (const turn of turns) {
-        const pill = node("button", null, "worker-turn-pill");
-        pill.type = "button";
-        if (turn.turn_id === selectedTurnID) pill.dataset.selected = "true";
-        pill.append(node("span", turnStateLabel(turn.state)), node("small", turn.turn_id.slice(-6)));
-        pill.addEventListener("click", () => void selectTurn(turn.turn_id));
-        turnList.append(pill);
+  function workerBarSignature(w) {
+    return JSON.stringify([
+      w.worker_id, w.alias, w.state, w.access_mode, w.approval_mode,
+      w.effective_approval_mode, Boolean(w.session_auto_approve),
+      w.workspace_root, w.harness_id, w.model, w.reasoning_effort,
+      busyAction, localeRev, t("web.workers.close_worker"),
+    ]);
+  }
+
+  function syncHeadHost(force = false) {
+    const barSig = workerBarSignature(selectedWorker);
+    let barChanged = false;
+    if (force || !headBarEl || barSig !== lastWorkerBarSig) {
+      headBarEl = buildWorkerHead(selectedWorker);
+      lastWorkerBarSig = barSig;
+      barChanged = true;
+    }
+    if (!summaryUpdater) {
+      summaryUpdater = createWorkerSummaryUpdater(() => {
+        roleHintExpanded = !roleHintExpanded;
+        renderDetail();
+      });
+    }
+    const hasSummaryContent = summaryUpdater.update(selectedWorker, summary, {roleHintExpanded, localeRev, force});
+    const wantedChildren = hasSummaryContent ? [headBarEl, summaryUpdater.el] : [headBarEl];
+    const cur = headHost.children || [];
+    const layoutChanged = barChanged
+      || cur.length !== wantedChildren.length
+      || cur[0] !== wantedChildren[0]
+      || cur[1] !== wantedChildren[1];
+    if (layoutChanged) headHost.replaceChildren(...wantedChildren);
+  }
+
+  // Swaps the detail pane atomically only when the selected worker changes;
+  // otherwise patches header controls and summary counters independently in place.
+  function renderDetail(force = false) {
+    if (!detailEl) return;
+    if (!selectedWorker || !timeline) {
+      if (attachedWorkerID !== "" || !detailEl.children?.length || force) {
+        detailEl.replaceChildren(node("div", t("web.workers.empty_select"), "empty"));
       }
-      turnsSec.append(turnList);
+      invalidateDetailCache();
+      return;
     }
-    detailEl.append(turnsSec);
-
-    if (!selectedTurn || selectedTurn.worker_id !== w.worker_id) return;
-    const trn = selectedTurn;
-    const turnBox = node("section", null, "worker-turn-detail");
-    const turnHead = node("div", null, "worker-turn-head");
-    const turnMeta = node("div");
-    const stBadge = node("span", turnStateLabel(trn.state), "badge");
-    const tone = stateTone(trn.state);
-    if (tone) stBadge.dataset.tone = tone;
-    turnMeta.append(stBadge, node("small", ` ${trn.turn_id}`, "worker-meta-line"));
-    const turnBtns = node("div", null, "actions");
-    if (trn.state === "running" || trn.state === "prepared") {
-      const stopBtn = node("button", t("web.harnesses.turn_stop"), "danger");
-      stopBtn.type = "button";
-      stopBtn.disabled = busyAction;
-      stopBtn.addEventListener("click", () => void runAction({action: "cancel", turn_id: trn.turn_id}));
-      turnBtns.append(stopBtn);
-    }
-    if (trn.state === "reconciliation_required") {
-      const recBtn = node("button", t("web.harnesses.turn_reconcile"), "secondary");
-      recBtn.type = "button";
-      recBtn.disabled = busyAction;
-      recBtn.addEventListener("click", () => void runAction({action: "reconcile", turn_id: trn.turn_id}));
-      const resBtn = node("button", t("web.harnesses.turn_resolve"), "secondary");
-      resBtn.type = "button";
-      resBtn.disabled = busyAction;
-      resBtn.addEventListener("click", () => void runAction({action: "resolve", turn_id: trn.turn_id}));
-      turnBtns.append(recBtn, resBtn);
-    }
-    turnHead.append(turnMeta, turnBtns);
-    turnBox.append(turnHead);
-
-    if (trn.error_message) {
-      const errP = node("p", trn.error_message, "worker-error-line");
-      turnBox.append(errP);
-    }
-
-    const vcsEl = renderVCSSnapshot(trn);
-    if (vcsEl) turnBox.append(vcsEl);
-
-    let answerEl = null;
-    if (resultPage?.text) {
-      turnBox.append(node("h4", t("web.workers.answer_heading")));
-      answerEl = node("pre", resultPage.text, "worker-code-block worker-answer-block");
-      turnBox.append(answerEl);
-    } else if (trn.partial_output) {
-      turnBox.append(node("h4", t("web.workers.partial_heading")));
-      answerEl = node("pre", trn.partial_output, "worker-code-block worker-answer-block");
-      turnBox.append(answerEl);
-    }
-
-    turnBox.append(node("h4", t("web.workers.logs_heading")));
-    if (!logEntries.length) {
-      turnBox.append(node("p", t("web.workers.logs_empty"), "worker-meta-line"));
-    } else {
-      const logBox = node("div", null, "worker-logs-box");
-      for (const entry of logEntries) {
-        logBox.append(createLogRow(entry));
-      }
-      turnBox.append(logBox);
-      renderedLogBox = logBox;
-      renderedLogCount = logEntries.length;
-    }
-    detailEl.append(turnBox);
-
-    if (sameTurn) {
-      detailEl.scrollTop = prevDetailTop;
-      if (answerEl) answerEl.scrollTop = prevAnswerTop;
-      if (renderedLogBox) {
-        if (prevLogPinned) renderedLogBox.scrollTop = renderedLogBox.scrollHeight;
-        else renderedLogBox.scrollTop = prevLogTop;
-      }
-    } else {
+    if (attachedWorkerID !== selectedWorker.worker_id) {
+      headHost = node("div", null, "worker-detail-top");
+      headBarEl = null;
+      lastWorkerBarSig = null;
+      summaryUpdater = null;
+      syncHeadHost(true);
+      timeline.render(true);
+      detailEl.replaceChildren(headHost, timeline.root);
       detailEl.scrollTop = 0;
+      attachedWorkerID = selectedWorker.worker_id;
+      return;
     }
+    syncHeadHost(force);
+    timeline.render(force);
   }
 
-  async function fetchTurnSnapshot(turnID, incrementalAfterSeq) {
-    const url = incrementalAfterSeq > 0
-      ? `/api/workers/logs?turn_id=${encodeURIComponent(turnID)}&after_seq=${incrementalAfterSeq}`
-      : `/api/workers/logs?turn_id=${encodeURIComponent(turnID)}`;
-    return api(url);
-  }
-
-  async function selectTurn(turnID) {
-    const scope = session();
-    const seq = ++loadSeq;
-    const isSame = turnID === selectedTurnID;
-    const afterSeq = isSame ? lastLogSeq : 0;
-    try {
-      const res = await fetchTurnSnapshot(turnID, afterSeq);
-      if (!scope?.active || seq !== loadSeq) return;
-      selectedTurnID = turnID;
-      selectedTurn = res.turn || turns.find(x => x.turn_id === turnID) || null;
-      const incoming = Array.isArray(res.entries) ? res.entries : [];
-      if (isSame && afterSeq > 0) {
-        for (const entry of incoming) {
-          if ((entry.seq || 0) > lastLogSeq) {
-            logEntries.push(entry);
-            lastLogSeq = entry.seq;
-          }
-        }
-      } else {
-        logEntries = incoming;
-        lastLogSeq = incoming.length ? (incoming[incoming.length - 1].seq || 0) : 0;
-        invalidateDetailCache();
-      }
-      resultPage = res.result || null;
-      setStatus("");
-      renderDetail();
-      schedulePoll();
-    } catch (err) {
-      if (!scope?.active || seq !== loadSeq) return;
-      setStatus("web.workers.load_failed", true);
-      notice?.(localizeError(err));
-      schedulePoll();
-    }
+  function newTimeline(workerID) {
+    return createTurnTimeline({
+      api,
+      workerID,
+      now,
+      isBusy: () => busyAction,
+      onAction: payload => void runAction(payload),
+      notice: err => notice?.(localizeError(err)),
+    });
   }
 
   async function selectWorker(workerID, {isPoll = false} = {}) {
     const scope = session();
     const seq = ++loadSeq;
-    const switchedWorker = workerID !== selectedWorkerID;
     selectedWorkerID = workerID;
     syncListSelection();
 
     if (!workerID) {
+      timeline?.dispose();
+      timeline = null;
       selectedWorker = null;
-      turns = [];
-      resetTurnState();
-      invalidateDetailCache();
+      summary = null;
       renderDetail();
       schedulePoll();
       return;
     }
 
+    // Decide reuse strictly against the Worker ID actually bound to the live
+    // timeline instance, never selectedWorkerID (which updates optimistically
+    // before the async fetch settles and may outpace timeline after an error or
+    // overlapping refresh).
+    const reuseTimeline = Boolean(timeline && timeline.workerID === workerID);
+    const tl = reuseTimeline ? timeline : newTimeline(workerID);
+    const token = tl.queryToken();
+    const filterQuery = token.filter !== "all" ? `&filter=${encodeURIComponent(token.filter)}` : "";
+
     try {
-      // Fetch complete worker + turns (+ active turn logs) BEFORE touching detailEl,
-      // so switching between workers swaps the right pane atomically in a single paint
-      // with zero intermediate empty/collapsed frame or layout shift.
-      const wRes = await api(`/api/workers/get?worker_id=${encodeURIComponent(workerID)}`);
-      if (!scope?.active || seq !== loadSeq || selectedWorkerID !== workerID) return;
-
-      const nextWorker = wRes.worker || null;
-      const nextTurns = Array.isArray(wRes.turns) ? wRes.turns : [];
-      const preservedTurnID = switchedWorker ? "" : selectedTurnID;
-      const nextTurnObj = nextTurns.find(x => x.turn_id === preservedTurnID) || nextTurns[0] || null;
-      const nextTurnID = nextTurnObj ? nextTurnObj.turn_id : "";
-
-      if (!nextTurnID) {
-        selectedWorker = nextWorker;
-        turns = nextTurns;
-        resetTurnState();
-        if (switchedWorker) invalidateDetailCache();
-        renderDetail();
-        schedulePoll();
+      // Fetch the worker, summary, newest timeline page, and expanded turn
+      // details BEFORE touching detailEl, so switching workers swaps the right
+      // pane atomically in a single paint with no intermediate empty frame.
+      const res = await api(`/api/workers/get?worker_id=${encodeURIComponent(workerID)}${filterQuery}`);
+      if (!scope?.active || seq !== loadSeq || selectedWorkerID !== workerID) {
+        if (tl !== timeline) tl.dispose();
         return;
       }
-
-      const sameTurn = !switchedWorker && nextTurnID === selectedTurnID;
-      const afterSeq = sameTurn ? lastLogSeq : 0;
-      const lRes = await fetchTurnSnapshot(nextTurnID, afterSeq);
-      if (!scope?.active || seq !== loadSeq || selectedWorkerID !== workerID) return;
-
-      selectedWorker = nextWorker;
-      turns = nextTurns;
-      selectedTurnID = nextTurnID;
-      selectedTurn = lRes.turn || nextTurnObj;
-      const incoming = Array.isArray(lRes.entries) ? lRes.entries : [];
-      if (sameTurn && afterSeq > 0) {
-        for (const entry of incoming) {
-          if ((entry.seq || 0) > lastLogSeq) {
-            logEntries.push(entry);
-            lastLogSeq = entry.seq;
-          }
-        }
-      } else {
-        logEntries = incoming;
-        lastLogSeq = incoming.length ? (incoming[incoming.length - 1].seq || 0) : 0;
+      if (res?.worker?.worker_id && res.worker.worker_id !== workerID) {
+        throw new Error("worker_mismatch");
+      }
+      await tl.applyFirstPage(res, token);
+      if (!scope?.active || seq !== loadSeq || selectedWorkerID !== workerID) {
+        if (tl !== timeline) tl.dispose();
+        return;
+      }
+      if (tl !== timeline) {
+        timeline?.dispose();
+        timeline = tl;
+        roleHintExpanded = false;
         invalidateDetailCache();
       }
-      resultPage = lRes.result || null;
+      selectedWorker = res.worker || null;
+      summary = res.summary || null;
       setStatus("");
       renderDetail();
       schedulePoll();
     } catch (err) {
+      if (tl !== timeline) tl.dispose();
       if (!scope?.active || seq !== loadSeq) return;
+      if (attachedWorkerID && attachedWorkerID !== workerID) {
+        timeline?.dispose();
+        timeline = null;
+        selectedWorker = null;
+        summary = null;
+        renderDetail();
+      }
       if (!isPoll) {
         setStatus("web.workers.load_failed", true);
         notice?.(localizeError(err));
@@ -704,9 +470,11 @@ export function workersPanel({api, post, listen, session, notice, now = () => Da
     stop,
     refreshIfOpen: refreshSelectedTurnAndList,
     relocalize: () => {
+      localeRev++;
       interactionsCtrl.invalidateLocale();
+      timeline?.invalidateLocale();
       lastWorkersSig = null;
-      invalidateDetailCache();
+      lastWorkerBarSig = null;
       if (!dialog?.open) return;
       interactionsCtrl.render(true);
       renderList(true);

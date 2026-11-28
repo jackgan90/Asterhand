@@ -292,6 +292,66 @@ func TestFormatMCPTextWorkersResultOverBudgetDoesNotSkipPage(t *testing.T) {
 	if !strings.Contains(txt, `cursor=\"20587\"`) || !strings.Contains(txt, `max_bytes=8192`) {
 		t.Fatalf("workers_result fallback should instruct retrying from offset 20587 with smaller max_bytes, got %s", txt)
 	}
+
+	normalPrompt := formatMCPText("workers_result", Response{
+		Version: APIVersion,
+		Data: map[string]any{
+			"turn_id":     "turn_prompt_1",
+			"worker_id":   "wkr_1",
+			"part":        "prompt",
+			"state":       "completed",
+			"offset":      0,
+			"total_bytes": 16384,
+			"complete":    false,
+			"next_cursor": "4096",
+			"text":        "short page",
+		},
+	})
+	if !strings.Contains(normalPrompt, `part=\"prompt\"`) || !strings.Contains(normalPrompt, `cursor=\"4096\"`) {
+		t.Fatalf("normal prompt pagination next_step must preserve part=\"prompt\", got %s", normalPrompt)
+	}
+
+	overBudgetPrompt := formatMCPText("workers_result", Response{
+		Version: APIVersion,
+		Data: map[string]any{
+			"turn_id":     "turn_prompt_big",
+			"worker_id":   "wkr_1",
+			"part":        "prompt",
+			"state":       "completed",
+			"offset":      8192,
+			"total_bytes": 65536,
+			"complete":    false,
+			"next_cursor": "32768",
+			"text":        strings.Repeat("<", 10000),
+		},
+	})
+	if !strings.Contains(overBudgetPrompt, `"part":"prompt"`) || !strings.Contains(overBudgetPrompt, `part=\"prompt\"`) || !strings.Contains(overBudgetPrompt, `cursor=\"8192\"`) {
+		t.Fatalf("over-budget prompt fallback must preserve part=\"prompt\" and offset=8192, got %s", overBudgetPrompt)
+	}
+
+	overBudgetTurns := formatMCPText("workers_turns", Response{
+		Version: APIVersion,
+		Data: map[string]any{
+			"worker_id":    "wkr_1",
+			"workspace_id": "ws_1",
+			"filter":       "attention",
+			"cursor":       "cur_page_1",
+			"next_cursor":  "cur_page_2",
+			"has_more":     true,
+			"items": []map[string]any{
+				{"turn_id": "turn_huge", "state": "interrupted", "error_code": strings.Repeat("<", 10000)},
+			},
+		},
+	})
+	if !strings.Contains(overBudgetTurns, `"text_truncated":true`) || !strings.Contains(overBudgetTurns, `"cursor":"cur_page_1"`) {
+		t.Fatalf("over-budget workers_turns fallback must preserve request cursor cur_page_1, got %s", overBudgetTurns)
+	}
+	if strings.Contains(overBudgetTurns, "cur_page_2") || strings.Contains(overBudgetTurns, `"next_cursor"`) {
+		t.Fatalf("over-budget workers_turns fallback must not advertise skipped next_cursor, got %s", overBudgetTurns)
+	}
+	if !strings.Contains(overBudgetTurns, `workspace_id=\"ws_1\"`) || !strings.Contains(overBudgetTurns, `filter=\"attention\"`) || !strings.Contains(overBudgetTurns, `cursor=\"cur_page_1\"`) || !strings.Contains(overBudgetTurns, `limit=1`) {
+		t.Fatalf("over-budget workers_turns next_step must keep workspace_id, filter, request cursor, and non-inflated limit=1, got %s", overBudgetTurns)
+	}
 }
 
 func TestRunWaitLoopBoundsInFlightCallAndRejectsLateSuccess(t *testing.T) {

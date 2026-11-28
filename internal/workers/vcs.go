@@ -48,12 +48,25 @@ func CaptureVCSSnapshot(ctx context.Context, dir string) *VCSSnapshot {
 				snap.UnstagedCount++
 			}
 		}
+		if isCollapsedPorcelainDir(file) {
+			snap.ChangedCountLowerBound = true
+		}
+		snap.ChangedCount++
 		if len(snap.ChangedFiles) < 32 {
 			snap.ChangedFiles = append(snap.ChangedFiles, file)
 		}
 	}
 	snap.DirtyBaseline = snap.StagedCount > 0 || snap.UnstagedCount > 0 || snap.UntrackedCount > 0
 	return snap
+}
+
+// isCollapsedPorcelainDir reports whether a git status --porcelain=v1 entry is
+// a collapsed untracked directory (either unquoted "dir/" or C-quoted "\"dir/\"").
+func isCollapsedPorcelainDir(entry string) bool {
+	if strings.HasSuffix(entry, "/") {
+		return true
+	}
+	return len(entry) >= 3 && entry[0] == '"' && strings.HasSuffix(entry, `/"`)
 }
 
 func runGit(ctx context.Context, dir string, args ...string) (string, error) {

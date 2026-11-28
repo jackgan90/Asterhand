@@ -101,20 +101,20 @@ func IsTurnTerminal(state string) bool {
 }
 
 type Worker struct {
-	ID                    string     `json:"worker_id"`
-	WorkspaceID           string     `json:"workspace_id"`
-	WorkspaceRoot         string     `json:"workspace_root"`
-	WorktreeKey           string     `json:"worktree_key"`
-	Alias                 string     `json:"alias,omitempty"`
-	HarnessID             string     `json:"harness_id"`
-	AccessMode            string     `json:"access_mode"`
-	ApprovalMode          string     `json:"approval_mode,omitempty"`
-	EffectiveApprovalMode string     `json:"effective_approval_mode,omitempty"`
-	SessionAutoApprove    bool       `json:"session_auto_approve,omitempty"`
-	ProtectionLevel       string     `json:"protection_level"`
-	RoleHint              string     `json:"role_hint,omitempty"`
-	Model                 string     `json:"model,omitempty"`
-	ReasoningEffort       string     `json:"reasoning_effort,omitempty"`
+	ID                           string     `json:"worker_id"`
+	WorkspaceID                  string     `json:"workspace_id"`
+	WorkspaceRoot                string     `json:"workspace_root"`
+	WorktreeKey                  string     `json:"worktree_key"`
+	Alias                        string     `json:"alias,omitempty"`
+	HarnessID                    string     `json:"harness_id"`
+	AccessMode                   string     `json:"access_mode"`
+	ApprovalMode                 string     `json:"approval_mode,omitempty"`
+	EffectiveApprovalMode        string     `json:"effective_approval_mode,omitempty"`
+	SessionAutoApprove           bool       `json:"session_auto_approve,omitempty"`
+	ProtectionLevel              string     `json:"protection_level"`
+	RoleHint                     string     `json:"role_hint,omitempty"`
+	Model                        string     `json:"model,omitempty"`
+	ReasoningEffort              string     `json:"reasoning_effort,omitempty"`
 	State                        string     `json:"state"`
 	SessionEpoch                 int        `json:"session_epoch"`
 	NativeSessionID              string     `json:"native_session_id,omitempty"`
@@ -122,14 +122,15 @@ type Worker struct {
 	NativeDefaultModel           string     `json:"native_default_model,omitempty"`
 	NativeDefaultReasoningEffort string     `json:"native_default_reasoning_effort,omitempty"`
 	ActiveTurnID                 string     `json:"active_turn_id,omitempty"`
-	OperationID           string     `json:"operation_id,omitempty"`
-	OperationKey          string     `json:"-"`
-	ActorID               string     `json:"actor_id,omitempty"`
-	CreatedAt             time.Time  `json:"created_at"`
-	UpdatedAt             time.Time  `json:"updated_at"`
-	ClosedAt              *time.Time `json:"closed_at,omitempty"`
-	Warnings              []string   `json:"warnings,omitempty"`
-	DetailsOmitted        []string   `json:"details_omitted,omitempty" description:"Field names omitted from this worker view (for example role_hint or warnings) to keep the response within budget; stored worker configuration is unchanged"`
+	LastTurnSeq                  int        `json:"last_turn_seq,omitempty" description:"Highest turn sequence number assigned to this worker"`
+	OperationID                  string     `json:"operation_id,omitempty"`
+	OperationKey                 string     `json:"-"`
+	ActorID                      string     `json:"actor_id,omitempty"`
+	CreatedAt                    time.Time  `json:"created_at"`
+	UpdatedAt                    time.Time  `json:"updated_at"`
+	ClosedAt                     *time.Time `json:"closed_at,omitempty"`
+	Warnings                     []string   `json:"warnings,omitempty"`
+	DetailsOmitted               []string   `json:"details_omitted,omitempty" description:"Field names omitted from this worker view (for example role_hint or warnings) to keep the response within budget; stored worker configuration is unchanged"`
 }
 
 type InteractionOption struct {
@@ -327,26 +328,26 @@ type InteractionDecision struct {
 type InteractionHandler func(ctx context.Context, req InteractionRequest) (InteractionDecision, error)
 
 type WaitAnyItem struct {
-	TurnID             string           `json:"turn_id"`
-	WorkerID           string           `json:"worker_id"`
-	WorkspaceID        string           `json:"workspace_id"`
-	HarnessID          string           `json:"harness_id"`
-	State              string           `json:"state"`
-	Progress           string           `json:"progress,omitempty"`
-	AnswerAvailable    bool             `json:"answer_available"`
-	AnswerSource       string           `json:"answer_source,omitempty"`
-	AnswerPreview      string           `json:"answer_preview,omitempty"`
-	Truncated           bool              `json:"truncated,omitempty"`
-	Expired             bool              `json:"expired,omitempty" description:"True when the completed turn's stored answer body has been evicted by retention or capacity limits while the summary remains readable"`
-	ResultTruncated     bool              `json:"result_truncated,omitempty" description:"True when the worker's raw final answer exceeded the 2 MiB storage cap and was truncated before persistence"`
-	ResultBytes         int               `json:"result_bytes"`
-	NextCursor          string            `json:"next_cursor,omitempty"`
-	ElapsedSeconds      int               `json:"elapsed_seconds,omitempty"`
-	IdleSeconds        int              `json:"idle_seconds,omitempty"`
-	StreamEvents       int64            `json:"stream_events,omitempty"`
-	StreamBytes        int64            `json:"stream_bytes,omitempty"`
-	ErrorCode          string           `json:"error_code,omitempty"`
-	ErrorMessage       string           `json:"error_message,omitempty"`
+	TurnID                 string            `json:"turn_id"`
+	WorkerID               string            `json:"worker_id"`
+	WorkspaceID            string            `json:"workspace_id"`
+	HarnessID              string            `json:"harness_id"`
+	State                  string            `json:"state"`
+	Progress               string            `json:"progress,omitempty"`
+	AnswerAvailable        bool              `json:"answer_available"`
+	AnswerSource           string            `json:"answer_source,omitempty"`
+	AnswerPreview          string            `json:"answer_preview,omitempty"`
+	Truncated              bool              `json:"truncated,omitempty"`
+	Expired                bool              `json:"expired,omitempty" description:"True when the completed turn's stored answer body has been evicted by retention or capacity limits while the summary remains readable"`
+	ResultTruncated        bool              `json:"result_truncated,omitempty" description:"True when the worker's raw final answer exceeded the 2 MiB storage cap and was truncated before persistence"`
+	ResultBytes            int               `json:"result_bytes"`
+	NextCursor             string            `json:"next_cursor,omitempty"`
+	ElapsedSeconds         int               `json:"elapsed_seconds,omitempty"`
+	IdleSeconds            int               `json:"idle_seconds,omitempty"`
+	StreamEvents           int64             `json:"stream_events,omitempty"`
+	StreamBytes            int64             `json:"stream_bytes,omitempty"`
+	ErrorCode              string            `json:"error_code,omitempty"`
+	ErrorMessage           string            `json:"error_message,omitempty"`
 	AfterVCS               *VCSSnapshot      `json:"after_vcs,omitempty"`
 	PendingInteraction     *InteractionView  `json:"pending_interaction,omitempty"`
 	LatestCommentarySeq    int64             `json:"latest_commentary_seq,omitempty" description:"Highest commentary sequence number generated by this turn"`
@@ -364,45 +365,51 @@ type VCSSnapshot struct {
 	StagedCount             int      `json:"staged_count"`
 	UnstagedCount           int      `json:"unstaged_count"`
 	UntrackedCount          int      `json:"untracked_count"`
+	ChangedCount            int      `json:"changed_count,omitempty" description:"Count of changed porcelain entries in the worktree snapshot (changed_files lists at most 32 sample paths)"`
+	ChangedCountLowerBound  bool     `json:"changed_count_lower_bound,omitempty" description:"True when changed_count is a lower bound because git status collapsed one or more untracked directories"`
 	ChangedFiles            []string `json:"changed_files,omitempty"`
 }
 
 type Turn struct {
-	ID                  string       `json:"turn_id"`
-	WorkerID            string       `json:"worker_id"`
-	WorkspaceID         string       `json:"workspace_id"`
-	HarnessID           string       `json:"harness_id"`
-	SessionEpoch        int          `json:"session_epoch"`
-	OperationID         string       `json:"operation_id"`
-	OperationKey        string       `json:"-"`
-	ActorID             string       `json:"actor_id,omitempty"`
-	CallerID            string       `json:"caller_id,omitempty"`
-	ClientCorrelationID string       `json:"client_correlation_id"`
-	NativeSessionID     string       `json:"native_session_id,omitempty"`
-	NativeTurnID        string       `json:"native_turn_id,omitempty"`
-	AccessMode          string       `json:"access_mode"`
-	Model               string       `json:"model,omitempty"`
-	ReasoningEffort     string       `json:"reasoning_effort,omitempty"`
-	State               string       `json:"state"`
-	RevocationRequested bool         `json:"revocation_requested,omitempty"`
-	RevocationReason    string       `json:"revocation_reason,omitempty"`
-	AnswerSource        string       `json:"answer_source,omitempty"`
-	AnswerAvailable     bool         `json:"answer_available"`
-	PartialOutput       string       `json:"partial_output,omitempty"`
-	ResultBytes         int          `json:"result_bytes"`
-	ResultTruncated     bool         `json:"result_truncated,omitempty" description:"True when the worker's raw final answer exceeded the 2 MiB storage cap and was truncated before persistence"`
-	Progress            string       `json:"progress,omitempty"`
-	ErrorCode           string       `json:"error_code,omitempty"`
-	ErrorMessage        string       `json:"error_message,omitempty"`
-	GitRef              string       `json:"git_ref,omitempty"`
-	DiffBase            string       `json:"diff_base,omitempty"`
-	BaselineVCS         *VCSSnapshot `json:"baseline_vcs,omitempty"`
-	AfterVCS            *VCSSnapshot `json:"after_vcs,omitempty"`
-	StartedAt           time.Time    `json:"started_at"`
-	UpdatedAt           time.Time    `json:"updated_at"`
-	FinishedAt          *time.Time   `json:"finished_at,omitempty"`
-	ElapsedSeconds     int              `json:"elapsed_seconds,omitempty"`
-	IdleSeconds        int              `json:"idle_seconds,omitempty"`
+	ID                  string           `json:"turn_id"`
+	WorkerID            string           `json:"worker_id"`
+	WorkspaceID         string           `json:"workspace_id"`
+	HarnessID           string           `json:"harness_id"`
+	TurnSeq             int              `json:"turn_seq,omitempty" description:"1-based sequence number of this turn within its worker, assigned at admission"`
+	TurnSeqDerived      bool             `json:"turn_seq_derived,omitempty" description:"True when turn_seq was derived from start-time order because the turn predates stored sequence numbers"`
+	PromptPreview       string           `json:"prompt_preview,omitempty" description:"Single-line preview (at most 240 bytes) of the caller's original prompt; read the full prompt with workers_result(part=\"prompt\")"`
+	PromptBytes         int              `json:"prompt_bytes,omitempty" description:"Byte length of the caller's original prompt; 0 when the turn predates prompt recording"`
+	SessionEpoch        int              `json:"session_epoch"`
+	OperationID         string           `json:"operation_id"`
+	OperationKey        string           `json:"-"`
+	ActorID             string           `json:"actor_id,omitempty"`
+	CallerID            string           `json:"caller_id,omitempty"`
+	ClientCorrelationID string           `json:"client_correlation_id"`
+	NativeSessionID     string           `json:"native_session_id,omitempty"`
+	NativeTurnID        string           `json:"native_turn_id,omitempty"`
+	AccessMode          string           `json:"access_mode"`
+	Model               string           `json:"model,omitempty"`
+	ReasoningEffort     string           `json:"reasoning_effort,omitempty"`
+	State               string           `json:"state"`
+	RevocationRequested bool             `json:"revocation_requested,omitempty"`
+	RevocationReason    string           `json:"revocation_reason,omitempty"`
+	AnswerSource        string           `json:"answer_source,omitempty"`
+	AnswerAvailable     bool             `json:"answer_available"`
+	PartialOutput       string           `json:"partial_output,omitempty"`
+	ResultBytes         int              `json:"result_bytes"`
+	ResultTruncated     bool             `json:"result_truncated,omitempty" description:"True when the worker's raw final answer exceeded the 2 MiB storage cap and was truncated before persistence"`
+	Progress            string           `json:"progress,omitempty"`
+	ErrorCode           string           `json:"error_code,omitempty"`
+	ErrorMessage        string           `json:"error_message,omitempty"`
+	GitRef              string           `json:"git_ref,omitempty"`
+	DiffBase            string           `json:"diff_base,omitempty"`
+	BaselineVCS         *VCSSnapshot     `json:"baseline_vcs,omitempty"`
+	AfterVCS            *VCSSnapshot     `json:"after_vcs,omitempty"`
+	StartedAt           time.Time        `json:"started_at"`
+	UpdatedAt           time.Time        `json:"updated_at"`
+	FinishedAt          *time.Time       `json:"finished_at,omitempty"`
+	ElapsedSeconds      int              `json:"elapsed_seconds,omitempty"`
+	IdleSeconds         int              `json:"idle_seconds,omitempty"`
 	StreamEvents        int64            `json:"stream_events,omitempty"`
 	StreamBytes         int64            `json:"stream_bytes,omitempty"`
 	LatestCommentarySeq int64            `json:"latest_commentary_seq,omitempty"`

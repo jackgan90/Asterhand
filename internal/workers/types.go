@@ -129,6 +129,7 @@ type Worker struct {
 	UpdatedAt             time.Time  `json:"updated_at"`
 	ClosedAt              *time.Time `json:"closed_at,omitempty"`
 	Warnings              []string   `json:"warnings,omitempty"`
+	DetailsOmitted        []string   `json:"details_omitted,omitempty" description:"Field names omitted from this worker view (for example role_hint or warnings) to keep the response within budget; stored worker configuration is unchanged"`
 }
 
 type InteractionOption struct {
@@ -337,6 +338,7 @@ type WaitAnyItem struct {
 	AnswerPreview      string           `json:"answer_preview,omitempty"`
 	Truncated           bool              `json:"truncated,omitempty"`
 	Expired             bool              `json:"expired,omitempty" description:"True when the completed turn's stored answer body has been evicted by retention or capacity limits while the summary remains readable"`
+	ResultTruncated     bool              `json:"result_truncated,omitempty" description:"True when the worker's raw final answer exceeded the 2 MiB storage cap and was truncated before persistence"`
 	ResultBytes         int               `json:"result_bytes"`
 	NextCursor          string            `json:"next_cursor,omitempty"`
 	ElapsedSeconds      int               `json:"elapsed_seconds,omitempty"`
@@ -388,6 +390,7 @@ type Turn struct {
 	AnswerAvailable     bool         `json:"answer_available"`
 	PartialOutput       string       `json:"partial_output,omitempty"`
 	ResultBytes         int          `json:"result_bytes"`
+	ResultTruncated     bool         `json:"result_truncated,omitempty" description:"True when the worker's raw final answer exceeded the 2 MiB storage cap and was truncated before persistence"`
 	Progress            string       `json:"progress,omitempty"`
 	ErrorCode           string       `json:"error_code,omitempty"`
 	ErrorMessage        string       `json:"error_message,omitempty"`
@@ -417,6 +420,7 @@ type LogEntry struct {
 	ItemID    string    `json:"item_id,omitempty"`
 	Phase     string    `json:"phase,omitempty"`
 	Summary   string    `json:"summary"`
+	Truncated bool      `json:"truncated,omitempty" description:"True when this log entry summary was shortened to fit the single-response budget"`
 }
 
 type NativeItem struct {

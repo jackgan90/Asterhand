@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf16"
 	"unsafe"
 
 	"github.com/jackgan90/Asterhand/internal/model"
@@ -59,7 +60,28 @@ type managedProc struct {
 	killErr     error
 }
 
+const (
+	windowsMaxCommandLineUTF16 = 32767 // CreateProcessW hard limit including trailing NUL
+	windowsMaxCmdExeLineUTF16  = 8191  // cmd.exe command-line limit for .cmd/.bat wrappers
+)
+
+func validateWindowsCommandLine(executable, cmdLine string) error {
+	utf16Units := len(utf16.Encode([]rune(cmdLine))) + 1 // include trailing NUL
+	ext := strings.ToLower(filepath.Ext(executable))
+	if (ext == ".cmd" || ext == ".bat") && utf16Units > windowsMaxCmdExeLineUTF16 {
+		return fmt.Errorf("command line exceeds Windows cmd.exe limit (%d > %d UTF-16 code units); pass long instructions via file or shorten arguments", utf16Units, windowsMaxCmdExeLineUTF16)
+	}
+	if utf16Units > windowsMaxCommandLineUTF16 {
+		return fmt.Errorf("command line exceeds Windows CreateProcessW limit (%d > %d UTF-16 code units); pass long instructions via file or shorten arguments", utf16Units, windowsMaxCommandLineUTF16)
+	}
+	return nil
+}
+
 func spawnManagedProcess(executable string, args []string, workdir string, env []string) (*managedProc, error) {
+	spawnExe, cmdLine := buildWindowsCommandLine(executable, args)
+	if err := validateWindowsCommandLine(executable, cmdLine); err != nil {
+		return nil, err
+	}
 	inR, inW, err := os.Pipe()
 	if err != nil {
 		return nil, err
@@ -95,7 +117,6 @@ func spawnManagedProcess(executable string, args []string, workdir string, env [
 		return nil, err
 	}
 
-	spawnExe, cmdLine := buildWindowsCommandLine(executable, args)
 	res, err := userprocess.SpawnAttachedJob(userprocess.SpawnConfig{
 		Job:         job,
 		Token:       token,

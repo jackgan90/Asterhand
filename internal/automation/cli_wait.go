@@ -190,9 +190,15 @@ func runWaitLoop(
 		}
 
 		opName, argsJSON := buildWaitPayload(opts, sliceSec, commentarySeq)
-		resp, err := caller.Call(ctx, opName, "", argsJSON)
+		callCtx, cancelCall := context.WithTimeout(ctx, rem)
+		resp, err := caller.Call(callCtx, opName, "", argsJSON)
+		callTimedOut := callCtx.Err() != nil && ctx.Err() == nil
+		cancelCall()
 		if ctx.Err() != nil {
 			return cliError(stdout, PublicError(ctx.Err()))
+		}
+		if callTimedOut || deadline.Sub(nowFn()) <= 0 {
+			return writeWaitTimeout(stdout, lastResp, opts.TimeoutSeconds)
 		}
 		if transient, publicErr := classifyWaitError(err, resp.Error); publicErr != nil {
 			if !transient {

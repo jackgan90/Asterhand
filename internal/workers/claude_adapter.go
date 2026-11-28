@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -79,13 +80,14 @@ type claudeSession struct {
 	writeMu sync.Mutex
 	nextReq int64
 
-	mu       sync.Mutex
-	proc     workerProcess
-	stderr   *tailBuffer
-	pending  map[string]chan claudeControlReply
-	active   *claudeActiveTurn
-	closed   bool
-	closeErr error
+	mu           sync.Mutex
+	proc         workerProcess
+	stderr       *tailBuffer
+	roleHintFile string
+	pending      map[string]chan claudeControlReply
+	active       *claudeActiveTurn
+	closed       bool
+	closeErr     error
 }
 
 type claudeControlReply struct {
@@ -144,18 +146,59 @@ func (a *ClaudeAdapter) OpenThread(ctx context.Context, spec ThreadOpenSpec) (Th
 	}, nil
 }
 
+func writeClaudeRoleHintFile(roleHint string) (string, error) {
+	f, err := os.CreateTemp("", "asterhand-claude-role-*.txt")
+	if err != nil {
+		return "", err
+	}
+	path := f.Name()
+	if _, err := f.WriteString(roleHint); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
+}
+
+func (s *claudeSession) cleanupRoleHintFile() {
+	s.mu.Lock()
+	path := s.roleHintFile
+	s.roleHintFile = ""
+	s.mu.Unlock()
+	if path != "" {
+		_ = os.Remove(path)
+	}
+}
+
 func (s *claudeSession) spawnAndInit(ctx context.Context, resume bool, modelName, effort string) error {
 	spawnFn := s.adapter.spawn
 	if spawnFn == nil {
 		spawnFn = defaultSpawnWorkerProcess
 	}
-	args := buildClaudeArgs(s.openSpec, s.sessionID, resume, modelName, effort)
+	hintFile := ""
+	if trimmed := strings.TrimSpace(s.openSpec.RoleHint); len(trimmed) > claudeInlineRoleHintThresholdBytes {
+		path, err := writeClaudeRoleHintFile(trimmed)
+		if err != nil {
+			return fmt.Errorf("prepare claude role_hint file: %w", err)
+		}
+		hintFile = path
+	}
+	args := buildClaudeArgsWithPromptFile(s.openSpec, s.sessionID, resume, modelName, effort, hintFile)
 	proc, err := spawnFn(s.openSpec.Executable, args, s.openSpec.WorkspaceRoot, sanitizedWorkerEnv())
 	if err != nil {
+		if hintFile != "" {
+			_ = os.Remove(hintFile)
+		}
 		return err
 	}
 	stderrBuf := newTailBuffer(4096)
 	s.mu.Lock()
+	oldHintFile := s.roleHintFile
+	s.roleHintFile = hintFile
 	s.proc = proc
 	s.stderr = stderrBuf
 	s.pending = map[string]chan claudeControlReply{}
@@ -164,6 +207,9 @@ func (s *claudeSession) spawnAndInit(ctx context.Context, resume bool, modelName
 	s.currentModel = strings.TrimSpace(modelName)
 	s.currentEffort = strings.TrimSpace(effort)
 	s.mu.Unlock()
+	if oldHintFile != "" && oldHintFile != hintFile {
+		_ = os.Remove(oldHintFile)
+	}
 
 	go func() {
 		_, _ = io.Copy(stderrBuf, proc.Stderr())
@@ -174,6 +220,10 @@ func (s *claudeSession) spawnAndInit(ctx context.Context, resume bool, modelName
 	defer cancel()
 	if err := s.sendControl(initCtx, map[string]any{"subtype": "initialize"}); err != nil {
 		_ = proc.Kill()
+		s.cleanupRoleHintFile()
+		if hintFile != "" && strings.Contains(strings.ToLower(stderrBuf.String()), "append-system-prompt-file") {
+			return fmt.Errorf("installed Claude CLI does not support --append-system-prompt-file required for long role_hint (%d bytes): %s", len(strings.TrimSpace(s.openSpec.RoleHint)), stderrBuf.String())
+		}
 		if isClaudeSessionMissing(err.Error(), stderrBuf.String()) {
 			return fmt.Errorf("native_session_unrecoverable: %w", err)
 		}
@@ -310,6 +360,7 @@ func (a *ClaudeAdapter) ForceKill(handle ThreadHandle) error {
 	proc := sess.proc
 	sess.closed = true
 	sess.mu.Unlock()
+	defer sess.cleanupRoleHintFile()
 	if proc != nil {
 		return proc.Kill()
 	}
@@ -330,6 +381,7 @@ func (a *ClaudeAdapter) CloseThread(handle ThreadHandle) error {
 	proc := sess.proc
 	sess.closed = true
 	sess.mu.Unlock()
+	defer sess.cleanupRoleHintFile()
 	if proc == nil {
 		return nil
 	}

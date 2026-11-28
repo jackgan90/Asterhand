@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -689,5 +690,58 @@ func TestClaudeAdapterSteerMidTurn(t *testing.T) {
 	ans, _, _, _ := SelectFinalAnswer(out.State, out.Items)
 	if out.State != TurnCompleted || ans != "STEERED:check auth.go too" {
 		t.Fatalf("expected STEERED:check auth.go too, got state=%s ans=%q", out.State, ans)
+	}
+}
+
+func TestClaudeLongRoleHintUsesPromptFileAndCleansUp(t *testing.T) {
+	longRole := strings.Repeat("Strict architecture review checklist line.\n", 1600) // ~67 KiB (> Windows 32,767 UTF-16 limit)
+	var (
+		capturedArgs []string
+		hintFilePath string
+	)
+	adapter := &ClaudeAdapter{
+		spawn: func(executable string, args []string, workdir string, env []string) (workerProcess, error) {
+			capturedArgs = append([]string(nil), args...)
+			for i := 0; i < len(args)-1; i++ {
+				if args[i] == "--append-system-prompt-file" {
+					hintFilePath = args[i+1]
+				}
+			}
+			fp := newPipeFakeProc()
+			go func() {
+				defer fp.finish()
+				sc := bufio.NewScanner(fp.inR)
+				for sc.Scan() {
+					var m map[string]any
+					_ = json.Unmarshal([]byte(sc.Text()), &m)
+					if m["type"] == "control_request" {
+						reqID, _ := m["request_id"].(string)
+						_, _ = io.WriteString(fp.outW, `{"type":"control_response","response":{"subtype":"success","request_id":"`+reqID+`"}}`+"\n")
+					}
+				}
+			}()
+			return fp, nil
+		},
+	}
+
+	h, err := adapter.OpenThread(context.Background(), ThreadOpenSpec{
+		WorkerID: "w_cl_long_role", Executable: "claude.exe", WorkspaceRoot: t.TempDir(),
+		AccessMode: harnesses.AccessReadOnly, RoleHint: longRole,
+	})
+	if err != nil {
+		t.Fatalf("OpenThread with 67 KiB role_hint failed: %v", err)
+	}
+	if slices.Contains(capturedArgs, "--append-system-prompt") || hintFilePath == "" {
+		t.Fatalf("expected --append-system-prompt-file without inline --append-system-prompt, args=%v", capturedArgs)
+	}
+	content, err := os.ReadFile(hintFilePath)
+	if err != nil || string(content) != strings.TrimSpace(longRole) {
+		t.Fatalf("prompt file mismatch: err=%v gotLen=%d wantLen=%d", err, len(content), len(strings.TrimSpace(longRole)))
+	}
+	if err := adapter.CloseThread(h); err != nil {
+		t.Fatalf("CloseThread failed: %v", err)
+	}
+	if _, err := os.Stat(hintFilePath); !os.IsNotExist(err) {
+		t.Fatalf("expected temp role_hint file %q removed on CloseThread, stat err=%v", hintFilePath, err)
 	}
 }

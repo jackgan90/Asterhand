@@ -88,11 +88,14 @@ func formatMCPText(opName string, response Response) string {
 }
 
 func compactOverBudgetData(opName string, dataMap map[string]any) map[string]any {
-	keys := []string{"turn_id", "worker_id", "state", "truncated", "expired", "result_bytes", "next_cursor", "triggered_turn_id", "error_code", "latest_commentary_seq", "delivered_commentary_seq", "commentaries_truncated"}
+	if opName == "workers_get" {
+		return compactWorkersGetOverBudget(dataMap)
+	}
+	keys := []string{"turn_id", "worker_id", "workspace_id", "alias", "state", "truncated", "expired", "result_truncated", "result_bytes", "next_cursor", "has_more", "next_after_seq", "earlier_before_seq", "triggered_turn_id", "error_code", "latest_commentary_seq", "delivered_commentary_seq", "commentaries_truncated", "details_omitted", "request_id", "delivery_mode"}
 	if opName == "workers_result" {
 		// Do not advertise next_cursor when the page text was omitted; preserve offset
 		// so text-only clients retry the same page with a smaller max_bytes.
-		keys = []string{"turn_id", "worker_id", "state", "offset", "total_bytes", "complete", "expired"}
+		keys = []string{"turn_id", "worker_id", "state", "offset", "total_bytes", "complete", "expired", "partial", "result_truncated"}
 	}
 	compact := map[string]any{}
 	for _, k := range keys {
@@ -101,6 +104,85 @@ func compactOverBudgetData(opName string, dataMap map[string]any) map[string]any
 		}
 	}
 	return compact
+}
+
+func toMapSlice(v any) []map[string]any {
+	switch s := v.(type) {
+	case []map[string]any:
+		return s
+	case []any:
+		out := make([]map[string]any, 0, len(s))
+		for _, item := range s {
+			if m, ok := item.(map[string]any); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func compactWorkersGetOverBudget(dataMap map[string]any) map[string]any {
+	compact := map[string]any{}
+	if w, ok := dataMap["worker"].(map[string]any); ok {
+		cw := map[string]any{}
+		for _, k := range []string{"worker_id", "workspace_id", "alias", "harness_id", "state", "active_turn_id"} {
+			if v, exists := w[k]; exists && v != nil && v != "" {
+				cw[k] = v
+			}
+		}
+		if len(cw) > 0 {
+			compact["worker"] = cw
+		}
+	}
+	if rawTurns := toMapSlice(dataMap["turns"]); len(rawTurns) > 0 {
+		const maxCompactTurns = 50
+		limit := len(rawTurns)
+		if limit > maxCompactTurns {
+			limit = maxCompactTurns
+			compact["turns_total"] = len(rawTurns)
+		}
+		turns := make([]map[string]any, 0, limit)
+		for _, tm := range rawTurns[:limit] {
+			ct := map[string]any{}
+			for _, k := range []string{"turn_id", "state", "error_code"} {
+				if v, exists := tm[k]; exists && v != nil && v != "" {
+					ct[k] = v
+				}
+			}
+			if avail, ok := tm["answer_available"].(bool); ok {
+				ct["answer_available"] = avail
+			}
+			if rb := readInt64Value(tm["result_bytes"]); rb > 0 {
+				ct["result_bytes"] = rb
+			}
+			if rt, ok := tm["result_truncated"].(bool); ok && rt {
+				ct["result_truncated"] = true
+			}
+			if len(ct) > 0 {
+				turns = append(turns, ct)
+			}
+		}
+		if len(turns) > 0 {
+			compact["turns"] = turns
+		}
+	}
+	return compact
+}
+
+func workersGetFocusTurnID(dataMap map[string]any) string {
+	if w, ok := dataMap["worker"].(map[string]any); ok {
+		if active, _ := w["active_turn_id"].(string); active != "" {
+			return active
+		}
+	}
+	for _, tm := range toMapSlice(dataMap["turns"]) {
+		if tid, _ := tm["turn_id"].(string); tid != "" {
+			return tid
+		}
+	}
+	return ""
 }
 
 func overBudgetNextStep(opName string, dataMap map[string]any) string {
@@ -112,7 +194,15 @@ func overBudgetNextStep(opName string, dataMap map[string]any) string {
 			return fmt.Sprintf("Text projection exceeded single-message budget; retry this page with a smaller slice via workers_result(turn_id=%q, cursor=\"%d\", max_bytes=8192).", tid, off)
 		}
 		return "Text projection exceeded single-message budget; retry this page with a smaller max_bytes."
-	case "workers_wait", "workers_get":
+	case "workers_get":
+		if tid := workersGetFocusTurnID(dataMap); tid != "" {
+			return fmt.Sprintf("Text projection exceeded single-message budget; omitted verbose turn histories while keeping worker and recent turn summaries. Call workers_wait(turn_id=%q, wait_seconds=1) (or pass any listed turn_id) to inspect a turn's summary and whether stored output is still available or expired.", tid)
+		}
+		return "Text projection exceeded single-message budget; omitted verbose worker details. Call workers_wait(turn_id=..., wait_seconds=1) to inspect a specific turn's summary and whether stored output is still available or expired."
+	case "workers_wait":
+		if exp, _ := dataMap["expired"].(bool); exp {
+			return "Text projection exceeded single-message budget; stored body has expired under retention or capacity limits."
+		}
 		tid, _ := dataMap["turn_id"].(string)
 		cur, _ := dataMap["next_cursor"].(string)
 		if tid != "" && cur != "" {
@@ -127,6 +217,23 @@ func overBudgetNextStep(opName string, dataMap map[string]any) string {
 			return fmt.Sprintf("Text projection exceeded single-message budget; inspect turn %q via workers_wait(turn_id=%q) or workers_result(turn_id=%q, cursor=\"0\").", trig, trig, trig)
 		}
 		return "Text projection exceeded single-message budget; inspect individual turns via workers_wait(turn_id=...) or workers_result(turn_id=..., cursor=\"0\")."
+	case "workers_list":
+		if cur, _ := dataMap["next_cursor"].(string); cur != "" {
+			return fmt.Sprintf("Text projection exceeded single-message budget; call workers_list(cursor=%q) with a smaller limit to read remaining workers.", cur)
+		}
+		return "Text projection exceeded single-message budget; call workers_list with a smaller limit or workspace_id filter."
+	case "workers_logs":
+		tid, _ := dataMap["turn_id"].(string)
+		if nextSeq := readInt64Value(dataMap["next_after_seq"]); tid != "" && nextSeq > 0 {
+			return fmt.Sprintf("Text projection exceeded single-message budget; call workers_logs(turn_id=%q, after_seq=%d, limit=10).", tid, nextSeq)
+		}
+		if beforeSeq := readInt64Value(dataMap["earlier_before_seq"]); tid != "" && beforeSeq > 0 {
+			return fmt.Sprintf("Text projection exceeded single-message budget; call workers_logs(turn_id=%q, tail=true, before_seq=%d, limit=10).", tid, beforeSeq)
+		}
+		if tid != "" {
+			return fmt.Sprintf("Text projection exceeded single-message budget; retry workers_logs(turn_id=%q, limit=10) with a smaller limit.", tid)
+		}
+		return "Text projection exceeded single-message budget; retry workers_logs with a smaller limit."
 	}
 	return ""
 }
@@ -208,9 +315,19 @@ func nextStepHint(opName string, response Response) string {
 		}
 		return "Reply delivered to worker. Continue calling workers_wait until the turn finishes."
 	case "workers_result":
+		isPartial, _ := dataMap["partial"].(bool)
 		if next, _ := dataMap["next_cursor"].(string); next != "" {
 			tid, _ := dataMap["turn_id"].(string)
+			if isPartial {
+				return fmt.Sprintf("More partial output available (not a completed final answer). Call workers_result(turn_id=%q, cursor=%q).", tid, next)
+			}
 			return fmt.Sprintf("More result text available. Call workers_result(turn_id=%q, cursor=%q).", tid, next)
+		}
+		if rt, _ := dataMap["result_truncated"].(bool); rt {
+			if isPartial {
+				return "Reached end of retained partial output (not a completed final answer); the original partial output exceeded the 2 MiB storage cap and was truncated when saved."
+			}
+			return "Reached end of retained result text; the original final answer exceeded the 2 MiB storage cap and was truncated when saved."
 		}
 	}
 	return ""

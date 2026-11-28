@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,17 +16,20 @@ import (
 )
 
 const (
-	DBSchemaVersion    = 1
-	MaxResultBytes     = 2 << 20  // 2 MiB per turn full text
-	MaxTurnLogBytes    = 1 << 20  // 1 MiB per turn structured logs
+	DBSchemaVersion     = 1
+	MaxResultBytes      = 2 << 20  // 2 MiB per turn full text
+	MaxTurnLogBytes     = 1 << 20  // 1 MiB per turn structured logs
 	MaxTotalDetailBytes = 64 << 20 // 64 MiB node-wide retention cap
-	SummaryRetention   = 30 * 24 * time.Hour
-	DetailRetention    = 7 * 24 * time.Hour
+	resultChunkBytes    = 16 << 10 // 16 KiB per B-tree indexed result chunk
+	SummaryRetention    = 30 * 24 * time.Hour
+	DetailRetention     = 7 * 24 * time.Hour
 )
 
 var (
-	ErrNotFound    = errors.New("not_found")
-	ErrStoreClosed = errors.New("workers_store_closed")
+	ErrNotFound        = errors.New("not_found")
+	ErrStoreClosed     = errors.New("workers_store_closed")
+	ErrInvalidCursor   = errors.New("invalid_cursor")
+	ErrListCursorStale = errors.New("list_cursor_stale")
 )
 
 type Store struct {
@@ -33,6 +37,8 @@ type Store struct {
 	db                *sql.DB
 	detailBytes       int64
 	detailBytesLoaded bool
+	workersRev        uint64
+	wsRev             map[string]uint64
 }
 
 func OpenStore(home string) (*Store, error) {
@@ -90,6 +96,14 @@ func OpenStore(home string) (*Store, error) {
 		updated_at INTEGER NOT NULL
 	);
 
+	CREATE TABLE IF NOT EXISTS turn_result_chunks(
+		turn_id TEXT NOT NULL,
+		chunk_idx INTEGER NOT NULL,
+		body BLOB NOT NULL,
+		byte_len INTEGER NOT NULL,
+		PRIMARY KEY(turn_id, chunk_idx)
+	);
+
 	CREATE TABLE IF NOT EXISTS turn_logs(
 		turn_id TEXT NOT NULL,
 		seq INTEGER NOT NULL,
@@ -143,6 +157,9 @@ func (s *Store) SaveWorker(w Worker) error {
 		   updated_at=excluded.updated_at`,
 		w.ID, w.WorkspaceID, w.Alias, opKey, w.State, b, w.UpdatedAt.UnixMilli(),
 	)
+	if err == nil {
+		s.bumpWorkerRevLocked(w.WorkspaceID)
+	}
 	return err
 }
 
@@ -225,14 +242,94 @@ func (s *Store) ListWorkersByOperationID(operationID string, limit int) ([]Worke
 	return out, rows.Err()
 }
 
+func (s *Store) bumpWorkerRevLocked(workspaceID string) {
+	s.workersRev++
+	if workspaceID != "" {
+		if s.wsRev == nil {
+			s.wsRev = map[string]uint64{}
+		}
+		s.wsRev[workspaceID]++
+	}
+}
+
+func (s *Store) workerListRevisionLocked(workspaceID string, includeClosed bool) (string, error) {
+	query := "SELECT COUNT(*), COALESCE(MAX(updated_at), 0), COALESCE(SUM(updated_at), 0) FROM workers WHERE 1=1"
+	args := []any{}
+	if workspaceID != "" {
+		query += " AND workspace_id=?"
+		args = append(args, workspaceID)
+	}
+	if !includeClosed {
+		query += " AND state<>?"
+		args = append(args, WorkerClosed)
+	}
+	var count, maxTS, sumTS int64
+	if err := s.db.QueryRow(query, args...).Scan(&count, &maxTS, &sumTS); err != nil {
+		return "", err
+	}
+	var memRev uint64
+	if workspaceID != "" {
+		memRev = s.wsRev[workspaceID]
+	} else {
+		memRev = s.workersRev
+	}
+	return strconv.FormatUint(memRev, 10) + ":" +
+		strconv.FormatInt(count, 10) + ":" +
+		strconv.FormatInt(maxTS, 10) + ":" +
+		strconv.FormatInt(sumTS, 10), nil
+}
+
+func EncodeWorkerListAfter(w Worker) string {
+	return strconv.FormatInt(w.UpdatedAt.UnixMilli(), 10) + ":" + w.ID
+}
+
+func parseWorkerListAfter(raw string) (int64, string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, "", nil
+	}
+	idx := strings.IndexByte(raw, ':')
+	if idx <= 0 || idx >= len(raw)-1 {
+		return 0, "", ErrInvalidCursor
+	}
+	ms, err := strconv.ParseInt(raw[:idx], 10, 64)
+	if err != nil {
+		return 0, "", ErrInvalidCursor
+	}
+	id := strings.TrimSpace(raw[idx+1:])
+	if id == "" {
+		return 0, "", ErrInvalidCursor
+	}
+	return ms, id, nil
+}
+
 func (s *Store) ListWorkers(workspaceID string, includeClosed bool, limit int) ([]Worker, error) {
+	items, _, _, err := s.ListWorkersPage(workspaceID, includeClosed, "", "", limit)
+	return items, err
+}
+
+func (s *Store) ListWorkersPage(workspaceID string, includeClosed bool, expectedRevision, after string, limit int) ([]Worker, bool, string, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
+	}
+	curMS, curID, err := parseWorkerListAfter(after)
+	if err != nil {
+		return nil, false, "", err
+	}
+	if curID != "" && expectedRevision == "" {
+		return nil, false, "", ErrInvalidCursor
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.db == nil {
-		return nil, ErrStoreClosed
+		return nil, false, "", ErrStoreClosed
+	}
+	rev, err := s.workerListRevisionLocked(workspaceID, includeClosed)
+	if err != nil {
+		return nil, false, "", err
+	}
+	if expectedRevision != "" && expectedRevision != rev {
+		return nil, false, "", ErrListCursorStale
 	}
 	query := "SELECT body FROM workers WHERE 1=1"
 	args := []any{}
@@ -244,26 +341,38 @@ func (s *Store) ListWorkers(workspaceID string, includeClosed bool, limit int) (
 		query += " AND state<>?"
 		args = append(args, WorkerClosed)
 	}
-	query += " ORDER BY updated_at DESC LIMIT ?"
-	args = append(args, limit)
+	if curID != "" {
+		query += " AND (updated_at < ? OR (updated_at = ? AND worker_id < ?))"
+		args = append(args, curMS, curMS, curID)
+	}
+	query += " ORDER BY updated_at DESC, worker_id DESC LIMIT ?"
+	args = append(args, limit+1)
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
-		return nil, err
+		return nil, false, "", err
 	}
 	defer rows.Close()
 	out := []Worker{}
 	for rows.Next() {
 		var b []byte
 		if err := rows.Scan(&b); err != nil {
-			return nil, err
+			return nil, false, "", err
 		}
 		var w Worker
 		if err := json.Unmarshal(b, &w); err != nil {
-			return nil, err
+			return nil, false, "", err
 		}
 		out = append(out, w)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, false, "", err
+	}
+	hasMore := false
+	if len(out) > limit {
+		hasMore = true
+		out = out[:limit]
+	}
+	return out, hasMore, rev, nil
 }
 
 func (s *Store) SaveTurn(t Turn) error {
@@ -342,7 +451,13 @@ func (s *Store) SaveTurnAndWorker(t Turn, w *Worker) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if w != nil {
+		s.bumpWorkerRevLocked(w.WorkspaceID)
+	}
+	return nil
 }
 
 func (s *Store) GetTurn(turnID string) (Turn, error) {
@@ -479,21 +594,156 @@ func (s *Store) SaveResultText(turnID, text string, now time.Time) (int, bool, e
 	return len(raw), truncated, nil
 }
 
+// HasResultText checks only the turn_results metadata row without touching
+// turn_result_chunks or inline payload bytes.
+func (s *Store) HasResultText(turnID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.db == nil {
+		return false, ErrStoreClosed
+	}
+	var exists int
+	err := s.db.QueryRow("SELECT 1 FROM turn_results WHERE turn_id=?", turnID).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (s *Store) ReadResultText(turnID string) (string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.db == nil {
 		return "", false, ErrStoreClosed
 	}
-	var b []byte
-	err := s.db.QueryRow("SELECT body FROM turn_results WHERE turn_id=?", turnID).Scan(&b)
+	var (
+		total int
+		b     []byte
+	)
+	err := s.db.QueryRow("SELECT byte_len, body FROM turn_results WHERE turn_id=?", turnID).Scan(&total, &b)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
 	if err != nil {
 		return "", false, err
 	}
-	return string(b), true, nil
+	if len(b) > 0 || total <= 0 {
+		return string(b), true, nil
+	}
+	rows, err := s.db.Query(
+		"SELECT body FROM turn_result_chunks WHERE turn_id=? ORDER BY chunk_idx ASC",
+		turnID,
+	)
+	if err != nil {
+		return "", false, err
+	}
+	defer rows.Close()
+	out := make([]byte, 0, total)
+	for rows.Next() {
+		var chunk []byte
+		if err := rows.Scan(&chunk); err != nil {
+			return "", false, err
+		}
+		out = append(out, chunk...)
+	}
+	if err := rows.Err(); err != nil {
+		return "", false, err
+	}
+	return string(out), true, nil
+}
+
+// ReadResultRange reads up to maxBytes raw bytes starting at byte offset from
+// turn_result_chunks (with inline fallback for legacy turn_results rows) so
+// both SQLite page I/O and Go allocations scale with maxBytes rather than the
+// full stored result size.
+func (s *Store) ReadResultRange(turnID string, offset, maxBytes int) (string, int, bool, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.db == nil {
+		return "", 0, false, ErrStoreClosed
+	}
+	var (
+		total     int
+		inlineLen int
+	)
+	err := s.db.QueryRow(
+		"SELECT byte_len, LENGTH(body) FROM turn_results WHERE turn_id=?",
+		turnID,
+	).Scan(&total, &inlineLen)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", 0, false, nil
+	}
+	if err != nil {
+		return "", 0, false, err
+	}
+	if total <= 0 || offset >= total || maxBytes == 0 {
+		return "", total, true, nil
+	}
+	if inlineLen > 0 {
+		var b []byte
+		if err := s.db.QueryRow(
+			"SELECT SUBSTR(CAST(body AS BLOB), ?, ?) FROM turn_results WHERE turn_id=?",
+			offset+1, maxBytes, turnID,
+		).Scan(&b); err != nil {
+			return "", 0, false, err
+		}
+		return string(b), total, true, nil
+	}
+
+	rem := total - offset
+	want := maxBytes
+	if want > rem {
+		want = rem
+	}
+	end := offset + want
+	firstChunk := offset / resultChunkBytes
+	lastChunk := (end - 1) / resultChunkBytes
+	rows, err := s.db.Query(
+		`SELECT chunk_idx, body FROM turn_result_chunks
+		 WHERE turn_id=? AND chunk_idx>=? AND chunk_idx<=?
+		 ORDER BY chunk_idx ASC`,
+		turnID, firstChunk, lastChunk,
+	)
+	if err != nil {
+		return "", 0, false, err
+	}
+	defer rows.Close()
+
+	out := make([]byte, 0, want)
+	for rows.Next() {
+		var (
+			chunkIdx int
+			chunk    []byte
+		)
+		if err := rows.Scan(&chunkIdx, &chunk); err != nil {
+			return "", 0, false, err
+		}
+		chunkStart := chunkIdx * resultChunkBytes
+		lo := 0
+		if offset > chunkStart {
+			lo = offset - chunkStart
+		}
+		hi := len(chunk)
+		if end-chunkStart < hi {
+			hi = end - chunkStart
+		}
+		if lo < hi && lo < len(chunk) {
+			out = append(out, chunk[lo:hi]...)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", 0, false, err
+	}
+	return string(out), total, true, nil
 }
 
 func (s *Store) AppendLog(turnID string, entry LogEntry) (int64, error) {
@@ -546,6 +796,10 @@ func (s *Store) ReadLogs(turnID string, afterSeq int64, limit int) ([]LogEntry, 
 }
 
 func (s *Store) ReadLogsTail(turnID string, limit int) ([]LogEntry, bool, error) {
+	return s.ReadLogsTailBefore(turnID, 0, limit)
+}
+
+func (s *Store) ReadLogsTailBefore(turnID string, beforeSeq int64, limit int) ([]LogEntry, bool, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
@@ -554,10 +808,15 @@ func (s *Store) ReadLogsTail(turnID string, limit int) ([]LogEntry, bool, error)
 	if s.db == nil {
 		return nil, false, ErrStoreClosed
 	}
-	rows, err := s.db.Query(
-		"SELECT body FROM turn_logs WHERE turn_id=? ORDER BY seq DESC LIMIT ?",
-		turnID, limit+1,
-	)
+	query := "SELECT body FROM turn_logs WHERE turn_id=?"
+	args := []any{turnID}
+	if beforeSeq > 0 {
+		query += " AND seq<?"
+		args = append(args, beforeSeq)
+	}
+	query += " ORDER BY seq DESC LIMIT ?"
+	args = append(args, limit+1)
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, false, err
 	}

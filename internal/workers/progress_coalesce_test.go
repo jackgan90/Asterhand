@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -403,5 +404,184 @@ func TestDeepSeekThoughtCoalescingPublishesToolCommentaryApprovalAndResumedThink
 	}
 	if thinkingWrites < 3 || thinkingWrites > 5 {
 		t.Fatalf("expected 3..5 Thinking... writes across 3 phases (96 chunks), got %d (audit=%+v)", thinkingWrites, audit)
+	}
+}
+
+func TestDeepSeekNonCompleteStopReasonsPreservePartialOutput(t *testing.T) {
+	const partialText = "Review stopped after item 1."
+	cases := []struct {
+		reason      string
+		wantState   string
+		wantCode    string
+		wantAvail   bool
+		wantAnswer  string
+		wantPartial string
+	}{
+		{reason: "end_turn", wantState: TurnCompleted, wantCode: "", wantAvail: true, wantAnswer: partialText, wantPartial: ""},
+		{reason: "cancelled", wantState: TurnInterrupted, wantCode: "cancelled", wantAvail: false, wantAnswer: "", wantPartial: partialText},
+		{reason: "max_tokens", wantState: TurnInterrupted, wantCode: "max_tokens", wantAvail: false, wantAnswer: "", wantPartial: partialText},
+		{reason: "max_turn_requests", wantState: TurnInterrupted, wantCode: "max_turn_requests", wantAvail: false, wantAnswer: "", wantPartial: partialText},
+		{reason: "refusal", wantState: TurnFailed, wantCode: "refusal", wantAvail: false, wantAnswer: "", wantPartial: partialText},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.reason, func(t *testing.T) {
+			adapter := &DeepSeekAdapter{
+				spawn: func(exe string, args []string, workdir string, env []string) (workerProcess, error) {
+					p := newPipeFakeProc()
+					go func() {
+						defer p.finish()
+						sc := bufio.NewScanner(p.inR)
+						for sc.Scan() {
+							var msg struct {
+								ID     json.RawMessage `json:"id"`
+								Method string          `json:"method"`
+							}
+							if json.Unmarshal(sc.Bytes(), &msg) != nil {
+								continue
+							}
+							switch msg.Method {
+							case "initialize":
+								writeJSONLine(p.outW, map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]any{"protocolVersion": 1}})
+							case "session/new":
+								writeJSONLine(p.outW, map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]any{"sessionId": "sess_stop"}})
+							case "session/prompt":
+								writeJSONLine(p.outW, map[string]any{
+									"jsonrpc": "2.0", "method": "session/update",
+									"params": map[string]any{"update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": partialText}}},
+								})
+								writeJSONLine(p.outW, map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]any{"stopReason": tc.reason}})
+							case "session/close":
+								writeJSONLine(p.outW, map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]any{}})
+							}
+						}
+					}()
+					return p, nil
+				},
+			}
+			svc, ws := setupDeepSeekTestService(t, adapter, false)
+			defer func() { _ = svc.Close(context.Background()) }()
+
+			w, err := svc.Create(context.Background(), CreateInput{
+				HarnessID: harnesses.HarnessDeepSeek, WorkspaceRoot: ws.RootPath, Alias: "dsh-stop-" + tc.reason, AccessMode: harnesses.AccessReadOnly,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			turn, err := svc.Send(context.Background(), SendInput{
+				OperationID: "op_dsh_stop_" + tc.reason, WorkerID: w.ID, ExpectedWorkspaceID: ws.ID, Prompt: "review",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			done, preview, _, err := svc.Wait(context.Background(), turn.ID, ws.ID, 5*time.Second)
+			if err != nil {
+				t.Fatalf("Wait failed: %v", err)
+			}
+			if done.State != tc.wantState || done.ErrorCode != tc.wantCode || done.AnswerAvailable != tc.wantAvail || preview != tc.wantAnswer || done.PartialOutput != tc.wantPartial {
+				t.Fatalf("stopReason=%s got state=%s code=%q avail=%v preview=%q partial=%q; want state=%s code=%q avail=%v preview=%q partial=%q",
+					tc.reason, done.State, done.ErrorCode, done.AnswerAvailable, preview, done.PartialOutput,
+					tc.wantState, tc.wantCode, tc.wantAvail, tc.wantAnswer, tc.wantPartial)
+			}
+		})
+	}
+}
+
+func TestDeepSeekMaxTokensLongPartialOutputPaginatesFullTail(t *testing.T) {
+	const tailMarker = "TAIL_VERDICT_LINE: preserve full partial output past 4 KiB."
+	const chunkText = "审查分段说明A1234567890\n"
+	batch := strings.Repeat(chunkText, 20)
+	fullPartial := strings.Repeat(batch, 20) + tailMarker
+	adapter := &DeepSeekAdapter{
+		spawn: func(exe string, args []string, workdir string, env []string) (workerProcess, error) {
+			p := newPipeFakeProc()
+			go func() {
+				defer p.finish()
+				sc := bufio.NewScanner(p.inR)
+				for sc.Scan() {
+					var msg struct {
+						ID     json.RawMessage `json:"id"`
+						Method string          `json:"method"`
+					}
+					if json.Unmarshal(sc.Bytes(), &msg) != nil {
+						continue
+					}
+					switch msg.Method {
+					case "initialize":
+						writeJSONLine(p.outW, map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]any{"protocolVersion": 1}})
+					case "session/new":
+						writeJSONLine(p.outW, map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]any{"sessionId": "sess_long_partial"}})
+					case "session/prompt":
+						for i := 0; i < 20; i++ {
+							writeJSONLine(p.outW, map[string]any{
+								"jsonrpc": "2.0", "method": "session/update",
+								"params": map[string]any{"update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": batch}}},
+							})
+						}
+						writeJSONLine(p.outW, map[string]any{
+							"jsonrpc": "2.0", "method": "session/update",
+							"params": map[string]any{"update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": tailMarker}}},
+						})
+						writeJSONLine(p.outW, map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]any{"stopReason": "max_tokens"}})
+					case "session/close":
+						writeJSONLine(p.outW, map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]any{}})
+					}
+				}
+			}()
+			return p, nil
+		},
+	}
+	svc, ws := setupDeepSeekTestService(t, adapter, false)
+	defer func() { _ = svc.Close(context.Background()) }()
+	w, err := svc.Create(context.Background(), CreateInput{HarnessID: harnesses.HarnessDeepSeek, WorkspaceRoot: ws.RootPath, Alias: "dsh-long-partial", AccessMode: harnesses.AccessReadOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := svc.Send(context.Background(), SendInput{OperationID: "op_dsh_long_partial", WorkerID: w.ID, ExpectedWorkspaceID: ws.ID, Prompt: "long review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done, preview, _, err := svc.Wait(context.Background(), turn.ID, ws.ID, 5*time.Second)
+	if err != nil || done.State != TurnInterrupted || done.ErrorCode != "max_tokens" || done.AnswerAvailable || preview != "" || done.ResultBytes != len(fullPartial) {
+		t.Fatalf("unexpected interrupted turn: state=%s code=%q avail=%v preview=%q result_bytes=%d want=%d err=%v",
+			done.State, done.ErrorCode, done.AnswerAvailable, preview, done.ResultBytes, len(fullPartial), err)
+	}
+	if len(done.PartialOutput) > 4099 || strings.Contains(done.PartialOutput, tailMarker) {
+		t.Fatalf("expected 4 KiB preview without tail, got len=%d", len(done.PartialOutput))
+	}
+
+	var rebuilt strings.Builder
+	offset, pages := 0, 0
+	for {
+		page, err := svc.ReadResult(turn.ID, ws.ID, offset, 4096)
+		if err != nil || !page.Partial || page.AnswerAvailable || page.AnswerSource != AnswerSourceNone || page.Expired || page.TotalBytes != len(fullPartial) {
+			t.Fatalf("unexpected partial page at offset=%d: %+v err=%v", offset, page, err)
+		}
+		rebuilt.WriteString(page.Text)
+		pages++
+		if page.Complete {
+			break
+		}
+		next, err := strconv.Atoi(page.NextCursor)
+		if err != nil || next <= offset {
+			t.Fatalf("invalid next_cursor %q at offset=%d", page.NextCursor, offset)
+		}
+		offset = next
+	}
+	if pages < 3 || rebuilt.String() != fullPartial {
+		t.Fatalf("rebuilt partial mismatch: pages=%d got=%d bytes want=%d bytes", pages, rebuilt.Len(), len(fullPartial))
+	}
+	svc.PruneRetention(time.Now().Add(DetailRetention + 24*time.Hour))
+	expiredPage, err := svc.ReadResult(turn.ID, ws.ID, 0, 4096)
+	if err != nil || !expiredPage.Expired || !expiredPage.Partial || expiredPage.AnswerAvailable || !expiredPage.Complete || expiredPage.PartialOutput == "" {
+		t.Fatalf("expected expired partial page retaining 4 KiB summary, got %+v err=%v", expiredPage, err)
+	}
+	expiredWait, err := svc.WaitSnapshot(context.Background(), turn.ID, ws.ID, WaitOptions{WaitDuration: time.Second})
+	if err != nil || !expiredWait.Expired || expiredWait.Turn.AnswerAvailable || expiredWait.Turn.PartialOutput == "" {
+		t.Fatalf("expected WaitSnapshot to mark expired partial output while keeping summary: %+v err=%v", expiredWait, err)
+	}
+	expiredItems, _, err := svc.WaitAny(context.Background(), []string{turn.ID}, ws.ID, time.Second)
+	if err != nil || len(expiredItems) != 1 || !expiredItems[0].Expired || expiredItems[0].AnswerAvailable || expiredItems[0].ResultBytes != len(fullPartial) {
+		t.Fatalf("expected WaitAny to mark expired partial output: %+v err=%v", expiredItems, err)
 	}
 }

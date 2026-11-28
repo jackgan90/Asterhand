@@ -307,7 +307,7 @@ func TestWaitAnyBudgetBaseCompactionAndWaterFillingFairness(t *testing.T) {
 			ErrorMessage: strings.Repeat("err detail ", 250),
 			AfterVCS:     &VCSSnapshot{VCS: "git", Branch: "main", HeadCommit: "8547297", ChangedFiles: append([]string(nil), longFiles...)},
 		}
-		heavyCands[i] = waitAnyCandidate{fullText: strings.Repeat("Z", 8192)}
+		heavyCands[i] = waitAnyCandidate{previewChunk: strings.Repeat("Z", waitAnyPerItemPreviewBytes+4), totalBytes: 8192}
 	}
 	fitWaitAnyBudget("turn_heavy_05", heavyItems, heavyCands, waitAnyMaxPayloadJSONBytes)
 	if heavyRaw, err := json.Marshal(waitAnyEnvelope{TriggeredTurnID: "turn_heavy_05", Items: heavyItems}); err != nil || len(heavyRaw) > waitAnyMaxPayloadJSONBytes {
@@ -333,7 +333,7 @@ func TestWaitAnyBudgetBaseCompactionAndWaterFillingFairness(t *testing.T) {
 			HarnessID: harnesses.HarnessCodex, State: TurnCompleted, AnswerAvailable: true,
 			AnswerSource: AnswerSourceFinal, Truncated: true, ResultBytes: len(body), NextCursor: "0",
 		}
-		mixCands[i] = waitAnyCandidate{fullText: body}
+		mixCands[i] = waitAnyCandidate{previewChunk: body, totalBytes: len(body)}
 	}
 	fitWaitAnyBudget("turn_mix_00", mixItems, mixCands, waitAnyMaxPayloadJSONBytes)
 	if mixRaw, err := json.Marshal(waitAnyEnvelope{TriggeredTurnID: "turn_mix_00", Items: mixItems}); err != nil || len(mixRaw) > waitAnyMaxPayloadJSONBytes {
@@ -341,7 +341,7 @@ func TestWaitAnyBudgetBaseCompactionAndWaterFillingFairness(t *testing.T) {
 	}
 	for i, it := range mixItems {
 		if i < 10 {
-			if it.Truncated || it.NextCursor != "" || it.AnswerPreview != mixCands[i].fullText {
+			if it.Truncated || it.NextCursor != "" || it.AnswerPreview != mixCands[i].previewChunk {
 				t.Fatalf("short item[%d] expected full untruncated answer, got trunc=%v cursor=%q preview=%q", i, it.Truncated, it.NextCursor, it.AnswerPreview)
 			}
 		} else if !it.Truncated || len(it.AnswerPreview) != waitAnyPerItemPreviewBytes || it.NextCursor != strconv.Itoa(waitAnyPerItemPreviewBytes) {

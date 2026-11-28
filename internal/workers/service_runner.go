@@ -660,14 +660,24 @@ func (s *Service) finalizeTurn(rt *runningTurn, w *Worker, t *Turn, state string
 		}
 	}
 	answer, source, avail, partial := SelectFinalAnswer(state, items)
-	var resultBytes int
+	var (
+		resultBytes     int
+		resultTruncated bool
+	)
+	bodyToSave := ""
 	if avail && answer != "" {
-		n, _, err := s.store.SaveResultText(t.ID, answer, now)
+		bodyToSave = answer
+	} else if !avail && partial != "" {
+		bodyToSave = partial
+	}
+	if bodyToSave != "" {
+		n, trunc, err := s.store.SaveResultText(t.ID, bodyToSave, now)
 		if err != nil {
 			s.recordPersistFailure(rt, w, t, "state_persist_failed", fmt.Sprintf("Failed to persist turn result: %v", err), true, "", "", t.NativeTurnID, false, "", err)
 			return false, err
 		}
 		resultBytes = n
+		resultTruncated = trunc
 	}
 	afterVCS := CaptureVCSSnapshot(context.Background(), w.WorkspaceRoot)
 	var latestSeq int64
@@ -704,11 +714,12 @@ func (s *Service) finalizeTurn(rt *runningTurn, w *Worker, t *Turn, state string
 		if latestSeq > cur.LatestCommentarySeq {
 			cur.LatestCommentarySeq = latestSeq
 		}
-		if avail && answer != "" {
-			if state == TurnCompleted {
+		if bodyToSave != "" {
+			if avail && state == TurnCompleted {
 				cur.Progress = truncateSummary(answer, 160)
 			}
 			cur.ResultBytes = resultBytes
+			cur.ResultTruncated = resultTruncated
 		}
 		cur.WriteLockRetained = false
 		cur.WriteLockRoot = ""

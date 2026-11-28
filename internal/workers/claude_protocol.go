@@ -14,7 +14,13 @@ var claudeAskHumanAllowedTools = strings.Join([]string{
 	"Bash(git status*)", "Bash(git diff*)", "Bash(git log*)",
 }, ",")
 
+const claudeInlineRoleHintThresholdBytes = 4096
+
 func buildClaudeArgs(spec ThreadOpenSpec, sessionID string, resume bool, modelName, effort string) []string {
+	return buildClaudeArgsWithPromptFile(spec, sessionID, resume, modelName, effort, "")
+}
+
+func buildClaudeArgsWithPromptFile(spec ThreadOpenSpec, sessionID string, resume bool, modelName, effort, roleHintFile string) []string {
 	args := []string{
 		"-p",
 		"--verbose",
@@ -54,7 +60,9 @@ func buildClaudeArgs(spec ThreadOpenSpec, sessionID string, resume bool, modelNa
 	if strings.TrimSpace(effort) != "" {
 		args = append(args, "--effort", strings.TrimSpace(effort))
 	}
-	if strings.TrimSpace(spec.RoleHint) != "" {
+	if strings.TrimSpace(roleHintFile) != "" {
+		args = append(args, "--append-system-prompt-file", strings.TrimSpace(roleHintFile))
+	} else if strings.TrimSpace(spec.RoleHint) != "" {
 		args = append(args, "--append-system-prompt", strings.TrimSpace(spec.RoleHint))
 	}
 	if resume {

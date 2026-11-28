@@ -27,6 +27,7 @@ type workerListInput struct {
 	WorkspaceRoot string                 `json:"workspace_root,omitempty" description:"Optional absolute project directory path to filter workers"`
 	WorkspaceID   string                 `json:"workspace_id,omitempty" description:"Optional derived workspace_id to filter workers"`
 	IncludeClosed bool                   `json:"include_closed,omitempty" description:"Include closed workers in results (default false)"`
+	Cursor        string                 `json:"cursor,omitempty" description:"Optional pagination cursor returned as next_cursor by a previous workers_list call"`
 	Limit         automation.OptionalInt `json:"limit,omitempty,omitzero" description:"Maximum number of workers to return (1..200, default 50)"`
 }
 
@@ -73,9 +74,10 @@ type workerResultInput struct {
 type workerLogsInput struct {
 	TurnID      string                 `json:"turn_id" description:"Turn identifier returned by workers_send"`
 	WorkspaceID string                 `json:"workspace_id,omitempty" description:"Optional expected workspace_id to guard against cross-project mismatch"`
-	AfterSeq    int64                  `json:"after_seq,omitempty" description:"Return log entries with seq greater than this value (cannot be combined with tail=true)"`
+	AfterSeq    int64                  `json:"after_seq,omitempty" description:"Return log entries with seq greater than this value (cannot be combined with tail=true or before_seq)"`
+	BeforeSeq   int64                  `json:"before_seq,omitempty" description:"Return up to limit log entries with seq less than this value in oldest-to-newest order (for paging backward from a tail window; cannot be combined with after_seq)"`
 	Limit       automation.OptionalInt `json:"limit,omitempty,omitzero" description:"Maximum log entries to return (1..200, default 50)"`
-	Tail        bool                   `json:"tail,omitempty" description:"When true, return the latest limit log entries (ordered oldest-to-newest within the tail window); cannot be combined with after_seq"`
+	Tail        bool                   `json:"tail,omitempty" description:"When true, return the latest limit log entries (or entries before before_seq when specified, ordered oldest-to-newest); cannot be combined with after_seq"`
 }
 
 type workerCancelInput struct {
@@ -126,8 +128,18 @@ type workerReplyView struct {
 }
 
 type workerGetView struct {
-	Worker workers.Worker `json:"worker"`
-	Turns  []workers.Turn `json:"turns"`
+	Worker           workers.Worker `json:"worker"`
+	Turns            []workers.Turn `json:"turns"`
+	HistoryTruncated bool           `json:"history_truncated,omitempty" description:"True when turn history fields were compacted to fit the response budget"`
+	NextStep         string         `json:"next_step,omitempty"`
+}
+
+type workerListView struct {
+	Items      []workers.Worker `json:"items"`
+	HasMore    bool             `json:"has_more,omitempty" description:"True when more matching workers exist after this page"`
+	NextCursor string           `json:"next_cursor,omitempty" description:"Opaque pagination cursor; pass as cursor to workers_list to read the next page"`
+	Truncated  bool             `json:"truncated,omitempty" description:"True when worker metadata was compacted or entries were split to fit the response budget"`
+	NextStep   string           `json:"next_step,omitempty"`
 }
 
 type workerWaitView struct {
@@ -142,6 +154,7 @@ type workerWaitView struct {
 	PartialOutput       string                    `json:"partial_output,omitempty"`
 	Truncated           bool                      `json:"truncated,omitempty"`
 	Expired             bool                      `json:"expired,omitempty" description:"True when the completed turn's stored answer body has been evicted by retention or capacity limits while the summary remains readable"`
+	ResultTruncated     bool                      `json:"result_truncated,omitempty" description:"True when the worker's raw final answer exceeded the 2 MiB storage cap and was truncated before persistence"`
 	ResultBytes         int                       `json:"result_bytes,omitempty"`
 	NextCursor          string                    `json:"next_cursor,omitempty"`
 	ErrorCode           string                    `json:"error_code,omitempty"`
@@ -165,11 +178,15 @@ type workerWaitAnyView struct {
 }
 
 type workerLogsView struct {
-	TurnID   string             `json:"turn_id"`
-	WorkerID string             `json:"worker_id"`
-	State    string             `json:"state"`
-	Entries  []workers.LogEntry `json:"entries"`
-	HasMore  bool               `json:"has_more"`
+	TurnID           string             `json:"turn_id"`
+	WorkerID         string             `json:"worker_id"`
+	State            string             `json:"state"`
+	Entries          []workers.LogEntry `json:"entries"`
+	HasMore          bool               `json:"has_more"`
+	NextAfterSeq     int64              `json:"next_after_seq,omitempty" description:"Pass as after_seq to workers_logs (without tail=true) to read the next forward log page"`
+	EarlierBeforeSeq int64              `json:"earlier_before_seq,omitempty" description:"When tail/before_seq omitted earlier entries, pass as before_seq (with tail=true) to page backward or use after_seq=0 to read forward from the start"`
+	Truncated        bool               `json:"truncated,omitempty" description:"True when the page was shortened or a log entry summary was truncated to fit the response budget"`
+	NextStep         string             `json:"next_step,omitempty"`
 }
 
 func optionalIntRange(opt automation.OptionalInt, name string, def, min, max int) (int, error) {
@@ -217,7 +234,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			}
 			return automation.Outcome{
 				Accepted: true,
-				Data:     w,
+				Data:     fitWorkerViewBudget(w),
 				Summary: map[string]any{
 					"worker_id":               w.ID,
 					"workspace_id":            w.WorkspaceID,
@@ -231,7 +248,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 
 	automation.Register(r, automation.Definition{
 		Name:        "workers_list",
-		Description: "List coding harness workers, optionally filtered by project workspace_root or workspace_id",
+		Description: "List coding harness workers, optionally filtered by project workspace_root or workspace_id, with cursor pagination",
 		Role:        "read",
 		Toolset:     automation.ToolsetCollab,
 	}, nil,
@@ -244,11 +261,16 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			if err != nil {
 				return automation.Outcome{}, err
 			}
-			items, err := a.Workers.List(v.WorkspaceRoot, v.WorkspaceID, v.IncludeClosed, limit)
+			binding := []any{"workers_list", call.Principal.ID, v.WorkspaceRoot, v.WorkspaceID, v.IncludeClosed}
+			cursor, err := automation.ParseCursor(v.Cursor, binding)
 			if err != nil {
 				return automation.Outcome{}, err
 			}
-			return automation.Outcome{Data: map[string]any{"items": items}}, nil
+			items, hasMore, rev, err := a.Workers.ListPage(v.WorkspaceRoot, v.WorkspaceID, v.IncludeClosed, cursor.Revision, cursor.After, limit)
+			if err != nil {
+				return automation.Outcome{}, err
+			}
+			return automation.Outcome{Data: buildWorkerListView(items, hasMore, binding, rev)}, nil
 		})
 
 	automation.Register(r, automation.Definition{
@@ -266,7 +288,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			if err != nil {
 				return automation.Outcome{}, err
 			}
-			return automation.Outcome{Data: workerGetView{Worker: w, Turns: turns}}, nil
+			return automation.Outcome{Data: buildWorkerGetView(w, turns)}, nil
 		})
 
 	automation.Register(r, automation.Definition{
@@ -306,7 +328,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			}
 			return automation.Outcome{
 				Accepted: true,
-				Data:     t,
+				Data:     fitTurnViewBudget(t, workerViewMaxPayloadJSONBytes),
 				Summary:  map[string]any{"worker_id": t.WorkerID, "turn_id": t.ID, "workspace_id": t.WorkspaceID, "state": t.State},
 			}, nil
 		})
@@ -377,7 +399,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 
 	automation.Register(r, automation.Definition{
 		Name:        "workers_result",
-		Description: "Read paginated full final review/output text for a completed worker turn",
+		Description: "Read paginated final review/output text for a completed worker turn, or retained partial output (marked partial=true, answer_available=false) for an incomplete/non-success turn",
 		Role:        "read",
 		Toolset:     automation.ToolsetCollab,
 	}, func(v workerResultInput) string { return v.TurnID },
@@ -420,29 +442,27 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			if err != nil {
 				return automation.Outcome{}, err
 			}
-			if v.Tail && v.AfterSeq > 0 {
-				return automation.Outcome{}, automation.Fail("invalid_parameters", "tail cannot be combined with after_seq")
+			if v.BeforeSeq < 0 {
+				return automation.Outcome{}, automation.Fail("invalid_parameters", "before_seq must be non-negative")
+			}
+			if (v.Tail || v.BeforeSeq > 0) && v.AfterSeq > 0 {
+				return automation.Outcome{}, automation.Fail("invalid_parameters", "tail and before_seq cannot be combined with after_seq")
 			}
 			var (
-				t       workers.Turn
-				entries []workers.LogEntry
-				hasMore bool
+				t        workers.Turn
+				entries  []workers.LogEntry
+				hasMore  bool
+				backward = v.Tail || v.BeforeSeq > 0
 			)
-			if v.Tail {
-				t, entries, hasMore, err = a.Workers.ReadLogsTail(v.TurnID, v.WorkspaceID, limit)
+			if backward {
+				t, entries, hasMore, err = a.Workers.ReadLogsBefore(v.TurnID, v.WorkspaceID, v.BeforeSeq, limit)
 			} else {
 				t, entries, hasMore, err = a.Workers.ReadLogs(v.TurnID, v.WorkspaceID, v.AfterSeq, limit)
 			}
 			if err != nil {
 				return automation.Outcome{}, err
 			}
-			return automation.Outcome{Data: workerLogsView{
-				TurnID:   t.ID,
-				WorkerID: t.WorkerID,
-				State:    t.State,
-				Entries:  entries,
-				HasMore:  hasMore,
-			}}, nil
+			return automation.Outcome{Data: buildWorkerLogsView(t, entries, hasMore, backward)}, nil
 		})
 
 	automation.Register(r, automation.Definition{
@@ -464,7 +484,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			}
 			return automation.Outcome{
 				Accepted: true,
-				Data:     t,
+				Data:     fitTurnViewBudget(t, workerViewMaxPayloadJSONBytes),
 				Summary:  map[string]any{"worker_id": t.WorkerID, "turn_id": t.ID, "state": t.State},
 			}, nil
 		})
@@ -487,7 +507,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			}
 			return automation.Outcome{
 				Accepted: true,
-				Data:     w,
+				Data:     fitWorkerViewBudget(w),
 				Summary:  map[string]any{"worker_id": w.ID, "state": w.State},
 			}, nil
 		})
@@ -522,7 +542,7 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			}
 			return automation.Outcome{
 				Accepted: true,
-				Data:     workerSteerView{Turn: t, Steered: true, DeliveryMode: deliveryMode, NextStep: nextStep},
+				Data:     fitSteerViewBudget(workerSteerView{Turn: t, Steered: true, DeliveryMode: deliveryMode, NextStep: nextStep}),
 				Summary:  map[string]any{"worker_id": t.WorkerID, "turn_id": t.ID, "state": t.State, "steered": true, "delivery_mode": deliveryMode},
 			}, nil
 		})
@@ -571,13 +591,13 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			}
 			return automation.Outcome{
 				Accepted: true,
-				Data: workerReplyView{
+				Data: fitReplyViewBudget(workerReplyView{
 					Turn:       res.Turn,
 					RequestID:  res.RequestID,
 					Escalated:  res.Escalated,
 					Deferred:   res.Deferred,
 					EscalateAt: res.EscalateAt,
-				},
+				}),
 				Summary: summary,
 			}, nil
 		})
@@ -601,13 +621,17 @@ func (a *App) registerAutomationWorkers(r *automation.Registry) {
 			}
 			return automation.Outcome{
 				Accepted: true,
-				Data:     t,
+				Data:     fitTurnViewBudget(t, workerViewMaxPayloadJSONBytes),
 				Summary:  map[string]any{"worker_id": t.WorkerID, "turn_id": t.ID, "state": t.State},
 			}, nil
 		})
 }
 
 func workerWaitNextStep(t workers.Turn, truncated bool, nextCursor string, newCommentaries int) string {
+	return workerWaitNextStepWithExpiry(t, truncated, nextCursor, newCommentaries, false)
+}
+
+func workerWaitNextStepWithExpiry(t workers.Turn, truncated bool, nextCursor string, newCommentaries int, expired bool) string {
 	switch t.State {
 	case workers.TurnRunning, workers.TurnPrepared:
 		if newCommentaries > 0 {
@@ -635,13 +659,24 @@ func workerWaitNextStep(t workers.Turn, truncated bool, nextCursor string, newCo
 			return fmt.Sprintf("Turn completed without a candidate final answer; inspect workers_logs(turn_id=%q).", t.ID)
 		}
 	case workers.TurnBlockedApproval, workers.TurnBlockedUserInput:
-		return appendWaitChangedFilesNote("Worker requested an unsupported interactive approval or user question and stopped cleanly; report the reason to the user.", t)
+		return appendWaitPartialAndChangedFilesNote("Worker requested an unsupported interactive approval or user question and stopped cleanly; report the reason to the user.", t, expired)
 	case workers.TurnInterrupted, workers.TurnCancelled, workers.TurnCancelledRevoked, workers.TurnFailed:
-		return appendWaitChangedFilesNote(fmt.Sprintf("Turn ended with non-success state %q; inspect workers_logs(turn_id=%q).", t.State, t.ID), t)
+		return appendWaitPartialAndChangedFilesNote(fmt.Sprintf("Turn ended with non-success state %q; inspect workers_logs(turn_id=%q).", t.State, t.ID), t, expired)
 	case workers.TurnReconcile:
 		return fmt.Sprintf("Turn requires reconciliation before continuing; do not resend automatically. Inspect workers_get or workers_logs(turn_id=%q).", t.ID)
 	}
 	return ""
+}
+
+func appendWaitPartialAndChangedFilesNote(base string, t workers.Turn, expired bool) string {
+	if !t.AnswerAvailable && t.ResultBytes > 0 && (t.ResultBytes > 4096 || t.ResultBytes > len(t.PartialOutput)) {
+		if expired {
+			base += fmt.Sprintf(" Stored full partial output (%d bytes) has expired under retention or capacity limits; only the 4 KiB partial_output preview remains.", t.ResultBytes)
+		} else {
+			base += fmt.Sprintf(" Retained partial output (%d bytes) exceeds preview; call workers_result(turn_id=%q, cursor=\"0\") to paginate the partial output (not a completed final answer).", t.ResultBytes, t.ID)
+		}
+	}
+	return appendWaitChangedFilesNote(base, t)
 }
 
 func appendWaitChangedFilesNote(base string, t workers.Turn) string {
@@ -666,7 +701,7 @@ func appendWaitChangedFilesNote(base string, t workers.Turn) string {
 
 func describeWorkerAutomationResults(r *automation.Registry) {
 	r.DescribeData("workers_create", automation.Schema[workers.Worker]())
-	r.DescribeData("workers_list", resultObject("", "", "", map[string]any{"items": arrayOf(automation.Schema[workers.Worker]())}))
+	r.DescribeData("workers_list", automation.Schema[workerListView]())
 	r.DescribeData("workers_get", automation.Schema[workerGetView]())
 	r.DescribeData("workers_send", automation.Schema[workers.Turn]())
 	r.DescribeData("workers_wait", automation.Schema[workerWaitView]())

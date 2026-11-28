@@ -743,3 +743,22 @@ func (a *codexCancelStartAdapter) StartTurn(ctx context.Context, handle ThreadHa
 	// Pass a non-cancelled ctx so CodexAdapter.StartTurn exercises the sess.closed ErrPreStartFailed path.
 	return a.CodexAdapter.StartTurn(context.Background(), handle, spec, onEvent)
 }
+
+func TestWindowsCommandLineLengthPreflightRejectsOver32767UTF16(t *testing.T) {
+	_, shortCmd := buildWindowsCommandLine(`C:\bin\claude.exe`, []string{"-p", "--append-system-prompt", "Be concise"})
+	if err := validateWindowsCommandLine(`C:\bin\claude.exe`, shortCmd); err != nil {
+		t.Fatalf("expected short command line accepted, got %v", err)
+	}
+
+	longArg := strings.Repeat("A", 40000)
+	_, longExeCmd := buildWindowsCommandLine(`C:\bin\claude.exe`, []string{"-p", "--append-system-prompt", longArg})
+	if err := validateWindowsCommandLine(`C:\bin\claude.exe`, longExeCmd); err == nil || !strings.Contains(err.Error(), "32767") {
+		t.Fatalf("expected CreateProcessW 32767 UTF-16 error, got %v", err)
+	}
+
+	cmdArg := strings.Repeat("B", 9000)
+	_, longBatCmd := buildWindowsCommandLine(`C:\bin\claude.cmd`, []string{"-p", "--append-system-prompt", cmdArg})
+	if err := validateWindowsCommandLine(`C:\bin\claude.cmd`, longBatCmd); err == nil || !strings.Contains(err.Error(), "8191") {
+		t.Fatalf("expected cmd.exe 8191 UTF-16 error, got %v", err)
+	}
+}

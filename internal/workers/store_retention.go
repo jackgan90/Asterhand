@@ -106,6 +106,9 @@ func evictTerminalDetailsForCapTx(tx *sql.Tx, keepTurnID string, targetMaxBytes 
 		if total <= targetMaxBytes {
 			break
 		}
+		if _, err := tx.Exec(`DELETE FROM turn_result_chunks WHERE turn_id=?`, c.turnID); err != nil {
+			return total, err
+		}
 		if _, err := tx.Exec(`DELETE FROM turn_results WHERE turn_id=?`, c.turnID); err != nil {
 			return total, err
 		}
@@ -115,6 +118,39 @@ func evictTerminalDetailsForCapTx(tx *sql.Tx, keepTurnID string, targetMaxBytes 
 		total -= c.detailBytes
 	}
 	return detailUsageTx(tx)
+}
+
+func writeResultChunksTx(tx *sql.Tx, turnID string, raw []byte, now time.Time) error {
+	if _, err := tx.Exec(
+		`INSERT INTO turn_results(turn_id, body, byte_len, updated_at)
+		 VALUES(?,?,?,?)
+		 ON CONFLICT(turn_id) DO UPDATE SET body=excluded.body, byte_len=excluded.byte_len, updated_at=excluded.updated_at`,
+		turnID, []byte{}, len(raw), now.UnixMilli(),
+	); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM turn_result_chunks WHERE turn_id=?`, turnID); err != nil {
+		return err
+	}
+	if len(raw) == 0 {
+		return nil
+	}
+	stmt, err := tx.Prepare(`INSERT INTO turn_result_chunks(turn_id, chunk_idx, body, byte_len) VALUES(?,?,?,?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for idx, off := 0, 0; off < len(raw); idx, off = idx+1, off+resultChunkBytes {
+		end := off + resultChunkBytes
+		if end > len(raw) {
+			end = len(raw)
+		}
+		chunk := raw[off:end]
+		if _, err := stmt.Exec(turnID, idx, chunk, len(chunk)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) saveResultWithCapLocked(turnID string, raw []byte, now time.Time) error {
@@ -128,24 +164,24 @@ func (s *Store) saveResultWithCapLocked(turnID string, raw []byte, now time.Time
 		return err
 	}
 	delta := int64(len(raw)) - existingLen
-	if curTotal+delta <= MaxTotalDetailBytes {
-		_, err = s.db.Exec(
-			`INSERT INTO turn_results(turn_id, body, byte_len, updated_at)
-			 VALUES(?,?,?,?)
-			 ON CONFLICT(turn_id) DO UPDATE SET body=excluded.body, byte_len=excluded.byte_len, updated_at=excluded.updated_at`,
-			turnID, raw, len(raw), now.UnixMilli(),
-		)
-		if err == nil {
-			s.detailBytes += delta
-		}
-		return err
-	}
 
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	if curTotal+delta <= MaxTotalDetailBytes {
+		if err := writeResultChunksTx(tx, turnID, raw, now); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		s.detailBytes += delta
+		return nil
+	}
+
 	targetBeforeWrite := int64(MaxTotalDetailBytes) - delta
 	remaining, err := evictTerminalDetailsForCapTx(tx, turnID, targetBeforeWrite)
 	if err != nil {
@@ -154,12 +190,7 @@ func (s *Store) saveResultWithCapLocked(turnID string, raw []byte, now time.Time
 	if remaining+delta > MaxTotalDetailBytes {
 		return automation.Fail("capacity", "Node worker detail budget reached")
 	}
-	if _, err = tx.Exec(
-		`INSERT INTO turn_results(turn_id, body, byte_len, updated_at)
-		 VALUES(?,?,?,?)
-		 ON CONFLICT(turn_id) DO UPDATE SET body=excluded.body, byte_len=excluded.byte_len, updated_at=excluded.updated_at`,
-		turnID, raw, len(raw), now.UnixMilli(),
-	); err != nil {
+	if err := writeResultChunksTx(tx, turnID, raw, now); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -272,6 +303,11 @@ func (s *Store) PruneDetailsAndCap(now time.Time) {
 		return
 	}
 	n1, _ := res1.RowsAffected()
+	if n1 > 0 {
+		if _, err := tx.Exec(`DELETE FROM turn_result_chunks WHERE NOT EXISTS (SELECT 1 FROM turn_results r WHERE r.turn_id = turn_result_chunks.turn_id)`); err != nil {
+			return
+		}
+	}
 	n2, _ := res2.RowsAffected()
 	needRecount := n1 > 0 || n2 > 0 || !s.detailBytesLoaded || s.detailBytes > MaxTotalDetailBytes
 	var newUsage int64

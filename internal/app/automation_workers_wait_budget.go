@@ -44,6 +44,7 @@ func buildWorkerWaitView(
 		AnswerSource:        t.AnswerSource,
 		PartialOutput:       t.PartialOutput,
 		Expired:             expired,
+		ResultTruncated:     t.ResultTruncated,
 		ResultBytes:         t.ResultBytes,
 		ErrorCode:           t.ErrorCode,
 		ErrorMessage:        t.ErrorMessage,
@@ -246,8 +247,46 @@ func compactWaitViewBase(view *workerWaitView, t workers.Turn, fits func(workerW
 		if view.PendingInteraction.DetailsTruncated && t.LatestCommentarySeq > 0 {
 			view.PendingInteraction.InspectHint = fmt.Sprintf("Full interaction details omitted to fit response budget alongside commentaries; inspect full details in Asterhand desktop/Web UI, via workers_wait(turn_id=%q, after_commentary_seq=%d, wait_seconds=1), or via workers_get(worker_id=%q).", view.TurnID, t.LatestCommentarySeq, view.WorkerID)
 		}
+		if check() {
+			return
+		}
 	}
-	check()
+	if view.Turn != nil {
+		view.Turn = nil
+		if check() {
+			return
+		}
+	}
+	if !check() {
+		*view = minimalWorkerWaitView(t, *view)
+		check()
+	}
+}
+
+func minimalWorkerWaitView(t workers.Turn, cur workerWaitView) workerWaitView {
+	out := workerWaitView{
+		WorkerID:               cur.WorkerID,
+		TurnID:                 cur.TurnID,
+		State:                  cur.State,
+		AnswerAvailable:        cur.AnswerAvailable,
+		AnswerSource:           cur.AnswerSource,
+		Truncated:              cur.Truncated,
+		Expired:                cur.Expired,
+		ResultTruncated:        cur.ResultTruncated,
+		ResultBytes:            cur.ResultBytes,
+		NextCursor:             cur.NextCursor,
+		ErrorCode:              cur.ErrorCode,
+		ElapsedSeconds:         cur.ElapsedSeconds,
+		IdleSeconds:            cur.IdleSeconds,
+		StreamEvents:           cur.StreamEvents,
+		StreamBytes:            cur.StreamBytes,
+		LatestCommentarySeq:    cur.LatestCommentarySeq,
+		DeliveredCommentarySeq: cur.DeliveredCommentarySeq,
+		CommentariesTruncated:  cur.CommentariesTruncated,
+		PendingInteraction:     minimalInteractionSummary(cur.PendingInteraction, cur.TurnID),
+	}
+	out.NextStep = buildWaitViewNextStep(t, out)
+	return out
 }
 
 func applyWaitViewCommentaries(base workerWaitView, t workers.Turn, entries []workers.CommentaryEntry, truncated bool, deliveredSeq *int64) workerWaitView {
@@ -293,9 +332,17 @@ func buildWaitViewNextStep(t workers.Turn, view workerWaitView) string {
 		if hasMoreComments {
 			return fmt.Sprintf("Turn completed with paginated commentaries (delivered_commentary_seq=%d, latest_commentary_seq=%d). Call workers_wait(turn_id=%q, after_commentary_seq=%d) to read the remaining commentaries.", *view.DeliveredCommentarySeq, t.LatestCommentarySeq, t.ID, *view.DeliveredCommentarySeq)
 		}
-		return workerWaitNextStep(t, view.Truncated, view.NextCursor, len(view.Commentaries))
-	default:
 		step := workerWaitNextStep(t, view.Truncated, view.NextCursor, len(view.Commentaries))
+		if view.ResultTruncated {
+			note := "Note: the original final answer exceeded the 2 MiB storage cap and was truncated when saved."
+			if step == "" {
+				return note
+			}
+			return step + " " + note
+		}
+		return step
+	default:
+		step := workerWaitNextStepWithExpiry(t, view.Truncated, view.NextCursor, len(view.Commentaries), view.Expired)
 		if hasMoreComments {
 			extra := fmt.Sprintf("More commentaries remain (delivered_commentary_seq=%d, latest_commentary_seq=%d); call workers_wait(turn_id=%q, after_commentary_seq=%d, wake_on_commentary=true) to continue reading immediately.", *view.DeliveredCommentarySeq, t.LatestCommentarySeq, t.ID, *view.DeliveredCommentarySeq)
 			if step == "" {

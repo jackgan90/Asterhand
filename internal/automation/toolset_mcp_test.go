@@ -856,3 +856,72 @@ func TestMCPHostRefreshesDefinitionsOnPolicyRevisionGrantAndRevoke(t *testing.T)
 		t.Fatalf("expected [commands_list] after rev_3 sync completes, got %+v", names)
 	}
 }
+
+func TestWorkersGetOverBudgetMCPTextPreservesCompactTurnsAndGuidesWait(t *testing.T) {
+	r := automation.NewRegistry("node", "inst", nil)
+	automation.Register[automation.Empty](r, automation.Definition{Name: "workers_get", Role: "read", Toolset: automation.ToolsetCollab}, nil, nil, nil)
+	defs := r.Definitions(automation.Principal{Roles: []string{"read"}, Toolsets: map[string]bool{automation.ToolsetCollab: true}})
+
+	bigSummary := strings.Repeat("<td>expired-partial-html</td>", 350) // expands well past 48 KiB across 6 turns
+	rawTurns := make([]map[string]any, 0, 6)
+	for i := 6; i >= 1; i-- {
+		rawTurns = append(rawTurns, map[string]any{
+			"turn_id":          "turn_hist_" + string(rune('0'+i)),
+			"state":            "interrupted",
+			"error_code":       "max_tokens",
+			"answer_available": false,
+			"result_bytes":     10264,
+			"partial_output":   bigSummary,
+		})
+	}
+	caller := fakeMCPCaller{fn: func(ctx context.Context, op, id string, args json.RawMessage) (automation.Response, error) {
+		return automation.Response{
+			Version: automation.APIVersion,
+			Data: map[string]any{
+				"worker": map[string]any{"worker_id": "wrk_hist", "workspace_id": "ws_1", "alias": "hist", "harness_id": "deepseek", "state": "idle"},
+				"turns":  rawTurns,
+			},
+		}, nil
+	}}
+	pCollab := automation.Principal{ID: "harness:antigravity", CallerID: "antigravity", Roles: []string{"read"}, Toolsets: map[string]bool{automation.ToolsetCollab: true}}
+	host := automation.NewMCPHost(caller, pCollab, defs)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	t1, t2 := mcp.NewInMemoryTransports()
+	serverSession, err := host.Server.Connect(ctx, t1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+	clientSession, err := mcp.NewClient(&mcp.Implementation{Name: "text-client", Version: "1.0"}, nil).Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	res, err := clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "workers_get", Arguments: map[string]any{}})
+	if err != nil || res.IsError || len(res.Content) == 0 {
+		t.Fatalf("MCP workers_get failed: res=%+v err=%v", res, err)
+	}
+	txt := res.Content[0].(*mcp.TextContent).Text
+	var env struct {
+		TextTruncated bool   `json:"text_truncated"`
+		NextStep      string `json:"next_step"`
+		Data          struct {
+			Worker map[string]any   `json:"worker"`
+			Turns  []map[string]any `json:"turns"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(txt), &env); err != nil {
+		t.Fatalf("unmarshal workers_get MCP text failed: %v\n%s", err, txt)
+	}
+	if !env.TextTruncated || env.Data.Worker["worker_id"] != "wrk_hist" || len(env.Data.Turns) != 6 {
+		t.Fatalf("expected truncated compact worker + 6 turns, got %+v", env)
+	}
+	if env.Data.Turns[0]["turn_id"] != "turn_hist_6" || env.Data.Turns[0]["state"] != "interrupted" {
+		t.Fatalf("expected newest compact turn metadata preserved, got %+v", env.Data.Turns[0])
+	}
+	if !strings.Contains(env.NextStep, `workers_wait(turn_id="turn_hist_6"`) || strings.Contains(env.NextStep, "workers_result") {
+		t.Fatalf("expected next_step to direct to workers_wait without workers_result, got %q", env.NextStep)
+	}
+}

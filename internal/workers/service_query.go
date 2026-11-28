@@ -271,19 +271,20 @@ func (s *Service) WaitSnapshot(ctx context.Context, turnID, expectedWorkspaceID 
 
 func (s *Service) readPreviewCapped(t Turn, capBytes int) (string, bool, bool, error) {
 	if !t.AnswerAvailable || t.State != TurnCompleted {
-		return "", false, false, nil
+		expired, err := s.retainedPartialExpired(t)
+		return "", false, expired, err
 	}
-	full, ok, err := s.store.ReadResultText(t.ID)
+	chunk, total, ok, err := s.store.ReadResultRange(t.ID, 0, capBytes+utf8.UTFMax)
 	if err != nil {
 		return "", false, false, err
 	}
 	if !ok {
 		return "", false, t.ResultBytes > 0, nil
 	}
-	if len(full) <= capBytes {
-		return full, false, false, nil
+	if total <= capBytes {
+		return chunk, false, false, nil
 	}
-	return full[:clampUTF8Bytes([]byte(full), capBytes)], true, false, nil
+	return chunk[:clampUTF8String(chunk, capBytes)], true, false, nil
 }
 
 func (s *Service) readPreview(t Turn) (string, bool, bool, error) {
@@ -304,8 +305,9 @@ type waitAnyEnvelope struct {
 }
 
 type waitAnyCandidate struct {
-	fullText string
-	comments []CommentaryEntry
+	previewChunk string
+	totalBytes   int
+	comments     []CommentaryEntry
 }
 
 type waitAnySlot struct {
@@ -317,18 +319,19 @@ type waitAnySlot struct {
 	fullNeed  int
 }
 
-func (s *Service) readCompletedResultText(t Turn) (string, bool, error) {
+func (s *Service) readCompletedResultPreview(t Turn, capBytes int) (string, int, bool, error) {
 	if !t.AnswerAvailable || t.State != TurnCompleted {
-		return "", false, nil
+		expired, err := s.retainedPartialExpired(t)
+		return "", 0, expired, err
 	}
-	full, ok, err := s.store.ReadResultText(t.ID)
+	chunk, total, ok, err := s.store.ReadResultRange(t.ID, 0, capBytes+utf8.UTFMax)
 	if err != nil {
-		return "", false, err
+		return "", 0, false, err
 	}
 	if !ok {
-		return "", t.ResultBytes > 0, nil
+		return "", 0, t.ResultBytes > 0, nil
 	}
-	return full, false, nil
+	return chunk, total, false, nil
 }
 
 func cloneVCSSnapshot(v *VCSSnapshot) *VCSSnapshot {
@@ -421,10 +424,10 @@ func waitAnyJSONSize(v any) int {
 	return len(b)
 }
 
-func applyWaitAnyPreview(base WaitAnyItem, fullText, preview string) WaitAnyItem {
+func applyWaitAnyPreview(base WaitAnyItem, totalBytes int, preview string) WaitAnyItem {
 	out := base
 	out.AnswerPreview = preview
-	if len(preview) < len(fullText) {
+	if len(preview) < totalBytes {
 		out.Truncated = true
 		out.NextCursor = strconv.Itoa(len(preview))
 	} else {
@@ -517,28 +520,34 @@ func compactWaitAnyBaseItems(triggered string, items []WaitAnyItem, maxBytes int
 			it.PendingInteraction.WorkerAlias = ""
 		}
 	})
+	if used > maxBytes {
+		for i := range items {
+			items[i] = minimalWaitAnyItem(items[i])
+		}
+		used = size()
+	}
 	return used
 }
 
-func fitWaitAnyPreviewSlot(base WaitAnyItem, fullText, fullCap string, baseSize, alloc int) (WaitAnyItem, int) {
+func fitWaitAnyPreviewSlot(base WaitAnyItem, previewChunk string, totalBytes int, fullCap string, baseSize, alloc int) (WaitAnyItem, int) {
 	if alloc <= 0 || fullCap == "" {
 		return base, 0
 	}
-	ends := utf8CursorBoundaries(fullCap, fullText)
-	if len(fullCap) == len(fullText) && len(ends) > 0 && ends[len(ends)-1] == len(fullText) {
+	ends := utf8CursorBoundaries(fullCap, previewChunk)
+	if len(fullCap) == totalBytes && len(ends) > 0 && ends[len(ends)-1] == totalBytes {
 		ends = ends[:len(ends)-1]
 	}
 	if len(ends) == 0 {
 		return base, 0
 	}
 	firstTooLarge := sort.Search(len(ends), func(i int) bool {
-		cand := applyWaitAnyPreview(base, fullText, fullCap[:ends[i]])
+		cand := applyWaitAnyPreview(base, totalBytes, fullCap[:ends[i]])
 		return waitAnyJSONSize(cand)-baseSize > alloc
 	})
 	if firstTooLarge == 0 {
 		return base, 0
 	}
-	chosen := applyWaitAnyPreview(base, fullText, fullCap[:ends[firstTooLarge-1]])
+	chosen := applyWaitAnyPreview(base, totalBytes, fullCap[:ends[firstTooLarge-1]])
 	return chosen, waitAnyJSONSize(chosen) - baseSize
 }
 
@@ -588,10 +597,13 @@ func buildWaitAnyTierSlots(items []WaitAnyItem, candidates []waitAnyCandidate, p
 	var slots []waitAnySlot
 	for i := range items {
 		if primary {
-			if len(candidates[i].fullText) > 0 {
-				fullCap := candidates[i].fullText[:clampUTF8Bytes([]byte(candidates[i].fullText), waitAnyPerItemPreviewBytes)]
+			if candidates[i].totalBytes > 0 {
+				fullCap := candidates[i].previewChunk
+				if candidates[i].totalBytes > waitAnyPerItemPreviewBytes {
+					fullCap = fullCap[:clampUTF8String(fullCap, waitAnyPerItemPreviewBytes)]
+				}
 				baseSize := waitAnyJSONSize(items[i])
-				fullItem := applyWaitAnyPreview(items[i], candidates[i].fullText, fullCap)
+				fullItem := applyWaitAnyPreview(items[i], candidates[i].totalBytes, fullCap)
 				slots = append(slots, waitAnySlot{
 					idx:       i,
 					isPreview: true,
@@ -676,7 +688,7 @@ func allocateWaitAnyTier(triggered string, items []WaitAnyItem, candidates []wai
 		var updated WaitAnyItem
 		var delta int
 		if sl.isPreview {
-			updated, delta = fitWaitAnyPreviewSlot(items[sl.idx], candidates[sl.idx].fullText, sl.fullCap, sl.baseSize, alloc)
+			updated, delta = fitWaitAnyPreviewSlot(items[sl.idx], candidates[sl.idx].previewChunk, candidates[sl.idx].totalBytes, sl.fullCap, sl.baseSize, alloc)
 		} else {
 			updated, delta = fitWaitAnyCommentariesSlot(items[sl.idx], candidates[sl.idx].comments, sl.baseSize, alloc)
 		}
@@ -720,7 +732,7 @@ func (s *Service) buildWaitAnyItems(turnIDs []string, expectedWorkspaceID string
 				t = refreshed
 			}
 		}
-		fullText, expired, err := s.readCompletedResultText(t)
+		previewChunk, totalBytes, expired, err := s.readCompletedResultPreview(t, waitAnyPerItemPreviewBytes)
 		if err != nil {
 			return nil, "", err
 		}
@@ -728,7 +740,7 @@ func (s *Service) buildWaitAnyItems(turnIDs []string, expectedWorkspaceID string
 		if latestSeq > t.LatestCommentarySeq {
 			t.LatestCommentarySeq = latestSeq
 		}
-		trunc := len(fullText) > 0
+		trunc := totalBytes > 0
 		nextCursor := ""
 		if trunc {
 			nextCursor = "0"
@@ -744,6 +756,7 @@ func (s *Service) buildWaitAnyItems(turnIDs []string, expectedWorkspaceID string
 			AnswerSource:        t.AnswerSource,
 			Truncated:           trunc,
 			Expired:             expired,
+			ResultTruncated:     t.ResultTruncated,
 			ResultBytes:         t.ResultBytes,
 			NextCursor:          nextCursor,
 			ElapsedSeconds:      t.ElapsedSeconds,
@@ -757,8 +770,9 @@ func (s *Service) buildWaitAnyItems(turnIDs []string, expectedWorkspaceID string
 			LatestCommentarySeq: t.LatestCommentarySeq,
 		})
 		candidates = append(candidates, waitAnyCandidate{
-			fullText: fullText,
-			comments: comments,
+			previewChunk: previewChunk,
+			totalBytes:   totalBytes,
+			comments:     comments,
 		})
 	}
 	fitWaitAnyBudget(triggered, items, candidates, waitAnyMaxPayloadJSONBytes)
@@ -851,21 +865,6 @@ func (s *Service) WaitAny(ctx context.Context, turnIDs []string, expectedWorkspa
 	}
 }
 
-type ResultPage struct {
-	TurnID          string `json:"turn_id"`
-	WorkerID        string `json:"worker_id"`
-	State           string `json:"state"`
-	AnswerAvailable bool   `json:"answer_available"`
-	AnswerSource    string `json:"answer_source"`
-	PartialOutput   string `json:"partial_output,omitempty"`
-	Text            string `json:"text,omitempty"`
-	Offset          int    `json:"offset"`
-	TotalBytes      int    `json:"total_bytes"`
-	Complete        bool   `json:"complete"`
-	Expired         bool   `json:"expired"`
-	NextCursor      string `json:"next_cursor,omitempty"`
-}
-
 func (s *Service) ReadResult(turnID, expectedWorkspaceID string, offset, maxBytes int) (ResultPage, error) {
 	t, err := s.GetTurn(turnID, expectedWorkspaceID)
 	if err != nil {
@@ -877,21 +876,24 @@ func (s *Service) ReadResult(turnID, expectedWorkspaceID string, offset, maxByte
 	if offset < 0 {
 		return ResultPage{}, automation.Fail("invalid_cursor", "Negative result offset")
 	}
+	readable, isPartial := canReadStoredResult(t)
 	page := ResultPage{
 		TurnID:          t.ID,
 		WorkerID:        t.WorkerID,
 		State:           t.State,
 		AnswerAvailable: t.AnswerAvailable,
 		AnswerSource:    t.AnswerSource,
+		Partial:         isPartial,
 		PartialOutput:   t.PartialOutput,
 		Offset:          offset,
 		TotalBytes:      t.ResultBytes,
+		ResultTruncated: t.ResultTruncated,
 	}
-	if t.State != TurnCompleted || !t.AnswerAvailable {
+	if !readable {
 		page.Complete = true
 		return page, nil
 	}
-	full, ok, err := s.store.ReadResultText(t.ID)
+	chunk, total, ok, err := s.store.ReadResultRange(t.ID, offset, maxBytes+utf8.UTFMax)
 	if err != nil {
 		return ResultPage{}, err
 	}
@@ -900,20 +902,9 @@ func (s *Service) ReadResult(turnID, expectedWorkspaceID string, offset, maxByte
 		page.Complete = true
 		return page, nil
 	}
-	page.TotalBytes = len(full)
-	if offset >= len(full) {
-		page.Complete = true
-		return page, nil
+	if err := fillResultPageFromRange(&page, chunk, offset, maxBytes, total); err != nil {
+		return ResultPage{}, err
 	}
-	if !utf8.RuneStart(full[offset]) {
-		return ResultPage{}, automation.Fail("invalid_cursor", "Cursor offset does not align with a UTF-8 character boundary")
-	}
-	rem := full[offset:]
-	take := clampUTF8Bytes([]byte(rem), maxBytes)
-	if take == 0 && len(rem) > 0 {
-		_, take = utf8.DecodeRuneInString(rem)
-	}
-	fitResultPageBudget(&page, rem, take, offset, len(full), resultPageMaxPayloadJSONBytes)
 	return page, nil
 }
 

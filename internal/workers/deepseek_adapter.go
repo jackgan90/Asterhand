@@ -400,7 +400,8 @@ func (s *deepseekSession) awaitPromptResponse(ch <-chan rpcReply, active *deepse
 		StopReason string `json:"stopReason"`
 	}
 	_ = json.Unmarshal(raw, &resp)
-	if resp.StopReason == "cancelled" || interrupted {
+	stopReason := strings.TrimSpace(resp.StopReason)
+	if stopReason == "cancelled" || interrupted {
 		items := buildDeepSeekItems(commentary, active.turnID, answerText, "partial_answer")
 		active.finish(TurnOutcome{
 			State:        TurnInterrupted,
@@ -408,6 +409,18 @@ func (s *deepseekSession) awaitPromptResponse(ch <-chan rpcReply, active *deepse
 			Items:        items,
 			ErrorCode:    "cancelled",
 			ErrorMessage: "Interrupted",
+		})
+		return
+	}
+	if stopReason != "" && stopReason != "end_turn" {
+		items := buildDeepSeekItems(commentary, active.turnID, answerText, "partial_answer")
+		state, code, msg := classifyDeepSeekStopReason(stopReason)
+		active.finish(TurnOutcome{
+			State:        state,
+			NativeTurnID: active.turnID,
+			Items:        items,
+			ErrorCode:    code,
+			ErrorMessage: msg,
 		})
 		return
 	}

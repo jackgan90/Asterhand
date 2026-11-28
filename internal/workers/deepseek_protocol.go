@@ -8,6 +8,19 @@ import (
 	"strings"
 )
 
+func classifyDeepSeekStopReason(stopReason string) (state, code, msg string) {
+	switch stopReason {
+	case "max_tokens":
+		return TurnInterrupted, "max_tokens", "DeepSeek stopped before completing because the output token limit (max_tokens) was reached; partial output was preserved."
+	case "max_turn_requests":
+		return TurnInterrupted, "max_turn_requests", "DeepSeek stopped before completing because the maximum number of model requests for this turn (max_turn_requests) was reached; partial output was preserved."
+	case "refusal":
+		return TurnFailed, "refusal", "DeepSeek refused to complete this turn (refusal); any partial output was preserved."
+	default:
+		return TurnInterrupted, stopReason, fmt.Sprintf("DeepSeek stopped before completing the turn (stop_reason=%s); any partial output was preserved.", stopReason)
+	}
+}
+
 type acpConfigOption struct {
 	ID           string               `json:"id"`
 	Category     string               `json:"category"`

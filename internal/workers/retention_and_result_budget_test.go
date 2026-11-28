@@ -580,3 +580,160 @@ func TestBeforePruneTerminalTurnsHookRetainsUnreconciledTurnOnly(t *testing.T) {
 		t.Fatal("expected turn_drop_31d pruned")
 	}
 }
+
+func TestReadResultRangeLowAllocAndUTF8Boundaries(t *testing.T) {
+	smallBody := strings.Repeat("S", 32<<10)
+	// Mix 3-byte UTF-8 runes across page boundaries up to full 2 MiB.
+	unit := "审阅结论A" // 13 UTF-8 bytes
+	largeBody := strings.Repeat(unit, MaxResultBytes/len(unit))
+	bodies := []string{smallBody, largeBody}
+	idx := 0
+	fa := &fakeAdapter{
+		startFn: func(ctx context.Context, handle ThreadHandle, spec TurnStartSpec, onEvent func(AdapterEvent)) (string, <-chan TurnOutcome, error) {
+			cur := idx
+			idx++
+			ch := make(chan TurnOutcome, 1)
+			ch <- TurnOutcome{
+				State:        TurnCompleted,
+				NativeTurnID: fmt.Sprintf("nt_rng_%d", cur),
+				Items:        []NativeItem{{ItemID: fmt.Sprintf("f_rng_%d", cur), Type: "agentMessage", Phase: "final_answer", Text: bodies[cur]}},
+			}
+			return fmt.Sprintf("nt_rng_%d", cur), ch, nil
+		},
+	}
+	svc, _, ws := setupTestService(t, fa)
+	defer func() { _ = svc.Close(context.Background()) }()
+
+	w, err := svc.Create(context.Background(), CreateInput{
+		HarnessID: harnesses.HarnessCodex, WorkspaceRoot: ws.RootPath, Alias: "range-read", AccessMode: harnesses.AccessReadOnly,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turnIDs := make([]string, len(bodies))
+	for i := range bodies {
+		turn, err := svc.Send(context.Background(), SendInput{
+			OperationID: fmt.Sprintf("op_rng_%d", i), WorkerID: w.ID, Prompt: fmt.Sprintf("body %d", i),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if wt, _, _, err := svc.Wait(context.Background(), turn.ID, ws.ID, 5*time.Second); err != nil || wt.State != TurnCompleted {
+			t.Fatalf("turn %d did not complete: state=%s err=%v", i, wt.State, err)
+		}
+		turnIDs[i] = turn.ID
+	}
+
+	// Verify mid-rune offset is rejected cleanly even with range reads.
+	if _, err := svc.ReadResult(turnIDs[1], ws.ID, 1, 4096); automation.PublicError(err).Code != "invalid_cursor" {
+		t.Fatalf("expected invalid_cursor for mid-rune offset=1, got %v", err)
+	}
+
+	// Verify 1-byte maxBytes on a 3-byte UTF-8 rune still returns the complete rune.
+	p1, err := svc.ReadResult(turnIDs[1], ws.ID, 0, 1)
+	if err != nil || p1.Text != "审" || p1.NextCursor != "3" || p1.Complete {
+		t.Fatalf("expected 1-rune fallback for maxBytes=1, got %+v err=%v", p1, err)
+	}
+
+	// Verify full pagination of the ~2 MiB multi-byte body reconstructs byte-for-byte.
+	var rebuilt strings.Builder
+	offset := 0
+	for {
+		page, err := svc.ReadResult(turnIDs[1], ws.ID, offset, 24<<10)
+		if err != nil {
+			t.Fatalf("ReadResult(offset=%d): %v", offset, err)
+		}
+		rebuilt.WriteString(page.Text)
+		if page.Complete {
+			break
+		}
+		next, err := strconv.Atoi(page.NextCursor)
+		if err != nil || next <= offset {
+			t.Fatalf("invalid next_cursor %q at offset %d", page.NextCursor, offset)
+		}
+		offset = next
+	}
+	if rebuilt.String() != largeBody {
+		t.Fatalf("reconstructed large UTF-8 body mismatch: got %d bytes, want %d bytes", rebuilt.Len(), len(largeBody))
+	}
+}
+
+func TestResultChunkedStorageEngineLookupLegacyFallbackAndCleanup(t *testing.T) {
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now().UTC()
+	full := strings.Repeat("0123456789abcdef", MaxResultBytes/16)
+	if n, trunc, err := store.SaveResultText("turn_chunked", full, now); err != nil || n != MaxResultBytes || trunc {
+		t.Fatalf("SaveResultText(2MiB): n=%d trunc=%v err=%v", n, trunc, err)
+	}
+	if err := store.SaveTurn(Turn{
+		ID: "turn_chunked", WorkerID: "w1", WorkspaceID: "ws1", OperationID: "op_chunked", OperationKey: "nat_chunked",
+		State: TurnCompleted, AnswerAvailable: true, AnswerSource: AnswerSourceFinal, ResultBytes: MaxResultBytes,
+		StartedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var inlineLen, metaLen, chunkCount int
+	if err := store.db.QueryRow("SELECT LENGTH(body), byte_len FROM turn_results WHERE turn_id=?", "turn_chunked").Scan(&inlineLen, &metaLen); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow("SELECT COUNT(*) FROM turn_result_chunks WHERE turn_id=?", "turn_chunked").Scan(&chunkCount); err != nil {
+		t.Fatal(err)
+	}
+	if inlineLen != 0 || metaLen != MaxResultBytes || chunkCount != MaxResultBytes/resultChunkBytes {
+		t.Fatalf("unexpected chunk storage layout: inlineLen=%d metaLen=%d chunkCount=%d", inlineLen, metaLen, chunkCount)
+	}
+
+	var planID, planParent, planNotUsed int
+	var planDetail string
+	if err := store.db.QueryRow(
+		"EXPLAIN QUERY PLAN SELECT chunk_idx, body FROM turn_result_chunks WHERE turn_id=? AND chunk_idx>=? AND chunk_idx<=? ORDER BY chunk_idx ASC",
+		"turn_chunked", 0, 0,
+	).Scan(&planID, &planParent, &planNotUsed, &planDetail); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.ToUpper(planDetail), "SEARCH") || !strings.Contains(strings.ToUpper(planDetail), "INDEX") {
+		t.Fatalf("expected indexed B-tree SEARCH in EXPLAIN QUERY PLAN, got %q", planDetail)
+	}
+
+	for _, tc := range []struct{ off, max int }{{0, 4096}, {resultChunkBytes - 4, 20}, {MaxResultBytes - 7, 100}} {
+		got, total, ok, err := store.ReadResultRange("turn_chunked", tc.off, tc.max)
+		wantEnd := min(tc.off+tc.max, len(full))
+		if err != nil || !ok || total != MaxResultBytes || got != full[tc.off:wantEnd] {
+			t.Fatalf("ReadResultRange(%d,%d) failed: ok=%v total=%d gotLen=%d err=%v", tc.off, tc.max, ok, total, len(got), err)
+		}
+	}
+	if allText, ok, err := store.ReadResultText("turn_chunked"); err != nil || !ok || allText != full {
+		t.Fatalf("ReadResultText mismatch: ok=%v len=%d err=%v", ok, len(allText), err)
+	}
+
+	legacyBody := "legacy-inline-正文-payload"
+	if _, err := store.db.Exec(
+		"INSERT INTO turn_results(turn_id, body, byte_len, updated_at) VALUES(?,?,?,?)",
+		"turn_legacy", []byte(legacyBody), len(legacyBody), now.UnixMilli(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := store.ReadResultText("turn_legacy"); err != nil || !ok || got != legacyBody {
+		t.Fatalf("legacy ReadResultText: ok=%v got=%q err=%v", ok, got, err)
+	}
+	if got, total, ok, err := store.ReadResultRange("turn_legacy", 7, 6); err != nil || !ok || total != len(legacyBody) || got != "inline" {
+		t.Fatalf("legacy ReadResultRange: ok=%v total=%d got=%q err=%v", ok, total, got, err)
+	}
+
+	if n, _, err := store.SaveResultText("turn_chunked", "short", now); err != nil || n != 5 {
+		t.Fatalf("overwrite SaveResultText: n=%d err=%v", n, err)
+	}
+	if err := store.db.QueryRow("SELECT COUNT(*) FROM turn_result_chunks WHERE turn_id=?", "turn_chunked").Scan(&chunkCount); err != nil || chunkCount != 1 {
+		t.Fatalf("expected 1 chunk after overwrite, got %d err=%v", chunkCount, err)
+	}
+	store.PruneDetailsAndCap(now.Add(DetailRetention + time.Hour))
+	if err := store.db.QueryRow("SELECT COUNT(*) FROM turn_result_chunks WHERE turn_id=?", "turn_chunked").Scan(&chunkCount); err != nil || chunkCount != 0 {
+		t.Fatalf("expected 0 chunks after 7d retention prune, got %d err=%v", chunkCount, err)
+	}
+}

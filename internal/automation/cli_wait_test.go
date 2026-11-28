@@ -293,3 +293,72 @@ func TestFormatMCPTextWorkersResultOverBudgetDoesNotSkipPage(t *testing.T) {
 		t.Fatalf("workers_result fallback should instruct retrying from offset 20587 with smaller max_bytes, got %s", txt)
 	}
 }
+
+func TestRunWaitLoopBoundsInFlightCallAndRejectsLateSuccess(t *testing.T) {
+	// 1. In-flight call receives a context deadline derived from remaining total timeout
+	//    and aborts near 1s with exit code 8 (wait_timeout) preserving the last running snapshot.
+	calls := 0
+	var secondCallHasDeadline bool
+	slowRespectingCtx := stubWaitCaller{fn: func(ctx context.Context, op, id string, args json.RawMessage) (Response, error) {
+		calls++
+		if calls == 1 {
+			return Response{
+				Version: APIVersion, Node: "node-1", Instance: "inst-1",
+				Data: map[string]any{"turn_id": "turn_slow_ctx", "state": "running", "progress": "phase-1"},
+			}, nil
+		}
+		_, secondCallHasDeadline = ctx.Deadline()
+		select {
+		case <-ctx.Done():
+			return Response{}, ctx.Err()
+		case <-time.After(1500 * time.Millisecond):
+			return Response{
+				Version: APIVersion,
+				Data:    map[string]any{"turn_id": "turn_slow_ctx", "state": "completed", "answer_available": true, "answer": "late"},
+			}, nil
+		}
+	}}
+	var stdout, stderr bytes.Buffer
+	start := time.Now()
+	err := runWaitLoop(context.Background(), slowRespectingCtx, waitCLIOptions{
+		TurnIDs: []string{"turn_slow_ctx"}, TimeoutSeconds: 1, PollSeconds: 1, Quiet: true,
+	}, time.Now, sleepWithContext, &stdout, &stderr)
+	elapsed := time.Since(start)
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 8 {
+		t.Fatalf("expected ExitError code 8 on in-flight timeout, got err=%v out=%s", err, stdout.String())
+	}
+	if !secondCallHasDeadline {
+		t.Fatal("expected in-flight caller.Call context to carry a deadline")
+	}
+	if elapsed > 1400*time.Millisecond {
+		t.Fatalf("expected timeout near 1s, took %v", elapsed)
+	}
+	if !strings.Contains(stdout.String(), `"code":"wait_timeout"`) || !strings.Contains(stdout.String(), `"phase-1"`) || strings.Contains(stdout.String(), `"completed"`) {
+		t.Fatalf("expected wait_timeout with last running snapshot, got %s", stdout.String())
+	}
+
+	// 2. Even if a stub ignores ctx.Done() and returns completed past the deadline,
+	//    runWaitLoop still enforces the overall deadline and rejects the late response.
+	stdout.Reset()
+	fakeNow := time.Unix(1700000000, 0)
+	lateCalls := 0
+	lateCaller := stubWaitCaller{fn: func(ctx context.Context, op, id string, args json.RawMessage) (Response, error) {
+		lateCalls++
+		if lateCalls == 1 {
+			return Response{Version: APIVersion, Data: map[string]any{"turn_id": "turn_late", "state": "running", "progress": "before-deadline"}}, nil
+		}
+		fakeNow = fakeNow.Add(1500 * time.Millisecond)
+		return Response{Version: APIVersion, Data: map[string]any{"turn_id": "turn_late", "state": "completed"}}, nil
+	}}
+	errLate := runWaitLoop(context.Background(), lateCaller, waitCLIOptions{
+		TurnIDs: []string{"turn_late"}, TimeoutSeconds: 1, PollSeconds: 1, Quiet: true,
+	}, func() time.Time { return fakeNow }, sleepWithContext, &stdout, &stderr)
+	var exitLate *ExitError
+	if !errors.As(errLate, &exitLate) || exitLate.Code != 8 {
+		t.Fatalf("expected ExitError code 8 for late completed response, got err=%v out=%s", errLate, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"before-deadline"`) || strings.Contains(stdout.String(), `"completed"`) {
+		t.Fatalf("expected last running snapshot instead of late completed response, got %s", stdout.String())
+	}
+}
